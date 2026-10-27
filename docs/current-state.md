@@ -17,6 +17,13 @@ Phase 1 repo is the `vendor/phase1` submodule (pinned commit); its `kosis_ai.sch
   - Skeleton: `backend/app/main.py` (`/health` only), `frontend/` (create-next-app, Next 16, standalone output), `docker-compose.yml`.
 - Next: T2-01 metadata collection, T2-02 search golden set (see TASK.md order).
 
+## Repository rules (2026-10-27)
+
+- **master-pr-ruleset done**: [ruleset 25956464](https://github.com/addiescode-sj/KOSIS-ai-RAG/rules/25956464) is active and targets only `refs/heads/master`. Pull requests are required, required approvals are zero, and there are no bypass actors (`current_user_can_bypass: never`). No source code changed.
+- GitHub's extra approval default for unattributed Copilot changes is enabled but has no effect at zero required approvals; revisit it if the approval count increases.
+- Independent verification: ruleset and effective master rules API reads exited 0; `bash scripts/verify.sh` exited 0 with 2 tests passed and `verify: OK`.
+- No ruleset work remains. Plan and tasks: `docs/plans/master-pr-ruleset/`; completed-work evidence: `docs/reports/master-pr-ruleset-REPORT.md`.
+
 ## How to verify
 
 `bash scripts/verify.sh` → `verify: OK` (pytest 2 pass, frontend tsc).
