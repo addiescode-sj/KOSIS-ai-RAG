@@ -1,0 +1,3 @@
+[submodule "vendor/phase1"]
+	path = vendor/phase1
+	url = https://github.com/addiescode-sj/KOSIS-ai-nlp-summary.git

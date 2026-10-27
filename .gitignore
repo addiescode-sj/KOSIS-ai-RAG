@@ -1,0 +1,50 @@
+node_modules/
+.claude/settings.local.json
+.DS_Store
+docs/reports/raw/
+
+# Secrets (KOSIS / HCX API keys must never reach GitHub)
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Provided data (security pledge: keep out of the repo)
+data/raw/
+data/samples/
+eval/golden/
+eval/results/
+logs/
+
+# From team repo
+data/cache/
+
+# data dir
+/data/
+
+# 전달받은 전체 데이터(10/22, 보안 서약: 레포 밖)
+data_fix/
+# 최종 데이터 정리용 (data_new -> data, 기존 data -> data_old)
+data_new/
+data_old/
+
+# Per-question grades hold data values; report.md/json are aggregates and may be committed
+eval/reports/**/grades.jsonl
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
+
+# Vector store (ChromaDB, rebuilt from data/)
+chroma/
