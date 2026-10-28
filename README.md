@@ -37,6 +37,11 @@ bash scripts/verify.sh          # 오프라인 검증
 PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src uv run uvicorn backend.app.main:app --reload   # :8000/health
 cd frontend && npm run dev                                                                      # :3000
 
+# 실전 1 평가를 이 레포에서 (data/, eval/golden, .env는 이 레포 루트 기준, KOSIS_WORKSPACE 자동)
+uv run python scripts/phase1.py run_eval --stage <이름> --golden eval/golden/golden.jsonl --pipeline stat ...
+uv run python scripts/stat_baseline.py --stage <이름> --backend hcx --model HCX-DASH-002 --interval 5   # 같은 문항을 summarize_stat(질문, 표 키)로
+uv run python scripts/phase1.py grade_run --run eval/results/<run>
+
 # 배포 (단일 서버)
 docker compose up -d --build
 ```
