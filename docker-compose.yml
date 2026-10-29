@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     env_file: .env
+    environment:
+      # Phase 1 reads data/ and .env under this root (docs/ISSUES.md P2-07)
+      KOSIS_WORKSPACE: /app
     volumes:
       # Provided data stays outside the image (security pledge)
       - ./data:/app/data:ro
