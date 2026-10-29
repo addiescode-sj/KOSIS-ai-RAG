@@ -26,6 +26,9 @@ eval/golden/
 eval/results/
 logs/
 
+# Research docs
+docs/research/
+
 # From team repo
 data/cache/
 
@@ -48,3 +51,7 @@ frontend/next-env.d.ts
 
 # Vector store (ChromaDB, rebuilt from data/)
 chroma/
+
+# Layered eval datasets and run outputs (question text, table keys, answers)
+evals/datasets/
+evals/reports/*/
