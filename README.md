@@ -47,3 +47,15 @@ docker compose up -d --build
 ```
 
 실전 1 코드 갱신: `git submodule update --remote vendor/phase1` 후 커밋.
+
+## ChromaDB (팀 공용 벡터 저장소)
+
+모두 같은 서버(`chromadb/chroma:1.5.9`)를 Docker로 띄운다. Docker Desktop을 켜고:
+
+```bash
+docker compose up -d --wait chroma      # localhost:8001 (포트를 바꾸려면 .env의 CHROMA_PORT)
+PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src uv run python scripts/chroma_smoke.py   # 쓰기 → 재시작 → 읽기 확인
+```
+
+- 코드에서는 `kosis_rag.vectorstore.chroma_client()`만 쓴다. 접속 주소는 `.env`의 `CHROMA_HOST`/`CHROMA_PORT`(호스트에서 `localhost:8001`)이고, compose 안의 backend는 `chroma:8000`으로 자동 설정된다.
+- 데이터는 Docker named volume `chroma-data`에 남는다(`docker compose down`해도 유지, git에는 안 들어감). 지우려면 `docker compose down -v` 후 다시 적재한다(원본은 `data/tables.jsonl`).

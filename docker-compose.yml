@@ -5,6 +5,9 @@ services:
       dockerfile: backend/Dockerfile
     env_file: .env
     environment:
+      # Inside compose the backend reaches Chroma by service name; .env holds the host-side address
+      CHROMA_HOST: chroma
+      CHROMA_PORT: "8000"
       # Phase 1 reads data/ and .env under this root (docs/ISSUES.md P2-07)
       KOSIS_WORKSPACE: /app
     volumes:
@@ -12,6 +15,26 @@ services:
       - ./data:/app/data:ro
     ports:
       - "8000:8000"
+    depends_on:
+      chroma:
+        condition: service_healthy
+
+  chroma:
+    # Pinned release (1.x Rust server: data in /data, API under /api/v2); client is chromadb-client of the same version
+    image: chromadb/chroma:1.5.9
+    environment:
+      ANONYMIZED_TELEMETRY: "False"
+    volumes:
+      # Named volume: embeddings are a rebuildable copy of data/tables.jsonl and never enter git
+      - chroma-data:/data
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    healthcheck:
+      # The image has bash but no curl/python, so ask the heartbeat endpoint over /dev/tcp
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   frontend:
     build: ./frontend
@@ -21,3 +44,6 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+
+volumes:
+  chroma-data:
