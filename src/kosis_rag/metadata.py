@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,6 +24,13 @@ from kosis_rag.schemas import TableClass, TableRecord
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 CATALOG = Path("reference") / "population_table_catalog.jsonl"
+# Region classes only (not e.g. 성씨·본관, where 동부 is a clan seat): their totals and 시도 go first in the label list
+REGION_CLASS = re.compile(r"행정구역|시도|시군구|구시군|읍면동|지역")
+TOP_REGIONS = {
+    "전국", "계", "총계", "합계", "동부", "읍부", "면부", "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시",
+    "대전광역시", "울산광역시", "세종특별자치시", "경기도", "강원도", "강원특별자치도", "충청북도", "충청남도", "전라북도",
+    "전북특별자치도", "전라남도", "경상북도", "경상남도", "제주특별자치도", "제주도",
+}
 
 
 def _year(period: str) -> int | None:
@@ -37,19 +45,30 @@ def _values(path: Path) -> dict:
     """Distinct period codes, periods, items and (class name -> labels) from one Parquet file."""
     names = pq.read_schema(path).names
     dims = [i for i in range(1, MAX_DIMS + 1) if f"dim{i}_name" in names]
-    columns = ["prd_se", "period", "item_name", *(f"dim{i}_{part}" for i in dims for part in ("name", "label"))]
+    columns = ["prd_se", "period", "item_name", *(f"dim{i}_{part}" for i in dims for part in ("name", "code", "label"))]
     table = pq.read_table(path, columns=columns)
-    classes: dict[str, set[str]] = {}
+    coded: dict[str, list[tuple[str, str]]] = {}
     for i in dims:
-        pairs = table.group_by([f"dim{i}_name", f"dim{i}_label"]).aggregate([])
-        for name, label in zip(pairs[f"dim{i}_name"].to_pylist(), pairs[f"dim{i}_label"].to_pylist()):
-            if name:
-                classes.setdefault(name, set()).update([label] if label else [])
+        cols = [f"dim{i}_name", f"dim{i}_code", f"dim{i}_label"]
+        pairs = table.group_by(cols).aggregate([])
+        for name, code, label in zip(*(pairs[c].to_pylist() for c in cols)):
+            if name and label:
+                coded.setdefault(name, []).append((code or "", label))
+    classes = []
+    for name, pairs in coded.items():
+        # KOSIS code order puts higher levels first (00 전국, 11 서울특별시, 11010 종로구 ...), so a capped label list
+        # keeps 전국 and the 시도; the same label under two codes (중구) is kept once, at its first place
+        labels = list(dict.fromkeys(label for _, label in sorted(pairs, key=lambda p: (len(p[0]), p[0]))))
+        if REGION_CLASS.search(name):
+            # Some tables (e.g. 법무부 등록외국인) use flat codes that interleave 시도 with their 시군구; put the
+            # national total and the 시도 first anyway, keeping their order
+            labels = [x for x in labels if x in TOP_REGIONS] + [x for x in labels if x not in TOP_REGIONS]
+        classes.append(TableClass(name=name, labels=labels, n_labels=len(labels)))
     return {
         "prd_se": _distinct(table, "prd_se"),
         "periods": _distinct(table, "period"),
         "items": _distinct(table, "item_name"),
-        "classes": [TableClass(name=n, labels=sorted(ls), n_labels=len(ls)) for n, ls in classes.items()],
+        "classes": classes,
     }
 
 

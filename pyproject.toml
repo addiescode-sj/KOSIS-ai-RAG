@@ -23,6 +23,9 @@ dev = [
     "ipykernel>=7.4.0",
     "pytest>=8.0",
 ]
+embed = [
+    "sentence-transformers",
+]
 
 [tool.uv]
 package = false
