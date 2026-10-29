@@ -16,7 +16,7 @@
 3. **Verify** — Verify 체크리스트를 모두 통과시키고, 독립 리뷰(서브에이전트) 결과 반영
 4. **Decide** — 사용자에게 옵션 선택을 받아 `status: approved` 기록
 5. **Implement** — 선택한 옵션만 구현
-6. **Measure** — 평가 하네스로 전→후 수치를 plan의 `## Result`와 TASK.md에 기록, `[x]` 처리
+6. **Measure** — `evals/`의 계층별 평가 모듈로 전→후 수치를 plan의 `## Result`와 TASK.md에 기록, `[x]` 처리
 
 `.claude/hooks/plan_gate.py`가 승인된 plan 없이 `plans/`, `TASK.md`, `CLAUDE.md`, `.claude/` 밖의
 파일을 수정하면 차단한다. 우회하지 말 것 (Bash로 파일 쓰기 포함).
@@ -48,13 +48,14 @@ backend/app/       FastAPI (main.py). 검색·챗 API를 노출만 한다 — �
 src/kosis_rag/     search_tables, 검색기(BM25·임베딩·하이브리드), 리랭커, 답 없음 판정 (T2-04~)
 frontend/          Next.js (App Router) + TypeScript + Tailwind. 채팅 UI (T2-11)
 vendor/phase1/     실전 1 레포 submodule — kosis_ai(src/), kosis_chat/, eval/ 를 import. 직접 수정 금지
-eval/golden/       search_golden.jsonl (gitignored)
+evals/             계층별 평가 모듈 (LangChain 비종속): datasets/(gitignored) · evaluators/ · runners/ · reports/
 plans/             태스크별 plan (옵션·검증·결정·결과 기록)
 docs/              제출 문서 (검색 전략, 실패 분석), current-state.md
 ```
 
 - 실전 1 코드 수정이 필요하면 실전 1 레포에 PR → 여기서 `git submodule update --remote vendor/phase1` 후 커밋.
-- 실전 1의 `eval` 패키지와 이름이 겹치지 않게, 이 레포의 검색 평가 코드는 `eval/` 대신 `search_eval/`에 둔다 (T2-03).
+- 평가는 실전 1 하네스(`vendor/phase1/eval`)를 쓰지 않는다 (10/29 결정). `evals/`에 계층별(L1 검색 · L2 질의 이해 · L3 계산 · L4 종단 간)
+  골든셋과 evaluator를 따로 둔다. LangChain은 평가 대상이고, 채점은 결정적 코드가 한다. 실전 1 `eval` 패키지와 이름이 겹치지 않게 `evals/`(복수)를 쓴다.
 
 ## 4. 코딩 규칙
 
