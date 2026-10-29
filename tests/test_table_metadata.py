@@ -35,10 +35,12 @@ def _data_dir(tmp_path, periods=("2015", "2020"), meta=True):
         (tmp_path / "table_metadata" / "101_DT_T.json").write_text(
             json.dumps({"tblEngNm": "One-person households", "unitNmKor": "가구", "periodStr": "F",
                         "containPeriod": " 5년 2015 ~ 2025"}), encoding="utf-8")
-    cells = [(p, region) for p in periods for region in ("전국", "서울특별시")]
+    # Listed out of code order on purpose; 중구 appears under two parents (서울 11020, 부산 21020)
+    regions = [("11010", "종로구"), ("21020", "중구"), ("00", "전국"), ("11020", "중구"), ("11", "서울특별시")]
+    cells = [(p, code, label) for p in periods for code, label in regions]
     pd.DataFrame({
-        "prd_se": "Y", "period": [p for p, _ in cells], "item_name": "1인 가구",
-        "dim1_name": "행정구역별", "dim1_code": "x", "dim1_label": [r for _, r in cells],
+        "prd_se": "Y", "period": [p for p, _, _ in cells], "item_name": "1인 가구",
+        "dim1_name": "행정구역별", "dim1_code": [c for _, c, _ in cells], "dim1_label": [r for _, _, r in cells],
         "dim2_name": None, "dim2_code": None, "dim2_label": None,
     }).to_parquet(tmp_path / "values" / "101_DT_T.parquet")
     return tmp_path
@@ -48,10 +50,27 @@ def _data_dir(tmp_path, periods=("2015", "2020"), meta=True):
 def test_record_takes_periods_and_labels_from_the_values(tmp_path):
     (record,) = build_records(_data_dir(tmp_path))
     assert record.periods == ["2015", "2020"] and (record.start, record.end) == (2015, 2020)
-    assert [(c.name, c.labels, c.n_labels) for c in record.classes] == [("행정구역별", ["서울특별시", "전국"], 2)]
+    # KOSIS code order: 전국 (00) -> 시도 (11) -> 시군구, so a capped label list keeps the top levels
+    assert [(c.name, c.labels, c.n_labels) for c in record.classes] == [
+        ("행정구역별", ["전국", "서울특별시", "종로구", "중구"], 4)
+    ]
     assert record.items == ["1인 가구"] and record.unit == "가구"
     assert record.menu_paths == ["인구 > 가구", "인구 > 인구총조사 > 가구"]
     assert "서울특별시" in record.search_text and "One-person households" in record.search_text
+
+
+@offline
+def test_flat_region_codes_still_put_the_total_and_sido_first(tmp_path):
+    # 법무부 등록외국인 tables: same-length codes that interleave 시도 with their 시군구
+    data = _data_dir(tmp_path)
+    regions = [("A01", "총계"), ("A02", "서울특별시"), ("A03", "강남구"), ("A04", "부산광역시"), ("A05", "중구")]
+    pd.DataFrame({
+        "prd_se": "Y", "period": "2020", "item_name": "등록외국인", "dim1_name": "행정구역(시군구)별",
+        "dim1_code": [c for c, _ in regions], "dim1_label": [r for _, r in regions],
+        "dim2_name": None, "dim2_code": None, "dim2_label": None,
+    }).to_parquet(data / "values" / "101_DT_T.parquet")
+    (record,) = build_records(data)
+    assert record.classes[0].labels == ["총계", "서울특별시", "부산광역시", "강남구", "중구"]
 
 
 @offline
