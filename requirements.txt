@@ -1,0 +1,22 @@
+# pip / conda 환경용 (예: conda activate kosis && pip install -r requirements.txt).
+# uv는 pyproject.toml + uv.lock을 쓴다. 패키지를 바꾸면 두 파일을 같이 고친다.
+
+# Phase 2 runtime (pyproject.toml dependencies)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+langchain-core>=1.7.0
+rank-bm25>=0.2.2
+
+# Phase 1 runtime (vendor/phase1/requirements.txt)
+pyyaml>=6.0
+python-dotenv>=1.0
+google-genai>=2.3
+pydantic>=2.0
+pyarrow>=15.0
+pandas>=2.0
+
+# Tests and notebooks (pyproject.toml dev group + vendor/phase1/requirements.txt)
+pytest>=8.0
+hypothesis>=6.100
+httpx2>=2.16.0
+ipykernel>=7.4.0

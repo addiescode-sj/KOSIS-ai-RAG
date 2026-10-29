@@ -8,6 +8,8 @@ services:
       # Inside compose the backend reaches Chroma by service name; .env holds the host-side address
       CHROMA_HOST: chroma
       CHROMA_PORT: "8000"
+      # Phase 1 reads data/ and .env under this root (docs/ISSUES.md P2-07)
+      KOSIS_WORKSPACE: /app
     volumes:
       # Provided data stays outside the image (security pledge)
       - ./data:/app/data:ro
