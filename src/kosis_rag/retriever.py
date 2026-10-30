@@ -10,8 +10,11 @@ from typing import Any
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from pydantic import ConfigDict
+from pydantic import ConfigDict, Field
 from rank_bm25 import BM25Okapi
+
+from kosis_rag.filters import TableFilter, filter_tables
+from kosis_rag.schemas import TableRecord
 
 _WORD = re.compile(r"[0-9A-Za-z가-힣]+")
 
@@ -54,11 +57,15 @@ class ChromaTableRetriever(BaseRetriever):
 
     The collection holds vectors we computed ourselves (embedding_function=None), so the query must be embedded
     with the same model; `connect` refuses a collection built with another model.
+    A `TableFilter` (T2-05, via `with_filter`) is decided on `records` (tables.jsonl) and sent as one `key $in` condition.
     """
 
     collection: Any
     embed_query: Callable[[str], list[float]]
     k: int = 20  # upper bound; callers slice to their own k (SearchArgs.k <= 20)
+    records: dict[str, TableRecord] = Field(default_factory=dict)  # registry the filter is decided on
+    table_filter: TableFilter = Field(default_factory=TableFilter)
+    last_removed: dict[str, str] = Field(default_factory=dict)  # why each table was filtered out on the last query
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @classmethod
@@ -80,11 +87,24 @@ class ChromaTableRetriever(BaseRetriever):
         embed, _, _ = kure_embedder(device)
         return cls(collection=collection, embed_query=lambda text: embed([text])[0], k=k)
 
+    def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> ChromaTableRetriever:
+        """A copy that applies `f`; the tools keep their search_tables(question, k) signature."""
+        return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {}})
+
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
         # TODO(T2-09): Chroma always returns k hits, so the chain's "no candidates" refusal never fires here;
         # refusal relies on the LLM's NO_MATCH until a cosine threshold is calibrated on the L1 dev split.
-        res = self.collection.query(query_embeddings=[self.embed_query(query)], n_results=self.k,
-                                    include=["documents", "metadatas", "distances"])
+        extra, n = {}, self.k
+        self.last_removed = {}
+        if not self.table_filter.is_empty():
+            if not self.records:
+                raise ValueError("a table filter needs records (tables.jsonl) to decide on")
+            keys, self.last_removed = filter_tables(self.records, self.table_filter)
+            if not keys:  # no table meets the filter; the reasons are in last_removed
+                return []
+            extra, n = {"where": {"key": {"$in": sorted(keys)}}}, min(self.k, len(keys))
+        res = self.collection.query(query_embeddings=[self.embed_query(query)], n_results=n,
+                                    include=["documents", "metadatas", "distances"], **extra)
         return [
             Document(page_content=doc, metadata={**meta, "score": 1.0 - dist}, id=key)
             for key, doc, meta, dist in zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0])
