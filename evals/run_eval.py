@@ -4,6 +4,7 @@
     python -m evals.run_eval --layer l1 --retriever oracle --stage selfcheck          # Hit@1 must be 100%
     python -m evals.run_eval --layer l3 --stage T1-27-regrade --from-run <run folder>  # re-grade, no model call
     python -m evals.run_eval --layer l3 --stage p2-l3 --interval 5                     # calls HCX per question
+    python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e --interval 5   # search top 1 -> L3
 
 L1 runs every item (BM25 is fast) so the no-answer threshold tau is chosen on dev and applied to the split shown.
 Every run writes results.jsonl, manifest.json, ops.json (latency, tokens, cost, tool failure rate), report.md and
@@ -102,27 +103,39 @@ def ops_section(op: dict) -> str:
     ]) + "\n"
 
 
-def run_l3(args) -> tuple[list[dict], dict, str]:
-    from evals.runners import stat as runner
-
-    items: list[CalcItem] = load_jsonl(CALC_GOLDEN, CalcItem)
-    answers = runner.read_run(args.from_run, items) if args.from_run else runner.run(items, args.interval)
+def grade(items: list[CalcItem], answers: list[dict]) -> list[dict]:
+    """L3 grading of each answer against the golden table's cells, with the ops fields kept per row."""
     rows = []
     for item, a in zip(items, answers):
         cells = calculation.read_cells(ROOT / "data" / "values" / f"{item.table_key}.parquet")
         g = calculation.grade(item, a["answer"], cells, a["error"])
         rows.append({**g.model_dump(), **{k: a[k] for k in OPS_FIELDS if k in a},
                      "answer": a["answer"].model_dump(mode="json") if a["answer"] else None})
+    return rows
+
+
+def verdict_table(rows: list[dict]) -> tuple[dict, Counter, list[str]]:
+    """Verdict counts per kind, error counts and the markdown table both L3 and L4 reports show."""
     by_kind: dict[str, Counter] = defaultdict(Counter)
     for r in rows:
         by_kind["all"][r["verdict"]] += 1
         by_kind[r["kind"]][r["verdict"]] += 1
     errors = Counter(e for r in rows for e in r["errors"])
-    summary = {"verdicts": {k: dict(v) for k, v in by_kind.items()}, "errors": dict(errors)}
     lines = ["| kind | n | PASS | PARTIAL | FAIL |", "| --- | --- | --- | --- | --- |"]
     for k in ["all", "answerable", "not_answerable", "clarify", "default_allowed"]:
         v = by_kind.get(k, Counter())
         lines.append(f"| {k} | {sum(v.values())} | {v['PASS']} | {v['PARTIAL']} | {v['FAIL']} |")
+    return {k: dict(v) for k, v in by_kind.items()}, errors, lines
+
+
+def run_l3(args) -> tuple[list[dict], dict, str]:
+    from evals.runners import stat as runner
+
+    items: list[CalcItem] = load_jsonl(CALC_GOLDEN, CalcItem)
+    answers = runner.read_run(args.from_run, items) if args.from_run else runner.run(items, args.interval)
+    rows = grade(items, answers)
+    verdicts, errors, lines = verdict_table(rows)
+    summary = {"verdicts": verdicts, "errors": dict(errors)}
     report = "\n".join([
         f"# L3 calculation — {args.stage}", "",
         f"- 답: {'과거 실행 재채점 ' + str(args.from_run) if args.from_run else 'summarize_stat 호출'} · 정답 표 고정(oracle)", "",
@@ -132,19 +145,50 @@ def run_l3(args) -> tuple[list[dict], dict, str]:
     return rows, summary, report
 
 
+def run_e2e(args) -> tuple[list[dict], dict, str]:
+    """L4 end to end: the retriever picks the table (top 1), then the same answer path and grader as L3."""
+    from evals.runners import e2e
+    from evals.runners import retrieval as runner
+
+    if args.retriever == "oracle":
+        raise SystemExit("e2e with the oracle retriever is L3: run --layer l3 instead")
+    items: list[CalcItem] = load_jsonl(CALC_GOLDEN, CalcItem)
+    raw = e2e.run(runner.build(args.retriever, [], args.k), items, args.k, args.interval)
+    rows = [{**g, **e2e.locate(item, a, g["verdict"]), "error": a["error"]}
+            for item, a, g in zip(items, raw, grade(items, raw))]
+    verdicts, errors, lines = verdict_table(rows)
+    right = [r for r in rows if r["right_table"]]
+    split = {"right": dict(Counter(r["verdict"] for r in right)),
+             "wrong": dict(Counter(r["verdict"] for r in rows if not r["right_table"]))}
+    causes = dict(Counter(r["cause"] for r in rows))
+    summary = {"verdicts": verdicts, "errors": dict(errors), "top1_right": len(right), "by_top1": split, "causes": causes}
+    n = len(rows) or 1
+    report = "\n".join([
+        f"# L4 end to end — {args.stage}", "",
+        f"- retriever `{args.retriever}`, k={args.k} · 검색 1위 표로 summarize_stat 호출 · L3와 같은 채점기(정답 표 기준)", "",
+        *lines, "",
+        f"- 검색 1위가 정답 표: {len(right)}/{len(rows)} ({len(right) / n:.1%})",
+        f"  - 맞힌 표에서 PASS {split['right'].get('PASS', 0)}/{len(right)} · 틀린 표에서 PASS {split['wrong'].get('PASS', 0)}/{len(rows) - len(right)}",
+        "- 실패 원인: " + ", ".join(f"{k} {causes.get(k, 0)}" for k in ("pass", "retrieval", "answer"))
+        + " (retrieval = 1위가 다른 표, answer = 표는 맞았는데 답이 틀림)",
+        "- 오류 유형: " + (", ".join(f"{k} {v}" for k, v in errors.most_common()) or "없음"),
+    ]) + "\n"
+    return rows, summary, report
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run one evaluation layer (L1 retrieval, L3 calculation).")
-    parser.add_argument("--layer", choices=("l1", "l3"), required=True)  # l2, l4: T2-14, T2-10 (plans/T2-03.md)
+    parser = argparse.ArgumentParser(description="Run one evaluation layer (L1 retrieval, L3 calculation, e2e).")
+    parser.add_argument("--layer", choices=("l1", "l3", "e2e"), required=True)  # l2: T2-14; e2e is the first part of L4 (T2-10)
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
     parser.add_argument("--split", choices=("dev", "test", "all"), default="test")
-    parser.add_argument("--retriever", default="bm25-catalog", help="l1: oracle | bm25-catalog | bm25-record | chroma")
+    parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
-    parser.add_argument("--interval", type=float, default=0.0, help="l3: seconds between model calls")
+    parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
     args = parser.parse_args(argv)
 
-    rows, summary, report = (run_l1 if args.layer == "l1" else run_l3)(args)
+    rows, summary, report = {"l1": run_l1, "l3": run_l3, "e2e": run_e2e}[args.layer](args)
     op = ops.summarize(rows)
     report += ops_section(op)
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{args.stage}"
@@ -159,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),
         "vendor_phase1": git("-C", "vendor/phase1", "rev-parse", "HEAD"),
-        "retriever": args.retriever if args.layer == "l1" else None, "top_k": args.k if args.layer == "l1" else None,
+        "retriever": args.retriever if args.layer != "l3" else None, "top_k": args.k if args.layer != "l3" else None,
         "from_run": str(args.from_run) if args.from_run else None,
         "summary": summary,
         "ops": op,
@@ -168,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     (out / "ops.json").write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "report.md").write_text(report, encoding="utf-8")
     target = args.retriever if args.layer == "l1" else ",".join(op["models"]) or "summarize_stat"
+    if args.layer == "e2e":
+        target = f"{args.retriever}+{target}"
     ops.append_history(run_id, args.layer, args.stage, target, op)
     report_html.write(out)
     print(report)

@@ -229,6 +229,23 @@ def l3_body(m: dict, rows: list[dict]) -> str:
     ])
 
 
+def e2e_body(m: dict, rows: list[dict]) -> str:
+    """L3's verdict view plus where it went wrong: retrieval (top 1 was another table) or the answer."""
+    s = m["summary"]
+    n = len(rows) or 1
+    causes = s["causes"]
+    tiles = [tile(f"{s['top1_right']}/{len(rows)}", "검색 1위 = 정답 표"), tile(pct(s["top1_right"] / n), "검색 1위 정답 비율")]
+    split = [("1위 정답 표", s["by_top1"]["right"]), ("1위 다른 표", s["by_top1"]["wrong"])]
+    cause_chart = hbars(["PASS", "검색 실패", "답 실패"], [causes.get("pass", 0), causes.get("retrieval", 0), causes.get("answer", 0)])
+    return "".join([
+        l3_body(m, rows), '<div class="tiles">', *tiles, "</div>",
+        '<div class="grid2"><div class="card"><h2>검색 1위가 맞았을 때와 틀렸을 때</h2>',
+        '<p class="note">틀린 표에서 PASS는 두 표의 숫자가 같을 때만 나온다.</p>',
+        stacked_verdicts([(k, v) for k, v in split if v]), "</div>",
+        '<div class="card"><h2>실패 원인</h2><p class="note">검색 = 1위가 다른 표 · 답 = 표는 맞았는데 답이 틀림.</p>', cause_chart, "</div></div>",
+    ])
+
+
 def ops_body(op: dict, rows: list[dict], history: list[dict]) -> str:
     c = op["cost"]
     no_llm = not (op["tokens"]["input"] or op["tokens"]["output"])
@@ -262,6 +279,12 @@ def rows_table(layer: str, rows: list[dict]) -> str:
         body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["split"])}</td><td>{esc(r["qtype"])}</td><td>{esc(r.get("question", ""))}</td>'
                        f'<td class="num">{esc(r.get("rank") or ("답 없음" if not r["answerable"] else "-"))}</td><td>{esc(r.get("slot_ranks", ""))}</td>'
                        f'<td>{esc(", ".join(r["keys"][:3]))}</td><td class="num">{r["latency_ms"]:.1f}</td></tr>' for r in rows)
+    elif layer == "e2e":
+        head = ["qid", "kind", "판정", "원인", "쓴 표", "정답 순위", "오류", "ms", "토큰"]
+        body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["verdict"])}</td><td>{esc(r["cause"])}</td>'
+                       f'<td>{esc(r["used_table"] or "-")}{"" if r["right_table"] else " ✕"}</td><td class="num">{esc(r["gold_rank"] or "밖")}</td>'
+                       f'<td>{esc(", ".join(r["errors"]))}</td><td class="num">{r.get("latency_ms", 0):.0f}</td>'
+                       f'<td class="num">{r.get("input_tokens", 0) + r.get("output_tokens", 0):,}</td></tr>' for r in rows)
     else:
         head = ["qid", "kind", "판정", "오류", "ms", "토큰"]
         body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["verdict"])}</td><td>{esc(", ".join(r["errors"]))}</td>'
@@ -278,12 +301,13 @@ def render(run: Path, questions: dict[str, str] | None = None) -> str:
     history = [{**h, "total_tokens": (h.get("input_tokens") or 0) + (h.get("output_tokens") or 0)}
                for h in read_history() if h["layer"] == m["layer"]]
     layer = m["layer"]
-    target = m.get("retriever") or ", ".join(m["ops"]["models"]) or "summarize_stat"
-    meta = (f'{esc(m["run_id"])} · {"검색기" if layer == "l1" else "모델"} {esc(target)} · {"split " + esc(m["split"]) + " · " if layer == "l1" else ""}'
+    model = ", ".join(m["ops"]["models"]) or "summarize_stat"
+    target = f'검색기 {m["retriever"]} · 모델 {model}' if layer == "e2e" else f'검색기 {m["retriever"]}' if layer == "l1" else f"모델 {model}"
+    meta = (f'{esc(m["run_id"])} · {esc(target)} · {"split " + esc(m["split"]) + " · " if layer == "l1" else ""}'
             f'골든 {esc(m["golden"]["sha256"][:12])} · tables.jsonl {esc(m["source_snapshot"]["tables.jsonl"][:12])} · '
             f'git {esc(m["git"][:8])}{" (dirty)" if m.get("git_dirty") else ""}')
-    body = l1_body(m, rows) if layer == "l1" else l3_body(m, rows)
-    title = {"l1": "L1 검색", "l3": "L3 계산"}.get(layer, layer)
+    body = {"l1": l1_body, "e2e": e2e_body}.get(layer, l3_body)(m, rows)
+    title = {"l1": "L1 검색", "l3": "L3 계산", "e2e": "L4 종단 간 (e2e)"}.get(layer, layer)
     return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{esc(title)} · {esc(m['stage'])}</title><style>{CSS}</style></head>"
             f'<body><div class="viz-root"><main><h1>{esc(title)} · {esc(m["stage"])}</h1><div class="meta">{meta}</div>'
