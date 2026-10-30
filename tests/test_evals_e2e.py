@@ -87,3 +87,15 @@ def test_run_eval_e2e_writes_report(monkeypatch, tmp_path):
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "검색 1위가 정답 표: 0/1" in report and "retrieval 0" in report  # refusal with an allowed reason passes
     assert "L4 종단 간" in (out / "report.html").read_text(encoding="utf-8")
+
+
+def test_golden_sources_prefer_split_files(tmp_path):
+    from evals.builders.phase1 import sources
+
+    assert sources(tmp_path) == []
+    (tmp_path / "golden.jsonl").write_text("", encoding="utf-8")
+    assert sources(tmp_path) == [tmp_path / "golden.jsonl"]  # merged file when the split files are absent
+    for name in ("stat_golden_edge.jsonl", "stat_golden.jsonl"):
+        (tmp_path / name).write_text("", encoding="utf-8")
+    assert [f.name for f in sources(tmp_path)] == ["stat_golden.jsonl", "stat_golden_edge.jsonl"]
+    assert sources(tmp_path / "golden.jsonl") == [tmp_path / "golden.jsonl"]

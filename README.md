@@ -53,10 +53,11 @@ docker compose up -d --build
 L3는 정답 표를 주고 답만 채점한다. e2e는 같은 실전 1 문항(90개)을 표 없이 넣어, 검색기 1위 표로 `summarize_stat`을 부르고 L3와 같은 채점기로 채점한다. 두 실행의 PASS 차이가 검색 때문에 잃는 점수다.
 
 ```bash
-export PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src   # PowerShell: $env:PYTHONPATH=".;src;vendor/phase1;vendor/phase1/src"
+export PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src   # cmd: set PYTHONPATH=.;src;vendor\phase1;vendor\phase1\src  · PowerShell: $env:PYTHONPATH=".;src;vendor\phase1;vendor\phase1\src"
 
-# 준비 1회: 실전 1 골든 → evals/datasets/calculation_golden.jsonl (data/values/*.parquet 해시 확인 포함)
-uv run python -m evals.builders.phase1 --src <실전 1 레포>/eval/golden
+# 준비 1회: eval/golden/golden.jsonl(실전 1 골든 90문항 합본, gitignore) → evals/datasets/calculation_golden.jsonl
+# (data/values/*.parquet 해시 확인 포함. 실전 1 레포 폴더를 쓰려면 --src <실전 1 레포>/eval/golden)
+uv run python -m evals.builders.phase1
 
 # 실행 (HCX 키는 이 레포 루트 .env, 문항마다 모델 호출)
 uv run python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e-bm25 --interval 5

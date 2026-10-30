@@ -1,10 +1,12 @@
 """Convert the Phase 1 golden set into the L3 calculation golden set (T2-03). Data only: no Phase 1 eval code.
 
-    python -m evals.builders.phase1 --src ../KOSIS-ai-nlp-summary/eval/golden
+    python -m evals.builders.phase1                                            # eval/golden of this repo
+    python -m evals.builders.phase1 --src ../KOSIS-ai-nlp-summary/eval/golden  # or the Phase 1 repo's folder
 
-The Phase 1 files live in the sibling repo (gitignored there too), so the source path is an argument and every
-source file's sha256 goes to calculation_golden.meta.json. A table whose Parquet hash differs from the golden
-`table_sha256` is refused: its facts were checked against other data.
+The Phase 1 files are gitignored (not in vendor/phase1), so they are copied into this repo's eval/golden or read
+from the sibling repo. A folder gives its stat_golden*.jsonl files, or golden.jsonl (the same rows merged) when it
+has none; a file is read as is. Every source file's sha256 goes to calculation_golden.meta.json. A table whose
+Parquet hash differs from the golden `table_sha256` is refused: its facts were checked against other data.
 """
 
 from __future__ import annotations
@@ -29,6 +31,13 @@ def convert(row: dict) -> CalcItem:
     """Phase 1 row -> CalcItem. `table` is data/values/<key>.parquet; runner-only fields (scope, ...) are dropped."""
     fields = {name: row[name] for name in CalcItem.model_fields if name in row}
     return CalcItem(**fields, qid=row["id"], table_key=Path(row["table"]).stem)
+
+
+def sources(src: Path) -> list[Path]:
+    """The split files when present, else the merged golden.jsonl: never both, which would repeat every qid."""
+    if src.is_file():
+        return [src]
+    return sorted(src.glob("stat_golden*.jsonl")) or [f for f in [src / "golden.jsonl"] if f.exists()]
 
 
 def build(files: list[Path], values: Path) -> list[CalcItem]:
@@ -56,11 +65,15 @@ def build(files: list[Path], values: Path) -> list[CalcItem]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Phase 1 golden set -> evals/datasets/calculation_golden.jsonl")
-    parser.add_argument("--src", type=Path, required=True, help="Phase 1 eval/golden folder (stat_golden*.jsonl)")
+    parser.add_argument("--src", type=Path, default=ROOT / "eval" / "golden",
+                        help="Phase 1 golden folder (stat_golden*.jsonl or golden.jsonl) or one file")
     parser.add_argument("--values", type=Path, default=ROOT / "data" / "values")
     parser.add_argument("--out", type=Path, default=OUT)
     args = parser.parse_args(argv)
-    files = sorted(args.src.glob("stat_golden*.jsonl"))
+    files = sources(args.src)
+    if not files:
+        print(f"{args.src}: no stat_golden*.jsonl or golden.jsonl", file=sys.stderr)
+        return 1
     try:
         items = build(files, args.values)
     except GoldenError as exc:
