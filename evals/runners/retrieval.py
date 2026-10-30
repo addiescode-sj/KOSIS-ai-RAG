@@ -14,7 +14,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from kosis_rag.loader import to_document
-from kosis_rag.retriever import BM25TableRetriever
+from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
 from kosis_rag.schemas import TableRecord
 
 from evals.ops import UsageCallback
@@ -48,6 +48,8 @@ def bm25_retrievers(records: list[TableRecord], k: int) -> dict[str, BM25TableRe
 def build(name: str, items: list[RetrievalItem], k: int) -> BaseRetriever:
     if name == "oracle":
         return OracleRetriever(gold={i.question: [s[0] for s in i.required] for i in items})
+    if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
+        return ChromaTableRetriever.connect(k=k)
     retrievers = bm25_retrievers(load_records(), k)
     if name not in retrievers:
         raise ValueError(f"unknown retriever {name!r}; known: oracle, {', '.join(retrievers)}")
