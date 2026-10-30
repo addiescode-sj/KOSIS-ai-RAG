@@ -48,6 +48,28 @@ docker compose up -d --build
 
 실전 1 코드 갱신: `git submodule update --remote vendor/phase1` 후 커밋.
 
+## 평가: 검색 → 답변 종단 간 (e2e)
+
+L3는 정답 표를 주고 답만 채점한다. e2e는 같은 실전 1 문항(90개)을 표 없이 넣어, 검색기 1위 표로 `summarize_stat`을 부르고 L3와 같은 채점기로 채점한다. 두 실행의 PASS 차이가 검색 때문에 잃는 점수다.
+
+```bash
+export PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src   # cmd: set PYTHONPATH=.;src;vendor\phase1;vendor\phase1\src  · PowerShell: $env:PYTHONPATH=".;src;vendor\phase1;vendor\phase1\src"
+
+# 준비 1회: eval/golden/golden.jsonl(실전 1 골든 90문항 합본, gitignore) → evals/datasets/calculation_golden.jsonl
+# (data/values/*.parquet 해시 확인 포함. 실전 1 레포 폴더를 쓰려면 --src <실전 1 레포>/eval/golden)
+uv run python -m evals.builders.phase1
+
+# 실행 (HCX 키는 이 레포 루트 .env, 문항마다 모델 호출)
+uv run python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e-bm25 --interval 5
+uv run --group embed python -m evals.run_eval --layer e2e --retriever chroma --stage p2-e2e-chroma --interval 5   # 아래 ChromaDB 서버 + .env CHROMA_COLLECTION
+uv run python -m evals.run_eval --layer l3 --stage p2-l3 --interval 5                                # 비교용: 정답 표 고정
+```
+
+- `--retriever`: `bm25-catalog` | `bm25-record` | `chroma` (`oracle`은 L3와 같아서 막아 둠). `--k`는 정답 표 순위를 볼 범위(기본 10).
+- 결과는 `evals/reports/<시각>-<stage>/`에 `report.md`, `report.html`(브라우저로 열기), `results.jsonl`.
+- 보는 법: kind별 PASS/PARTIAL/FAIL, **검색 1위 = 정답 표** 비율, **실패 원인**(검색 = 1위가 다른 표, 답 = 표는 맞았는데 답이 틀림). 문항별 표에 쓴 표와 정답 표 순위가 나온다.
+- 채점은 정답 표의 셀 기준이라, 다른 표를 골랐는데 PASS가 나오는 경우는 두 표의 숫자가 같을 때뿐이다.
+
 ## ChromaDB (팀 공용 벡터 저장소)
 
 모두 같은 서버(`chromadb/chroma:1.5.9`)를 Docker로 띄운다. Docker Desktop을 켜고:
