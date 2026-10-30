@@ -5,7 +5,7 @@ import pytest
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
 from kosis_rag import chain
 from kosis_rag.loader import load_catalog, to_document
-from kosis_rag.retriever import BM25TableRetriever
+from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
 from kosis_rag.tools import build_tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tables_sample.csv"
@@ -52,3 +52,27 @@ def test_supported_reply_is_kept_and_cited_by_code(retriever):
     result = chain.answer(retriever, MockClient([reply]), "2020년 주민등록세대수")
     assert result.answer_origin == "llm" and result.answer.startswith(reply)
     assert "출처:" in result.answer
+
+
+class _FakeCollection:
+    """Stands in for a Chroma collection: returns every row, nearest first, as Chroma's query() shapes it."""
+
+    def __init__(self, docs, distances):
+        self.docs, self.distances = docs, distances
+
+    def query(self, query_embeddings, n_results, include):
+        rows = sorted(zip(self.docs, self.distances), key=lambda r: r[1])[:n_results]
+        return {"ids": [[d.id for d, _ in rows]], "documents": [[d.page_content for d, _ in rows]],
+                "metadatas": [[d.metadata for d, _ in rows]], "distances": [[x for _, x in rows]]}
+
+
+def test_chroma_retriever_feeds_the_same_chain_and_tools():
+    docs = [to_document(t) for t in load_catalog(FIXTURE)]
+    distances = [0.6, 0.1] + [0.9] * (len(docs) - 2)
+    retriever = ChromaTableRetriever(collection=_FakeCollection(docs, distances), embed_query=lambda q: [0.0], k=3)
+    (search, answer) = build_tools(retriever, MockClient())
+    hits = search.invoke({"question": "아무 질문", "k": 2})
+    assert [h["tbl_id"] for h in hits] == [docs[1].metadata["tbl_id"], docs[0].metadata["tbl_id"]]
+    assert hits[0]["score"] == pytest.approx(0.9)  # 1 - cosine distance
+    result = answer.invoke({"question": "아무 질문", "k": 2})
+    assert not result["no_answer"] and "출처:" in result["answer"]

@@ -25,6 +25,9 @@ from kosis_rag.loader import _META_FIELDS
 from kosis_rag.schemas import TableRecord
 
 REPO = Path(__file__).resolve().parents[2]
+# TODO(T2-05): placeholder embedding model (and its tokenizer, used for token counts below). Not final: T2-05 compares
+# candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
+# retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
 DOC_FORMAT = "meta-labels100"
 COLLECTION_PREFIX = "kosis_a_kure_"  # A: one vector per table; the build version follows (T2-05)

@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layer", choices=("l1", "l3"), required=True)  # l2, l4: T2-14, T2-10 (plans/T2-03.md)
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
     parser.add_argument("--split", choices=("dev", "test", "all"), default="test")
-    parser.add_argument("--retriever", default="bm25-catalog", help="l1: oracle | bm25-catalog | bm25-record")
+    parser.add_argument("--retriever", default="bm25-catalog", help="l1: oracle | bm25-catalog | bm25-record | chroma")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
