@@ -48,6 +48,8 @@ class TableClass(BaseModel):
     name: str  # e.g. "행정구역별"
     labels: list[str] = Field(default_factory=list)
     n_labels: int = 0  # len(labels), kept as a scalar for vector-store metadata
+    # region classes only: label count per level from the KOSIS codes, e.g. {"전국": 1, "시도": 17, "시군구": 250}
+    levels: dict[str, int] = Field(default_factory=dict)
 
 
 class TableRecord(BaseModel):

@@ -26,11 +26,48 @@ DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 CATALOG = Path("reference") / "population_table_catalog.jsonl"
 # Region classes only (not e.g. 성씨·본관, where 동부 is a clan seat): their totals and 시도 go first in the label list
 REGION_CLASS = re.compile(r"행정구역|시도|시군구|구시군|읍면동|지역")
-TOP_REGIONS = {
-    "전국", "계", "총계", "합계", "동부", "읍부", "면부", "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시",
-    "대전광역시", "울산광역시", "세종특별자치시", "경기도", "강원도", "강원특별자치도", "충청북도", "충청남도", "전라북도",
-    "전북특별자치도", "전라남도", "경상북도", "경상남도", "제주특별자치도", "제주도",
+NATION = {"전국", "계", "총계", "합계"}
+URBAN = {"동부", "읍부", "면부"}
+SIDO = {
+    "서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시", "세종특별자치시", "경기도",
+    "강원도", "강원특별자치도", "충청북도", "충청남도", "전라북도", "전북특별자치도", "전라남도", "경상북도", "경상남도",
+    "제주특별자치도", "제주도",
 }
+TOP_REGIONS = NATION | URBAN | SIDO
+REGION_LEVELS = ["전국", "동읍면부", "시도", "시군구", "읍면동", "하위 지역"]  # display order of TableClass.levels
+
+
+def region_level(code: str, label: str, class_name: str = "") -> str:
+    """Level from the label first (works for flat codes), then the KOSIS code length, then the class name."""
+    if label in NATION:
+        return "전국"
+    if label in URBAN:
+        return "동읍면부"
+    if label in SIDO:
+        return "시도"
+    n = len(code or "")
+    if n == 5:
+        return "시군구"
+    if 7 <= n <= 10:
+        return "읍면동"
+    # flat codes (e.g. 법무부 tables): the class name says what the lower level is
+    if "읍면동" in class_name:
+        return "읍면동"
+    if re.search(r"시군구|구시군", class_name):
+        return "시군구"
+    return "하위 지역"
+
+
+def _region_levels(name: str, pairs: list[tuple[str, str]]) -> dict[str, int]:
+    """{level: label count} for a region class; empty unless it lists 시도 (국적(지역)별 lists countries)."""
+    if not REGION_CLASS.search(name):
+        return {}
+    found: dict[str, set[str]] = {}
+    for code, label in pairs:
+        found.setdefault(region_level(code, label, name), set()).add(label)
+    if len(found.get("시도", ())) < 3:
+        return {}
+    return {lv: len(found[lv]) for lv in REGION_LEVELS if lv in found}
 
 
 def _year(period: str) -> int | None:
@@ -63,7 +100,7 @@ def _values(path: Path) -> dict:
             # Some tables (e.g. 법무부 등록외국인) use flat codes that interleave 시도 with their 시군구; put the
             # national total and the 시도 first anyway, keeping their order
             labels = [x for x in labels if x in TOP_REGIONS] + [x for x in labels if x not in TOP_REGIONS]
-        classes.append(TableClass(name=name, labels=labels, n_labels=len(labels)))
+        classes.append(TableClass(name=name, labels=labels, n_labels=len(labels), levels=_region_levels(name, pairs)))
     return {
         "prd_se": _distinct(table, "prd_se"),
         "periods": _distinct(table, "period"),

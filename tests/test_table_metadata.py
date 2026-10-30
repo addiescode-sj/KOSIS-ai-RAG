@@ -73,6 +73,35 @@ def test_flat_region_codes_still_put_the_total_and_sido_first(tmp_path):
     assert record.classes[0].labels == ["총계", "서울특별시", "부산광역시", "강남구", "중구"]
 
 
+def _write_regions(data, name, regions):
+    pd.DataFrame({
+        "prd_se": "Y", "period": "2020", "item_name": "인구", "dim1_name": name,
+        "dim1_code": [c for c, _ in regions], "dim1_label": [r for _, r in regions],
+        "dim2_name": None, "dim2_code": None, "dim2_label": None,
+    }).to_parquet(data / "values" / "101_DT_T.parquet")
+
+
+@offline
+def test_region_class_counts_labels_per_level_from_the_codes(tmp_path):
+    # T2-25: the embedding document says "전국·시도(3)·시군구(2)·읍면동(1)" instead of listing the places
+    data = _data_dir(tmp_path)
+    _write_regions(data, "행정구역(읍면동)별", [
+        ("00", "전국"), ("11", "서울특별시"), ("21", "부산광역시"), ("22", "대구광역시"),
+        ("11010", "종로구"), ("21020", "중구"), ("11020", "중구"), ("1101053", "사직동"),
+    ])
+    (record,) = build_records(data)
+    assert record.classes[0].levels == {"전국": 1, "시도": 3, "시군구": 2, "읍면동": 1}
+
+
+@offline
+def test_class_without_sido_gets_no_levels(tmp_path):
+    # 국적(지역)별 matches the region pattern but lists countries; 성씨·본관 never matches it
+    data = _data_dir(tmp_path)
+    _write_regions(data, "국적(지역)별", [("A", "계"), ("B", "중국"), ("C", "베트남")])
+    (record,) = build_records(data)
+    assert record.classes[0].levels == {}
+
+
 @offline
 def test_five_year_survey_keeps_its_cycle_and_flags_the_differences(tmp_path):
     (record,) = build_records(_data_dir(tmp_path))
