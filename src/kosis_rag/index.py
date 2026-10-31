@@ -7,7 +7,7 @@ helps find a table: name, survey, organization, real period range, cycle, menu p
 Embeddings are computed here and passed to Chroma (`upsert(embeddings=...)`), so the collection never relies on
 Chroma's default (English) embedding function; queries must be embedded with the same model.
 `TableRecord.search_text` (all labels, up to 22,929 chars) stays the BM25 document; the embedding document below
-caps labels per class so every table fits the model's input.
+summarizes region classes by level and caps the other labels per class so every table fits the model's input.
 
     PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python -m kosis_rag.index
 """
@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import time
 from datetime import datetime
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from kosis_rag.loader import _META_FIELDS
+from kosis_rag.metadata import REGION_LEVELS
 from kosis_rag.schemas import TableRecord
 
 REPO = Path(__file__).resolve().parents[2]
@@ -29,24 +31,74 @@ REPO = Path(__file__).resolve().parents[2]
 # candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
 # retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
-DOC_FORMAT = "meta-labels100"
+DOC_FORMAT = "meta-region-items-head"  # T2-25 1+2+3; before: "meta-labels100" (kosis_a_kure_202610291341)
 COLLECTION_PREFIX = "kosis_a_kure_"  # A: one vector per table; the build version follows (T2-05)
-LABEL_CAP = 100  # per class; enough for every 시도/시군구 list, keeps the longest document under 7k chars
+LABEL_CAP = 100  # per non-region class
+UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
+SIDO_SHORT = {
+    "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천", "광주광역시": "광주",
+    "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종", "경기도": "경기", "강원도": "강원",
+    "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북",
+    "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주", "제주도": "제주",
+}
 
 Embed = Callable[[list[str]], list[list[float]]]
 
 
+def clean_item(item: str) -> tuple[str, str | None]:
+    """'혼인건수 (건)' -> ('혼인건수', '건'), '가구_계' -> ('가구 계', None)."""
+    m = UNIT_SUFFIX.search(item)
+    name, unit = (item[: m.start()], m.group(1).strip()) if m else (item, None)
+    name = name.replace("_", " ").replace("ㆍ", "·").replace("–", "-")
+    return re.sub(r"\s+", " ", name).strip(), unit
+
+
+def sido_names(labels: list[str]) -> list[str]:
+    """The 시도 in a label list, in the short form questions use (서울특별시 -> 서울); old and new names merge."""
+    return list(dict.fromkeys(SIDO_SHORT[label] for label in labels if label in SIDO_SHORT))
+
+
+def region_summary(levels: dict[str, int], sido: list[str] | None = None) -> str:
+    """{'전국': 1, '시도': 17, '시군구': 250} -> '전국·시도(17)·시군구(250)'; with sido: '시도(17: 서울, 부산, …)'."""
+    parts = []
+    for lv in REGION_LEVELS:
+        if lv not in levels:
+            continue
+        if lv == "전국":
+            parts.append(lv)
+        elif lv == "시도" and sido:
+            parts.append(f"{lv}({levels[lv]:,}: {', '.join(sido)})")
+        else:
+            parts.append(f"{lv}({levels[lv]:,})")
+    return "·".join(parts)
+
+
 def to_document(record: TableRecord) -> str:
-    """Embedding text: listing facts, the real period range, items and capped labels."""
+    """Embedding text (T2-25 1+2+3): a summary line first, then listing facts, the real period range, cleaned items
+    with their units on one line, region classes as level counts and the other classes as capped labels.
+
+    Region labels were 81% of all labels and, listed, made a table read like a list of place names; the level
+    summary says which regions a table covers in a few tokens. Exact place names stay in `search_text` (BM25).
+    """
     info = record.info
+    cleaned = [clean_item(i) for i in record.items]
+    items = list(dict.fromkeys(name for name, _ in cleaned))
+    units = list(dict.fromkeys(unit for _, unit in cleaned if unit))
+    regions = " / ".join(region_summary(c.levels) for c in record.classes if c.levels) or "지역 구분 없음"
     lines = [
+        f"{info.table_name} | {'·'.join(record.prd_se)} {record.start}~{record.end} | 지역 단위: {regions} | 항목: {', '.join(items[:8])}",
         f"통계표: {info.table_name}",
         f"조사명: {info.survey_name} | 작성기관: {info.organization}" + (f" | 주제: {record.topic}" if record.topic else ""),
         f"수록기간: {record.start}~{record.end} ({'·'.join(record.prd_se)}), 목록 표기 {info.period}",
         "분류 경로: " + " / ".join(record.menu_paths),
-        "항목: " + ", ".join(record.items),
+        "항목: " + ", ".join(items),
     ]
+    if units:
+        lines.append("단위: " + ", ".join(units))
     for c in record.classes:
+        if c.levels:
+            lines.append(f"{c.name}: 지역 단위 {region_summary(c.levels)}")
+            continue
         shown = c.labels[:LABEL_CAP]
         more = f" 외 {c.n_labels - len(shown)}개" if c.n_labels > len(shown) else ""
         lines.append(f"{c.name}: " + ", ".join(shown) + more)
