@@ -18,9 +18,8 @@ from evals.schemas import CalcItem
 
 def run(retriever: BaseRetriever, items: list[CalcItem], k: int, interval: float = 0.0) -> list[dict]:
     """Rows shaped like the L3 runner's, plus the ranked keys and the table used; failures are recorded, not raised."""
-    from kosis_chat.api import summarize_stat  # imported here: offline commands never load the pipeline
-
     from evals.ops import usage_client
+    from evals.trace import summarize  # loads the pipeline: offline commands never import it
 
     client = usage_client()
     rows = []
@@ -30,16 +29,17 @@ def run(retriever: BaseRetriever, items: list[CalcItem], k: int, interval: float
         client.reset()
         started = time.perf_counter()
         keys: list[str] = []
-        answer, error = None, None
+        answer, spans, error, retrieve_ms = None, [], None, 0.0
         try:
             keys = [d.metadata["key"] for d in retriever.invoke(item.question)[:k]]
+            retrieve_ms = (time.perf_counter() - started) * 1000
             if keys:
-                answer = summarize_stat(item.question, keys[0], client=client, retry_interval=interval)
+                answer, spans, error = summarize(item.question, keys[0], client, interval)
             else:
                 error = "no table retrieved"
         except Exception as exc:  # a failing question is recorded, the run goes on
             error = f"{type(exc).__name__}: {exc}"
-        rows.append({"qid": item.qid, "answer": answer, "error": error, "keys": keys,
+        rows.append({"qid": item.qid, "answer": answer, "error": error, "keys": keys, "spans": spans, "retrieve_ms": retrieve_ms,
                      "used_table": keys[0] if keys else None,
                      "latency_ms": (time.perf_counter() - started) * 1000,
                      "llm_calls": client.calls, "input_tokens": client.input_tokens,

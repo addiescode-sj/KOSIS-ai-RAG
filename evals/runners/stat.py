@@ -19,9 +19,8 @@ from evals.schemas import CalcItem
 
 def run(items: list[CalcItem], interval: float = 0.0) -> list[dict]:
     """Calls the model through summarize_stat (HCX key from .env); a failed call is recorded, not raised."""
-    from kosis_chat.api import summarize_stat  # imported here: offline commands never load the pipeline
-
     from evals.ops import usage_client
+    from evals.trace import summarize  # loads the pipeline: offline commands never import it
 
     client = usage_client()
     rows = []
@@ -30,13 +29,14 @@ def run(items: list[CalcItem], interval: float = 0.0) -> list[dict]:
             time.sleep(interval)
         client.reset()
         started = time.perf_counter()
-        answer, error = None, None
+        answer, spans, error = None, [], None
         try:
             # ponytail: a given client builds a fresh pipeline per call (table reload); fine for 90 questions
-            answer = summarize_stat(item.question, item.table_key, client=client, retry_interval=interval)
+            answer, spans, error = summarize(item.question, item.table_key, client, interval)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-        rows.append({"qid": item.qid, "answer": answer, "error": error, "latency_ms": (time.perf_counter() - started) * 1000,
+        rows.append({"qid": item.qid, "answer": answer, "error": error, "spans": spans,
+                     "latency_ms": (time.perf_counter() - started) * 1000,
                      "llm_calls": client.calls, "input_tokens": client.input_tokens, "output_tokens": client.output_tokens,
                      "model": client.model, "failed": error is not None, "retried": client.failures > 0})
     return rows
@@ -69,6 +69,7 @@ def read_run(path: Path, items: list[CalcItem]) -> list[dict]:
             "qid": item.qid,
             "answer": StatAnswer.model_validate(stat) if stat else None,
             "error": None if stat else (row or {}).get("call_error") or "not in the run",
+            "spans": ((row or {}).get("decision_metadata") or {}).get("spans") or [],
             "latency_ms": (row or {}).get("latency_seconds", 0) * 1000,
             "llm_calls": len(llm),
             "input_tokens": tin,
