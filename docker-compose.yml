@@ -36,6 +36,16 @@ services:
       timeout: 3s
       retries: 10
 
+  jaeger:
+    # Traces of eval runs (T2-15, evals/trace.py): UI http://localhost:16686, OTLP gRPC :4317.
+    # Optional: docker compose --profile obs up -d jaeger, then OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+    # In-memory storage: traces are gone on restart; the run folder's report keeps the failure stages.
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: ["obs"]
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
   frontend:
     build: ./frontend
     environment:

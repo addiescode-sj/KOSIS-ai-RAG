@@ -33,6 +33,23 @@ FAIL = {
     "clarify": {"assumed_condition", "missing_clarification", "unsupported_claim", "run_failure"},
     "default_allowed": FACT_ERRORS | {"disallowed_default", "unsupported_claim", "run_failure"},
 }
+# Error -> what went wrong, for report.html and evals/README.md; the stage evals.trace.blame usually gives it
+ERROR_INFO = {
+    "wrong_value": "정답 셀은 골랐는데 값이 다르다 (파생값은 반올림 범위 밖)",
+    "wrong_unit": "값은 같은데 단위가 다르다 — 보통 같은 숫자를 가진 다른 항목(예: '년' 대신 '%')을 골랐다",
+    "wrong_period": "항목·분류는 맞는데 시점이 다른 셀을 썼다",
+    "wrong_dims": "필요한 셀이 답에 없다 — 다른 항목·지역·분류 셀을 골랐거나 파생값의 입력 셀이 다르다",
+    "missing_aux": "답의 주 숫자는 맞지만 함께 보여야 할 보조 셀(비교 대상·분모 등)이 빠졌다 (PARTIAL)",
+    "unsupported_claim": "답에 근거 없는 숫자가 있다 — 표 셀과 다르거나, 파생값이 다시 계산되지 않거나, 연결 문장에 숫자를 지어냈다",
+    "false_refusal": "답할 수 있는 질문인데 거절·되묻기를 했다",
+    "missed_refusal": "답할 수 없는 질문(기간·범위 밖)인데 답을 했다",
+    "wrong_reason": "거절은 맞지만 거절 사유가 정답 사유 목록에 없다",
+    "assumed_condition": "되물어야 할 모호한 질문인데 조건을 임의로 정해 답했다",
+    "missing_clarification": "되묻기는 했지만 선택지가 2개 미만이다",
+    "disallowed_default": "기본값 적용이 허용된 질문에서 답하지 않았거나, 허용되지 않은 기본값을 적용했다",
+    "unstated_default": "기본값을 적용했는데 답에 무엇을 적용했는지 밝히지 않았다 (PARTIAL)",
+    "run_failure": "답이 없다 — 예외, 모델 호출 실패, 검색 결과 없음",
+}
 _NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _IDENT = re.compile(r"[A-Za-z_]\w*")
 _OPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow}

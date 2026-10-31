@@ -15,6 +15,8 @@ dependencies = [
     "langchain-core>=1.7.0",
     "rank-bm25>=0.2.2",
     "chromadb-client==1.5.9",
+    "opentelemetry-sdk>=1.45",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.45",
 ]
 
 [dependency-groups]

@@ -1,8 +1,5 @@
 """e2e (first part of L4): the retriever's top 1 table goes to summarize_stat, graded like L3; offline with stubs."""
 
-import sys
-import types
-
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
@@ -32,11 +29,11 @@ def refused(reason: str) -> StatAnswer:
 
 
 def stub_pipeline(monkeypatch, used: list[str]) -> None:
-    def summarize_stat(question, table_key, client=None, retry_interval=0.0):
+    def summarize(question, table_key, client, retry_interval=0.0):
         used.append(table_key)
-        return refused("no_period")
+        return refused("no_period"), [{"name": "judge", "start_ms": 0, "duration_ms": 1, "status": "ok", "attributes": {}}], None
 
-    monkeypatch.setitem(sys.modules, "kosis_chat.api", types.SimpleNamespace(summarize_stat=summarize_stat))
+    monkeypatch.setattr("evals.trace.summarize", summarize)
     monkeypatch.setattr("evals.ops.usage_client", lambda: Client())
 
 
@@ -50,7 +47,7 @@ def test_top1_table_is_used_and_located(monkeypatch):
     stub_pipeline(monkeypatch, used)
     [row] = e2e.run(Fixed(keys=["101_DT_OTHER", "101_DT_GOLD"]), [item()], k=10)
     assert used == ["101_DT_OTHER"] and row["used_table"] == "101_DT_OTHER" and not row["failed"]
-    assert row["input_tokens"] == 10 and row["model"] == "stub"
+    assert row["input_tokens"] == 10 and row["model"] == "stub" and row["spans"][0]["name"] == "judge"
     loc = e2e.locate(item(), row, "PASS")
     assert loc["gold_rank"] == 2 and not loc["right_table"] and loc["cause"] == "pass"
     assert e2e.locate(item(), row, "FAIL")["cause"] == "retrieval"
@@ -86,7 +83,9 @@ def test_run_eval_e2e_writes_report(monkeypatch, tmp_path):
     [out] = (tmp_path / "reports").iterdir()
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "검색 1위가 정답 표: 0/1" in report and "retrieval 0" in report  # refusal with an allowed reason passes
-    assert "L4 종단 간" in (out / "report.html").read_text(encoding="utf-8")
+    assert "## 실패 단계 (trace)" in report and "실패 없음" in report
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "L4 종단 간" in html and "실패 단계 (trace)" in html
 
 
 def test_golden_sources_prefer_split_files(tmp_path):

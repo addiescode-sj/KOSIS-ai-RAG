@@ -14,7 +14,9 @@ import html
 import json
 from pathlib import Path
 
+from evals.evaluators.calculation import ERROR_INFO
 from evals.ops import read_history
+from evals.trace import STAGES
 
 QTYPE_ORDER = ["all", "exact_name", "concept", "sibling", "multi_condition", "period_cycle", "multi_table", "ambiguous"]
 VERDICTS = [("PASS", "good", "✓"), ("PARTIAL", "warning", "△"), ("FAIL", "critical", "✕")]
@@ -47,6 +49,9 @@ th{color:var(--text-secondary);font-weight:600}td.num{font-variant-numeric:tabul
 .chip{display:inline-block;border-radius:6px;padding:0 6px;margin:1px 3px 1px 0;border:1px solid var(--border);white-space:nowrap}
 .ok{color:var(--good)}.warn{color:var(--text-primary)}.bad{color:var(--critical)}
 details summary{cursor:pointer;color:var(--text-secondary)}
+.chip.err{border-color:var(--critical);color:var(--critical)}.chip.blame{border-width:2px;font-weight:600}
+.tools{color:var(--text-secondary);font-size:12px}
+.info{margin:12px 0 0;padding-left:18px;font-size:13px}.info li{margin:0 0 8px}a{color:var(--series-1)}
 """
 
 
@@ -221,12 +226,25 @@ def l3_body(m: dict, rows: list[dict]) -> str:
     kinds = [k for k in ["all", "answerable", "not_answerable", "clarify", "default_allowed"] if k in v]
     errors = sorted(m["summary"]["errors"].items(), key=lambda kv: -kv[1])
     err_chart = hbars([k for k, _ in errors], [c for _, c in errors]) if errors else '<p class="note">오류 없음</p>'
+    err_chart += error_info(errors, rows)
     return "".join([
         '<div class="tiles">', *tiles, "</div>",
         '<div class="grid2"><div class="card"><h2>kind별 판정</h2>',
         legend([(f"{icon} {name}", f"--{color}") for name, color, icon in VERDICTS]), stacked_verdicts([(k, v[k]) for k in kinds]), "</div>",
         '<div class="card"><h2>오류 유형</h2>', err_chart, "</div></div>",
     ])
+
+
+def error_info(errors: list[tuple[str, int]], rows: list[dict]) -> str:
+    """Under the error chart: what each error means, the stage it was blamed on and which questions have it."""
+    items = []
+    for name, count in errors:
+        hit = [r for r in rows if name in r.get("errors", [])]
+        stages = sorted({r["failure"]["label"] for r in hit if r.get("failure")})
+        qids = ", ".join(r["qid"] for r in hit[:6]) + (" …" if len(hit) > 6 else "")
+        items.append(f'<li><b>{esc(name)}</b> {count}건 — {esc(ERROR_INFO.get(name, "설명 없음 (evaluators/calculation.py ERROR_INFO)"))}'
+                     f'<div class="tools">{"실패 단계: " + esc(", ".join(stages)) + " · " if stages else ""}문항: {esc(qids)}</div></li>')
+    return f'<ul class="info">{"".join(items)}</ul>' if items else ""
 
 
 def e2e_body(m: dict, rows: list[dict]) -> str:
@@ -273,6 +291,53 @@ def ops_body(op: dict, rows: list[dict], history: list[dict]) -> str:
                     f'<h2 style="margin-top:12px">실행 간 추이 (같은 계층, {len(history)}회)</h2><div class="grid2">', trends, "</div>"])
 
 
+def trace_link(ui: str | None, trace_id: str | None) -> str:
+    return f'<a href="{esc(ui)}/trace/{esc(trace_id)}" target="_blank">trace</a>' if ui and trace_id else "-"
+
+
+def timeline(r: dict) -> str:
+    """The question's span path as chips: ✕ = error span, bold = the span blamed for the failure."""
+    blamed = (r.get("failure") or {}).get("span")
+    chips = [("retrieve", "ok" if r.get("right_table", True) else "error", None)] if "right_table" in r else []
+    chips.append(("summarize_stat", "error" if blamed == "tool.summarize_stat" else "ok", None))
+    chips += [(s["name"], s["status"], s["duration_ms"]) for s in r.get("spans") or []]
+    out = []
+    for name, status, ms in chips:
+        cls = "chip" + (" err" if status == "error" else "") + (" blame" if name in (blamed, f"tool.{name}") else "")
+        out.append(f'<span class="{cls}" title="{esc(name)} · {esc(status)}{"" if ms is None else f" · {ms:.0f} ms"}">'
+                   f'{"✕ " if status == "error" else ""}{esc(name)}</span>')
+    return "".join(out)
+
+
+def failures_body(m: dict, rows: list[dict]) -> str:
+    """Stage counts (evals.trace.blame) and, per non-PASS question, the stage, span, reason, path and Jaeger link."""
+    counts = m["summary"].get("failures")
+    if counts is None:
+        return ""
+    stages = [k for k in STAGES if counts.get(k)]
+    chart = hbars([STAGES[k] for k in stages], [counts[k] for k in stages]) if stages else '<p class="note">실패 없음</p>'
+    ui = (m.get("jaeger") or {}).get("ui")
+    failed = [r for r in rows if r.get("failure")]
+    body = "".join(
+        f'<tr><td>{esc(r["qid"])}</td><td>{esc(r.get("question", ""))}</td><td>{esc(r["verdict"])}</td>'
+        f'<td><b>{esc(r["failure"]["label"])}</b><div class="tools">{esc(r["failure"]["span"] or "-")}</div></td>'
+        f'<td>{esc(r["failure"]["reason"])}</td><td>{timeline(r)}</td>'
+        f'<td>{trace_link(ui, r.get("trace_id"))}</td></tr>'
+        for r in failed)
+    table = (f'<table><tr><th>qid</th><th>질문</th><th>판정</th><th>실패 단계 · span</th><th>사유</th><th>호출 도구 · span 경로</th><th>Jaeger</th></tr>{body}</table>'
+             if failed else "")
+    jaeger = (f'Jaeger: <a href="{esc(ui)}/search?service=kosis-evals" target="_blank">kosis-evals 서비스</a>' if ui
+              else "Jaeger 미전송 (OTEL_EXPORTER_OTLP_ENDPOINT를 설정하고 docker compose --profile obs up jaeger)")
+    order = " &gt; ".join(STAGES.values())
+    return "".join([
+        '<div class="card"><h2>실패 단계 (trace)</h2>',
+        f'<p class="note">non-PASS 문항마다 첫 번째로 맞는 규칙 하나: {order}. {jaeger}</p>', chart, "</div>",
+        f'<div class="card"><h2>실패 문항별 원인 ({len(failed)}건)</h2>'
+        '<p class="note">span 경로: 굵은 테두리 = 실패로 판정한 span, ✕ = 상태 error인 span(재시도 전 verify처럼 정상 흐름일 수 있음). 마우스를 올리면 지연이 보인다.</p>',
+        table or '<p class="note">실패 문항 없음</p>', "</div>",
+    ])
+
+
 def rows_table(layer: str, rows: list[dict]) -> str:
     if layer == "l1":
         head = ["qid", "split", "qtype", "질문", "첫 정답", "슬롯 순위", "top-3", "ms"]
@@ -280,14 +345,16 @@ def rows_table(layer: str, rows: list[dict]) -> str:
                        f'<td class="num">{esc(r.get("rank") or ("답 없음" if not r["answerable"] else "-"))}</td><td>{esc(r.get("slot_ranks", ""))}</td>'
                        f'<td>{esc(", ".join(r["keys"][:3]))}</td><td class="num">{r["latency_ms"]:.1f}</td></tr>' for r in rows)
     elif layer == "e2e":
-        head = ["qid", "kind", "판정", "원인", "쓴 표", "정답 순위", "오류", "ms", "토큰"]
+        head = ["qid", "kind", "판정", "원인", "실패 단계", "쓴 표", "정답 순위", "오류", "ms", "토큰"]
         body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["verdict"])}</td><td>{esc(r["cause"])}</td>'
+                       f'<td>{esc((r.get("failure") or {}).get("label", "-"))}</td>'
                        f'<td>{esc(r["used_table"] or "-")}{"" if r["right_table"] else " ✕"}</td><td class="num">{esc(r["gold_rank"] or "밖")}</td>'
                        f'<td>{esc(", ".join(r["errors"]))}</td><td class="num">{r.get("latency_ms", 0):.0f}</td>'
                        f'<td class="num">{r.get("input_tokens", 0) + r.get("output_tokens", 0):,}</td></tr>' for r in rows)
     else:
-        head = ["qid", "kind", "판정", "오류", "ms", "토큰"]
-        body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["verdict"])}</td><td>{esc(", ".join(r["errors"]))}</td>'
+        head = ["qid", "kind", "판정", "실패 단계", "오류", "ms", "토큰"]
+        body = "".join(f'<tr><td>{esc(r["qid"])}</td><td>{esc(r["kind"])}</td><td>{esc(r["verdict"])}</td>'
+                       f'<td>{esc((r.get("failure") or {}).get("label", "-"))}</td><td>{esc(", ".join(r["errors"]))}</td>'
                        f'<td class="num">{r.get("latency_ms", 0):.0f}</td><td class="num">{r.get("input_tokens", 0) + r.get("output_tokens", 0):,}</td></tr>' for r in rows)
     return ('<details class="card"><summary>문항별 결과 표 (' + str(len(rows)) + "건)</summary><table><tr>"
             + "".join(f"<th>{h}</th>" for h in head) + "</tr>" + body + "</table></details>")
@@ -311,7 +378,7 @@ def render(run: Path, questions: dict[str, str] | None = None) -> str:
     return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{esc(title)} · {esc(m['stage'])}</title><style>{CSS}</style></head>"
             f'<body><div class="viz-root"><main><h1>{esc(title)} · {esc(m["stage"])}</h1><div class="meta">{meta}</div>'
-            f"{body}{ops_body(m['ops'], rows, history)}{rows_table(layer, rows)}</main></div></body></html>")
+            f"{body}{failures_body(m, rows)}{ops_body(m['ops'], rows, history)}{rows_table(layer, rows)}</main></div></body></html>")
 
 
 def questions_of(layer: str) -> dict[str, str]:
