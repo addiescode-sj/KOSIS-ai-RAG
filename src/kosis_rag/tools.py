@@ -6,6 +6,7 @@ answer_table_question -> SearchResult adds the guide sentence and the no-answer 
 
 from __future__ import annotations
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool, StructuredTool
 
@@ -15,7 +16,7 @@ from kosis_rag import chain
 from kosis_rag.schemas import SearchArgs
 
 
-def build_tools(retriever: BaseRetriever, client: LLMClient) -> list[BaseTool]:
+def build_tools(retriever: BaseRetriever, client: LLMClient | BaseChatModel) -> list[BaseTool]:
     """Bind the retriever and model once; swap the retriever (BM25 -> Chroma, T2-05) without touching the tools."""
 
     def search_tables(question: str, k: int = 5) -> list[dict]:

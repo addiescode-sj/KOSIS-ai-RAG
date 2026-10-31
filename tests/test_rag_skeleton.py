@@ -76,3 +76,18 @@ def test_chroma_retriever_feeds_the_same_chain_and_tools():
     assert hits[0]["score"] == pytest.approx(0.9)  # 1 - cosine distance
     result = answer.invoke({"question": "아무 질문", "k": 2})
     assert not result["no_answer"] and "출처:" in result["answer"]
+
+
+def test_langchain_chat_model_reply_and_failure(retriever):
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    reply = "[1] DT_1B040B3 표가 시군구별 세대수를 담고 있습니다."
+    result = chain.answer(retriever, FakeListChatModel(responses=[reply]), "주민등록세대수")
+    assert result.answer_origin == "llm" and result.answer.startswith(reply)
+
+    class Boom(FakeListChatModel):
+        def _call(self, *a, **kw):
+            raise TimeoutError("down")
+
+    result = chain.answer(retriever, Boom(responses=[""]), "주민등록세대수")
+    assert result.answer_origin == "template" and result.llm_status == STATUS_API_ERROR

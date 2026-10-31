@@ -1,4 +1,4 @@
-"""RAG answer: retrieve candidate tables -> prompt -> Phase 1 LLMClient -> verify -> add citations by code.
+"""RAG answer: retrieve candidate tables -> prompt -> LLM (ChatClovaX or Phase 1 LLMClient) -> verify -> add citations by code.
 
 The model only writes a guide sentence over the candidates. Table ids, periods and citations come from the catalog;
 a reply that names an id or year not in the candidates, or a failed model call, falls back to a code template.
@@ -7,12 +7,15 @@ a reply that names an id or year not in the candidates, or a failed model call, 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from kosis_chat.llm.model import STATUS_OK, LLMClient, LLMResult
+from kosis_chat.config import get_secret, load_env, load_settings
+from kosis_chat.llm.model import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
 
 from kosis_rag.loader import to_candidate
 from kosis_rag.schemas import SearchResult, TableCandidate
@@ -40,8 +43,35 @@ def format_context(candidates: list[TableCandidate]) -> str:
     )
 
 
-def llm_runnable(client: LLMClient) -> Runnable:
-    """Wrap a Phase 1 client (HCX / mock) as a LangChain runnable: prompt messages in, LLMResult out."""
+def clova_chat(settings=None) -> BaseChatModel:
+    """HCX through langchain-naver's ChatClovaX; model and limits from configs/model.yaml.
+
+    Key: HCX_API_KEY from this repo's .env (Phase 1 load_env() alone reads vendor/phase1/.env),
+    else ChatClovaX's own CLOVASTUDIO_API_KEY.
+    """
+    from langchain_naver import ChatClovaX
+
+    load_env(Path(__file__).resolve().parents[2] / ".env")
+    settings = settings or load_settings()
+    key = get_secret(settings.api_key_env)
+    return ChatClovaX(
+        model=settings.model_name, temperature=settings.temperature, max_tokens=settings.max_tokens,
+        timeout=settings.timeout_seconds, **({"api_key": key} if key else {}),
+    )
+
+
+def llm_runnable(client: LLMClient | BaseChatModel) -> Runnable:
+    """Wrap a LangChain chat model or a Phase 1 client (mock) as a runnable: prompt messages in, LLMResult out."""
+
+    if isinstance(client, BaseChatModel):
+        def chat(prompt_value) -> LLMResult:
+            try:
+                msg = client.invoke(prompt_value)
+            except Exception as e:  # keep the Phase 1 contract: a failed call is a status, not a raise
+                return LLMResult(text="", status=STATUS_API_ERROR, error=f"{type(e).__name__}: {e}")
+            return LLMResult(text=msg.content, usage=dict(msg.usage_metadata or {}))
+
+        return RunnableLambda(chat, name=f"chat_model:{client.get_name()}")
 
     def call(prompt_value) -> LLMResult:
         messages = prompt_value.to_messages()
@@ -75,7 +105,7 @@ def search(retriever: BaseRetriever, question: str, k: int = 5) -> list[TableCan
     return [to_candidate(d) for d in retriever.invoke(question)[:k]]
 
 
-def answer(retriever: BaseRetriever, client: LLMClient, question: str, k: int = 5) -> SearchResult:
+def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question: str, k: int = 5) -> SearchResult:
     candidates = search(retriever, question, k)
     if not candidates:
         return SearchResult(question=question, no_answer=True, answer=REFUSAL_TEXT, answer_origin="refusal")
