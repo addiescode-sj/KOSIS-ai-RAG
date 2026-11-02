@@ -26,6 +26,7 @@ from kosis_ai.schemas import Fact, QuestionKind, QuestionType, RefusalReason
 ROOT = Path(__file__).resolve().parents[1]
 DATASETS = ROOT / "evals" / "datasets"
 GOLDEN = DATASETS / "retrieval_golden.jsonl"
+QUERY_GOLDEN = DATASETS / "query_golden.jsonl"  # L2 slot labels, same qids as GOLDEN (T2-14 draft, T2-28 labels)
 TABLES = ROOT / "data" / "tables.jsonl"
 MAX_SLOTS = 3  # AI engineering decision (10/29): a compound question uses at most 3 tables
 
@@ -91,6 +92,12 @@ class QueryItem(BaseModel):
     cycle: Literal["Y", "Q", "M", "F"] | None = None
     regions: list[str] = Field(default_factory=list)  # normalised labels, e.g. ["서울특별시"]
     answerable: bool = True
+    # Added for the T2-28 slot ablation; names follow kosis_rag.query.ParsedQuery. None = not labelled yet (the
+    # T2-14 draft has none of these), [] = labelled and the question names none. Labels follow the question's meaning,
+    # not the parser's word lists, so words the parser does not know still get a label.
+    years: list[int] | None = None  # years written in the question; a range gives its two ends
+    dimensions: list[str] | None = None  # breakdowns asked for, normalised: 성, 연령, 시도, ...
+    measures: list[str] | None = None  # what is counted, one concept each: 출생, 혼인, ...
 
 
 class CalcItem(BaseModel):
