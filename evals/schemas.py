@@ -95,7 +95,7 @@ class QueryItem(BaseModel):
     # Added for the T2-28 slot ablation; names follow kosis_rag.query.ParsedQuery. None = not labelled yet (the
     # T2-14 draft has none of these), [] = labelled and the question names none. Labels follow the question's meaning,
     # not the parser's word lists, so words the parser does not know still get a label.
-    years: list[int] | None = None  # years written in the question; a range gives its two ends
+    years: list[int] | None = None  # single years written in the question; a range is in period_start/end only
     dimensions: list[str] | None = None  # breakdowns asked for, normalised: 성, 연령, 시도, ...
     measures: list[str] | None = None  # what is counted, one concept each: 출생, 혼인, ...
 

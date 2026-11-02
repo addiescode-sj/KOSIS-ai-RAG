@@ -82,14 +82,7 @@
 
 ## 6. 평가 L0 evaluator와의 대응 (T2-28 `evals/evaluators/metadata.py`)
 
-| 이 스키마 (`TableFields`) | evaluator `fields()` | 차이 |
-| --- | --- | --- |
-| `available_years` | `years` | 이름만 다름 |
-| `regions = None` | `regions = "none"` | 전국 표 표기 |
-| `cycle` | `cycle` | 같은 규칙 (`record.cycle or record.prd_se`) |
-| `region_level`, `measure`, `dimensions` | 같은 이름 | 같은 함수 |
-| `dimension_keys` | 없음 | 새 필드 (표준 분류 이름) |
-| `measure_unit` | 없음 | 새 필드 |
+evaluator `fields()`가 `table_fields()`를 그대로 부른다. 필드 이름·값이 같고, 전국 표의 `regions = None`은 채움으로 센다. `measure_unit`·`dimension_keys`도 채움률을 잰다.
 
 ## 7. 알려진 한계
 

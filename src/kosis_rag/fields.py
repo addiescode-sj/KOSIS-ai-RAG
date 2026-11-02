@@ -1,8 +1,7 @@
 """Per-table metadata fields (T2-30, KOS-96): what the filters and the vector-store metadata decide on.
 
 Computed from a `TableRecord` with the functions the filters already use, so `tables.jsonl` does not change and the
-values match what the filters see. Names follow KOS-96; the T2-28 L0 evaluator calls `available_years` "years" and
-writes a national table's regions as "none" where this model has None.
+values match what the filters see. Names follow KOS-96; the T2-28 L0 evaluator scores this model as is.
 """
 
 from __future__ import annotations
