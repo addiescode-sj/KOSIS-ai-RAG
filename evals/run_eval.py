@@ -24,11 +24,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from evals import ops, report_html
-from evals.evaluators import calculation, retrieval
-from evals.schemas import DATASETS, GOLDEN, ROOT, TABLES, CalcItem, load_items, load_jsonl
+from evals.evaluators import calculation, query, retrieval
+from evals.schemas import DATASETS, GOLDEN, ROOT, TABLES, CalcItem, QueryItem, load_items, load_jsonl
 
 REPORTS = ROOT / "evals" / "reports"
 CALC_GOLDEN = DATASETS / "calculation_golden.jsonl"
+QUERY_GOLDEN = DATASETS / "query_golden.jsonl"
 POOL = DATASETS / "retrieval_pool.csv"
 OPS_FIELDS = ("latency_ms", "llm_calls", "input_tokens", "output_tokens", "model", "failed", "retried")
 
@@ -145,6 +146,31 @@ def run_l3(args) -> tuple[list[dict], dict, str]:
     return rows, summary, report
 
 
+def run_l2(args) -> tuple[list[dict], dict, str]:
+    """L2: the T2-14 rule parser on each question, graded field by field (no model call)."""
+    import time
+
+    from kosis_rag.query import parse_query
+
+    qtype = {i.qid: i.qtype for i in load_items(GOLDEN)}
+    items = [i for i in load_jsonl(QUERY_GOLDEN, QueryItem) if args.split == "all" or i.split == args.split]
+    rows = []
+    for item in items:
+        started = time.perf_counter()
+        parsed = parse_query(item.question).to_query_item_fields()
+        rows.append({"qid": item.qid, "split": item.split, "qtype": qtype.get(item.qid), "parsed": parsed,
+                     **query.score_item(item, parsed), "latency_ms": (time.perf_counter() - started) * 1000})
+    groups = {"all": rows, **{t: [r for r in rows if r["qtype"] == t] for t in sorted({r["qtype"] for r in rows})}}
+    summary = {"metrics": {name: query.aggregate(g) for name, g in groups.items()}}
+    cols = (*query.FIELDS, "all")
+    lines = ["| qtype | n | " + " | ".join(cols) + " |", "|" + " --- |" * (len(cols) + 2)]
+    for name, m in summary["metrics"].items():
+        lines.append(f"| {name} | {m['n']} | " + " | ".join(f"{m[c]:.3f}" for c in cols) + " |")
+    report = "\n".join([f"# L2 query understanding — {args.stage}", "", f"- parser `kosis_rag.query.parse_query` (rules), split `{args.split}`", "",
+                        *lines, "", "- regions는 집합으로 비교한다. answerable은 파서 대상이 아니라 채점하지 않는다 (T2-09)."]) + "\n"
+    return rows, summary, report
+
+
 def run_e2e(args) -> tuple[list[dict], dict, str]:
     """L4 end to end: the retriever picks the table (top 1), then the same answer path and grader as L3."""
     from evals.runners import e2e
@@ -178,17 +204,17 @@ def run_e2e(args) -> tuple[list[dict], dict, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one evaluation layer (L1 retrieval, L3 calculation, e2e).")
-    parser.add_argument("--layer", choices=("l1", "l3", "e2e"), required=True)  # l2: T2-14; e2e is the first part of L4 (T2-10)
+    parser.add_argument("--layer", choices=("l1", "l2", "l3", "e2e"), required=True)  # e2e is the first part of L4 (T2-10)
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
     parser.add_argument("--split", choices=("dev", "test", "all"), default="test")
-    parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma")
+    parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma, each optionally +cond or +cond-soft (T2-14)")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
     parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
     args = parser.parse_args(argv)
 
-    rows, summary, report = {"l1": run_l1, "l3": run_l3, "e2e": run_e2e}[args.layer](args)
+    rows, summary, report = {"l1": run_l1, "l2": run_l2, "l3": run_l3, "e2e": run_e2e}[args.layer](args)
     op = ops.summarize(rows)
     report += ops_section(op)
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{args.stage}"
@@ -196,14 +222,14 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True)
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
-    golden = GOLDEN if args.layer == "l1" else CALC_GOLDEN
+    golden = {"l1": GOLDEN, "l2": QUERY_GOLDEN}.get(args.layer, CALC_GOLDEN)
     manifest = {
         "run_id": run_id, "layer": args.layer, "stage": args.stage, "split": args.split,
         "golden": {"path": str(golden.relative_to(ROOT)), "sha256": sha256(golden)},
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),
         "vendor_phase1": git("-C", "vendor/phase1", "rev-parse", "HEAD"),
-        "retriever": args.retriever if args.layer != "l3" else None, "top_k": args.k if args.layer != "l3" else None,
+        "retriever": args.retriever if args.layer in ("l1", "e2e") else None, "top_k": args.k if args.layer in ("l1", "e2e") else None,
         "from_run": str(args.from_run) if args.from_run else None,
         "summary": summary,
         "ops": op,
@@ -211,11 +237,12 @@ def main(argv: list[str] | None = None) -> int:
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (out / "ops.json").write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "report.md").write_text(report, encoding="utf-8")
-    target = args.retriever if args.layer == "l1" else ",".join(op["models"]) or "summarize_stat"
+    target = {"l1": args.retriever, "l2": "parse_query"}.get(args.layer) or ",".join(op["models"]) or "summarize_stat"
     if args.layer == "e2e":
         target = f"{args.retriever}+{target}"
     ops.append_history(run_id, args.layer, args.stage, target, op)
-    report_html.write(out)
+    if args.layer != "l2":  # L2 is a field table; report.md is enough
+        report_html.write(out)
     print(report)
     print(f"-> {out}")
     return 0

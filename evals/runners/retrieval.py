@@ -46,6 +46,18 @@ def bm25_retrievers(records: list[TableRecord], k: int) -> dict[str, BM25TableRe
 
 
 def build(name: str, items: list[RetrievalItem], k: int) -> BaseRetriever:
+    """`<base>+cond` / `<base>+cond-soft`: the T2-14 parser's conditions applied to the base (hard / soft 시도)."""
+    base_name, _, cond = name.partition("+")
+    if cond:
+        from kosis_rag.query import ConditionRetriever
+
+        if cond not in ("cond", "cond-soft"):
+            raise ValueError(f"unknown condition mode {cond!r}; known: cond, cond-soft")
+        records = load_records()
+        # BM25 is filtered after retrieval, so it returns every table with a score; Chroma filters before
+        base = build(base_name, items, k if base_name == "chroma" else len(records))
+        return ConditionRetriever(base=base, records={r.info.key: r for r in records}, k=k,
+                                  region_mode="soft" if cond == "cond-soft" else "hard")
     if name == "oracle":
         return OracleRetriever(gold={i.question: [s[0] for s in i.required] for i in items})
     if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
