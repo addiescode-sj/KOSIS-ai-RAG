@@ -3,7 +3,8 @@
 import pytest
 
 from kosis_ai.schemas import TableInfo
-from kosis_rag.index import LABEL_CAP, load, region_summary, sido_names, to_document, to_metadata
+from kosis_rag import index
+from kosis_rag.index import LABEL_CAP, collection_name, load, region_summary, sido_names, to_document, to_metadata
 from kosis_rag.loader import _META_FIELDS
 from kosis_rag.schemas import TableClass, TableRecord
 
@@ -34,7 +35,8 @@ def test_document_is_metadata_only_with_real_period_and_capped_labels():
 @offline
 def test_document_summarizes_region_classes_by_level_and_starts_with_a_summary_line():
     doc = to_document(_record(n_labels=3500, levels={"전국": 1, "시도": 17, "시군구": 250, "읍면동": 3306}))
-    assert doc.splitlines()[0] == "1인 가구 | Y 2015~2020 | 지역 단위: 전국·시도(17)·시군구(250)·읍면동(3,306) | 항목: 1인 가구"
+    assert doc.splitlines()[0] == ("1인 가구 | 세는 대상: 1인 가구 | Y 2015~2020 | 지역 단위: 전국·시도(17)·시군구(250)·읍면동(3,306) "
+                                   "| 항목: 1인 가구")  # the one item says what is counted (KOS-109)
     assert "행정구역별: 지역 단위 전국·시도(17)·시군구(250)·읍면동(3,306)" in doc
     assert "지역0" not in doc  # no place names in the embedding text (they stay in search_text)
 
@@ -54,17 +56,45 @@ def test_document_cleans_item_names_and_keeps_units_on_one_line():
 
 
 @offline
-def test_metadata_is_scalar_keeps_candidate_keys_and_drops_none():
+def test_metadata_keeps_candidate_keys_and_drops_none():
     meta = to_metadata(_record())
     assert set(_META_FIELDS) <= set(meta) and meta["period"] == "5년 (2015 ~ 2025)"
-    assert "value_summary" not in meta and "rows" not in meta
+    assert "value_summary" not in meta and "rows" not in meta and "index_version" not in meta
     assert meta["start"] == 2015 and meta["cycle"] == "F" and "unit" not in meta and "topic" not in meta
-    assert all(isinstance(v, (str, int, float, bool)) for v in meta.values())
+    for v in meta.values():  # Chroma: scalars, or non-empty lists of one type
+        assert isinstance(v, (str, int, float, bool)) or (v and len({type(x) for x in v}) == 1)
+
+
+@offline
+def test_fields_go_in_as_lists_and_empty_ones_are_left_out():
+    meta = to_metadata(_record())
+    assert meta["f_years"] == [2015, 2020] and meta["f_cycle"] == ["F"]
+    assert "f_measure" not in meta or isinstance(meta["f_measure"], str)
+    assert all(meta[k] for k in meta if k.startswith("f_") and isinstance(meta[k], list))
+    if "f_regions" not in meta:
+        assert meta["f_national"] is True
+
+
+@offline
+def test_build_name_follows_the_data_and_both_formats(monkeypatch):
+    name = collection_name("ab" * 32)
+    assert name == collection_name("ab" * 32) and name.startswith("kosis_kure__" + index.DOC_FORMAT + "__")
+    assert collection_name("cd" * 32) != name
+    monkeypatch.setattr(index, "META_FORMAT", "fields-next")
+    assert collection_name("ab" * 32) != name  # changing to_metadata without a new name would mix two contents
+    monkeypatch.setattr(index, "DOC_FORMAT", "1+2+3")
+    with pytest.raises(ValueError):
+        collection_name("ab" * 32)
 
 
 class _FakeCollection:
     def __init__(self):
         self.rows = {"101_OLD": "stale"}
+        self.metadata = {"index_version": "old", "hnsw:space": "cosine"}
+
+    def modify(self, metadata):
+        assert not any(k.startswith("hnsw:") for k in metadata)
+        self.metadata = metadata
 
     def upsert(self, ids, documents, metadatas, embeddings):
         self.rows.update(zip(ids, documents))
@@ -99,6 +129,8 @@ def test_reload_upserts_in_batches_and_drops_tables_no_longer_in_the_input():
     assert load(client, ids, docs, [{}] * 3, [[0.0]] * 3, "c") == 3
     assert load(client, ids, docs, [{}] * 3, [[0.0]] * 3, "c") == 3
     assert client.collection.rows == {"a": "A", "b": "B", "c": "C"}
+    load(client, ids, docs, [{}] * 3, [[0.0]] * 3, "c", {"index_version": "new", "hnsw:space": "cosine"})
+    assert client.collection.metadata == {"index_version": "new"}  # a reload refreshes the build record
 
 
 @offline

@@ -27,7 +27,7 @@ def _record(name, classes=()):
     ("시도/성/연령별 북한출생 인구", "북한출생 인구", ["시도", "성", "연령"]),
     ("시군구/성/연령(5세)별 사망자수(1997~), 사망률(1998~)", "사망자수, 사망률", ["시군구", "성", "연령(5세)"]),
     ("총조사인구 총괄(시군구/성/5세연령별)", "총조사인구 총괄", ["시군구", "성", "5세연령"]),
-    ("서울특별시 인구 현황", None, ["행정구역", "성"]),
+    ("서울특별시 인구 현황", "인구", ["행정구역", "성"]),  # T2-30 KOS-109: the word before 현황
     ("국적별 한국국적을 취득한 자-혼인 귀화자(계)", "한국국적을 취득한 자-혼인 귀화자", ["국적"]),  # "특별시" is not a breakdown; falls back to class names
     # T2-30: bundle tables name what they count in brackets; a counted word may follow 별 with no space
     ("시도/인구동태건수 및 동태율(출생,사망,혼인,이혼)", "출생·사망·혼인·이혼", ["행정구역", "성"]),
@@ -57,3 +57,19 @@ def test_bundle_table_passes_the_counted_filter_for_each_listed_word():
     for question in ("2024년 서울 출생아 수", "2024년 부산 사망자 수", "2024년 혼인 건수", "2024년 이혼 건수"):
         assert lacks_role(bundle, parse_query(question).to_filter()) is None, question
     assert lacks_role(bundle, TableFilter(measures=["인구"])) == "세는 대상 출생·사망·혼인·이혼 (요청 인구)"
+
+
+@offline
+@pytest.mark.parametrize("name, items, measure", [  # T2-30 KOS-109: names that are not "A별 X"
+    ("출생아수, 합계출산율, 자연증가 등", ["인구동태건수 및 동태율 추이"], "출생아수·합계출산율·자연증가"),
+    ("2010년 행정구역 기준 주택수 추이(2000~2010)", ["단독주택", "아파트"], "주택수"),
+    ("한국국적을 가지지 않은 자-기타 외국인(남)", ["외국인"], "외국인"),
+    ("누적 혼인 비율", ["비율"], "누적 혼인 비율"),  # a generic item takes the name when the name ends with it
+    ("건강 문제로 인한 일상생활 제약 여부", ["비율"], None),  # a survey question names no counted thing
+    ("성, 혼인상태 및 경제활동상태인구", ["계"], None),  # lists breakdowns, not counted things
+    ("한국국적을 가지지 않은 자 - 기타(유학생 등)", ["기타"], None),  # 기타 is a breakdown value
+])
+def test_names_without_the_usual_shape(name, items, measure):
+    record = _record(name)
+    record.items = items
+    assert table_roles(record)[0] == measure
