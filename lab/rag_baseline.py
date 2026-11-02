@@ -15,6 +15,12 @@ Added here only:
     python lab/rag_baseline.py --e2e all              # Phase 1 golden end to end: hybrid top 1 -> summarize_stat -> L3 grade
     python lab/rag_baseline.py --dense bge-m3                 # lab V0 dense (bge-m3, n2 text) in place of KURE-v1
     python lab/rag_baseline.py --dense ft --ckpt data/lab/ft/<run>/seen-e2.pt   # plan 29 fine-tuned weights
+    python lab/rag_baseline.py --dense ft --rerank data/lab/rrft/<run> --golden phase1 --e2e all   # staged (plan 43)
+
+--rerank adds the staged search of lab/staged_retriever.py on top of hybrid-<dense> (top 50): the fine-tuned
+bge-reranker-v2-m3 (stage 1, --rerank-mode blend|score), then an LLM re-ranker on its top 20 (stage 2, --stage2,
+default clova with the wrapped question; none = stage 1 only). It shows up as staged-<dense> in L1 and is the
+retriever --answers / --e2e use.
 
 --dense bge-m3 / ft embed the lab V0 text (n2 rules, labels > 60 summarized; the text the weights were trained on)
 and n2-normalize the question; BM25 stays master's bm25-record either way, so only the dense side changes.
@@ -199,16 +205,24 @@ def chroma_retriever(records, dense: dict, k: int):
     return ChromaTableRetriever(collection=collection, embed_query=dense["embed_query"], k=k)
 
 
-def build_retrievers(device: str | None, kind: str, ckpt: Path | None) -> tuple[dict[str, BaseRetriever], str]:
-    """bm25-record, chroma-<kind>, hybrid-<kind> (the names become the report stages), and the dense label."""
+def build_retrievers(device: str | None, kind: str, ckpt: Path | None,
+                     staged: dict | None = None) -> tuple[dict[str, BaseRetriever], str]:
+    """bm25-record, chroma-<kind>, hybrid-<kind> (+ staged-<kind> when `staged` is given; the names become the
+    report stages), and the label of the retriever the answers use."""
     from evals.runners.retrieval import bm25_retrievers, load_records
 
     records = load_records()
     bm25 = bm25_retrievers(records, POOL)["bm25-record"]
     dense = dense_kure(records, device) if kind == "kure" else dense_bge(records, ckpt if kind == "ft" else None)
     chroma = chroma_retriever(records, dense, POOL)
-    return {"bm25-record": bm25, f"chroma-{kind}": chroma, f"hybrid-{kind}": RRFRetriever(retrievers=[bm25, chroma])}, \
-        dense["label"]
+    out = {"bm25-record": bm25, f"chroma-{kind}": chroma, f"hybrid-{kind}": RRFRetriever(retrievers=[bm25, chroma])}
+    if not staged:
+        return out, dense["label"]
+    from staged_retriever import build_staged
+
+    base = RRFRetriever(retrievers=[bm25, chroma], k=POOL)  # the re-ranker sees the hybrid top 50
+    out[f"staged-{kind}"], label = build_staged(base, **staged)
+    return out, f"{dense['label']} + BM25 (RRF) -> {label}"
 
 
 def ensure_golden() -> Path:
@@ -532,6 +546,12 @@ def main() -> int:
                    help="ft: a <regime>-e<n>.pt from ft_train.py (default: seen-e2.pt of the latest data/lab/ft run)")
     p.add_argument("--e2e", default="0",
                    help="Phase 1 golden end to end (top 1 table -> summarize_stat -> L3 grade): a number or 'all'")
+    p.add_argument("--rerank", type=Path, default=None,
+                   help="staged search: fine-tuned re-ranker, a data/lab/rrft/<run> folder (last epoch) or a .pt file")
+    p.add_argument("--rerank-mode", choices=("blend", "score"), default="blend",
+                   help="blend: RRF of re-ranker and hybrid order (plan 43 dev choice); score: re-ranker only")
+    p.add_argument("--stage2", default=None,
+                   help="LLM re-ranker after stage 1: clova (default with --rerank) | none")
     p.add_argument("--skip-l1", action="store_true")
     args = p.parse_args()
 
@@ -553,13 +573,18 @@ def main() -> int:
         ckpt = Path(ckpt).resolve()
         print(f"fine-tuned weights: {ckpt}")
     llm = make_client(args.backend) if args.answers != "0" or args.e2e != "0" else None
-    retrievers, dense_label = build_retrievers(args.device, args.dense, ckpt)
+    staged = None
+    if args.rerank is not None or args.stage2 not in (None, "none"):
+        staged = {"reranker": args.rerank, "stage2": args.stage2 or ("clova" if args.rerank is not None else None),
+                  "mode": args.rerank_mode, "interval": args.interval}
+    retrievers, dense_label = build_retrievers(args.device, args.dense, ckpt, staged)
+    used = f"staged-{args.dense}" if staged else f"hybrid-{args.dense}"
+    print(f"answers and e2e use {used}: {dense_label}")
     pages = [] if args.skip_l1 else [d / "report.html" for d in run_l1(retrievers, split, tau)]
     if args.answers != "0":
-        pages.append(answers(retrievers[f"hybrid-{args.dense}"], llm, args.answers, split, args.interval,
-                             dense_label))
+        pages.append(answers(retrievers[used], llm, args.answers, split, args.interval, dense_label))
     if args.e2e != "0":
-        pages.append(e2e(retrievers[f"hybrid-{args.dense}"], args.backend, args.e2e, args.interval, dense_label))
+        pages.append(e2e(retrievers[used], args.backend, args.e2e, args.interval, dense_label))
     print("\nopen in a browser:")
     for page in pages:
         print(f"  {page}")
