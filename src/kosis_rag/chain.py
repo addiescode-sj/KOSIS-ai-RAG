@@ -22,7 +22,14 @@ from kosis_rag.schemas import SearchResult, TableCandidate
 
 NO_MATCH = "NO_MATCH"
 REFUSAL_TEXT = "제공된 KOSIS 통계표 중에서 이 질문에 맞는 표를 찾지 못했습니다. 다른 표현으로 다시 질문해 주세요."
-# TODO(T2-14, T2-09): refuse on period / frequency mismatch and calibrate a score threshold; today only "no hit" refuses.
+# Why the stage 2 LLM re-ranker picked nothing (kosis_rag.hcx.REASONS) -> the guide sentence; code picks it, not the LLM.
+# Only out_of_scope gets its own sentence: on the T2-09 golden set HCX-007 labelled 9 of 13 out-of-scope refusals
+# "no_item", so a "related tables exist" sentence would mislead; no_item falls back to REFUSAL_TEXT.
+REFUSALS = {
+    "out_of_scope": "이 질문은 제공된 KOSIS 인구 통계표가 다루는 범위 밖입니다. 다른 통계(예: 지역·경제·보건 통계)는 KOSIS에서 직접 찾아 주세요.",
+}
+# ponytail: no score threshold in the service yet (tau is calibrated only in evals); refusals are "no candidates" and
+# the stage 2 LLM's empty pick (T2-09). A filter that removes every table refuses with the generic text.
 
 PROMPT = ChatPromptTemplate.from_messages([
     ("system",
@@ -106,9 +113,15 @@ def search(retriever: BaseRetriever, question: str, k: int = 5) -> list[TableCan
 
 
 def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question: str, k: int = 5) -> SearchResult:
-    candidates = search(retriever, question, k)
+    docs = retriever.invoke(question)[:k]
+    candidates = [to_candidate(d) for d in docs]
     if not candidates:
         return SearchResult(question=question, no_answer=True, answer=REFUSAL_TEXT, answer_origin="refusal")
+    meta = docs[0].metadata
+    if meta.get("stage2_picked_n") == 0 and not meta.get("stage2_error"):  # the LLM re-ranker picked nothing (T2-09)
+        reason = meta.get("stage2_reason")
+        return SearchResult(question=question, candidates=candidates, no_answer=True, no_answer_reason=reason,
+                            answer=REFUSALS.get(reason, REFUSAL_TEXT), answer_origin="refusal")
 
     result: LLMResult = (PROMPT | llm_runnable(client)).invoke(
         {"question": question, "context": format_context(candidates)}, config={"run_name": "table_guide_chain"}
