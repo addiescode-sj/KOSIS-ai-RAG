@@ -56,4 +56,35 @@ def table_roles(record: TableRecord) -> tuple[str | None, list[str]]:
         return INNER_PAREN.sub("", m.group("measure")).strip(), _dims(m.group("dims"))  # "사망자수(1997~), 사망률"
     if paren_dims:
         return name, paren_dims
-    return None, [_strip_byeol(c.name) for c in record.classes]
+    return _fallback_measure(record, name), [_strip_byeol(c.name) for c in record.classes]
+
+
+# T2-30 KOS-109 (evaluation note D6): a name that is not "A별 X" may still say what is counted
+SUMMARY_TAIL = re.compile(r"\s*(?:현황|추이|분포|구조)$")
+ITEM_NOISE = re.compile(r"[-_]\s*계$|\s*[(（][^()（）]*[)）]|\d+세\s*이상\s*")  # "외국인주민-계", "(명)", "6세 이상 "
+BREAKDOWN_VALUES = {"계", "합계", "총계", "소계", "남자", "여자", "남", "여", "전체", "기타"}
+GENERIC_ITEMS = {"비율", "구성비", "비중", "평균"}
+# "성, 혼인상태 및 경제활동상태인구" lists breakdowns, not counted things
+BREAKDOWN_HEADS = {"성", "연령", "혼인상태", "교육정도", "경제활동상태", "산업", "직업", "세대구성", "국적"}  # says how, not what: "누적 혼인 비율" has the one item "비율"
+
+
+def _fallback_measure(record: TableRecord, name: str) -> str | None:
+    """The one item a table has ("외국인", "고령친화 용품 제품 관련 종사자 수"), or the word before 현황·추이·분포·구조
+    ("… 주택수 추이" -> 주택수). A generic item (비율) gives the name when the name ends with it. None when neither
+    holds or the item is a breakdown value such as 계."""
+    listed = re.sub(r"\s*등$", "", name.split("/")[-1])  # "시군구/출생아수, 합계출산율": the part after the area
+    parts = [p for p in LIST_SEP.split(listed) if p]
+    if (len(parts) > 1 and "별" not in name and not any(NOT_COUNTED.search(p) for p in parts)
+            and not any(p.split(" 및 ")[0] in BREAKDOWN_HEADS for p in parts)):
+        return "·".join(parts)  # "출생아수, 합계출산율, 자연증가 등": the name lists what is counted
+    if len(record.items) == 1:
+        item = ITEM_NOISE.sub("", record.items[0]).strip()
+        if item in GENERIC_ITEMS:  # the name says what; a survey question name ("… 여부") does not, so leave it empty
+            return name if name.endswith(item) else None
+        if len(item) >= 2 and item not in BREAKDOWN_VALUES:
+            return item
+    if SUMMARY_TAIL.search(name):
+        words = SUMMARY_TAIL.sub("", name).split()
+        if words and len(words[-1]) >= 2 and "별" not in words[-1]:
+            return words[-1]
+    return None

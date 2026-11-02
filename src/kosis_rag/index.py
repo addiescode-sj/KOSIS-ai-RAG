@@ -36,9 +36,9 @@ REPO = Path(__file__).resolve().parents[2]
 # candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
 # retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
-DOC_FORMAT = "meta-region-items-head-measure2"  # T2-30 KOS-97: bundle and joined names now say what they count; before: "meta-region-items-head-measure" (T2-27, …202611021052)
+DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list or summarize what is counted; before: measure2 (KOS-97), measure (T2-27)
 # Per-table fields as list metadata (T2-30 KOS-101). Bump it whenever to_metadata changes: it is part of the build name.
-META_FORMAT = "fields1"
+META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
 COLLECTION_PREFIX = "kosis_kure__"  # T2-30: content-named builds; before T2-30 "kosis_a_kure_<YYYYMMDDHHMM>" (kept on servers)
 COLLECTION_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,510}[a-z0-9]$")  # Chroma: 3-512 chars, alphanumeric at both ends
 LABEL_CAP = 100  # per non-region class
@@ -133,6 +133,7 @@ def to_metadata(record: TableRecord) -> dict:
         "part": "core",
         "f_years": f.available_years, "f_cycle": f.cycle, "f_regions": f.regions, "f_national": f.regions is None,
         "f_region_level": f.region_level, "f_measure": f.measure, "f_unit": f.measure_unit, "f_dims": f.dimension_keys,
+        "f_implied": f.implied_keys, "f_fixed": f.fixed, "f_measure_keys": f.measure_keys,
     }
     return {k: v for k, v in meta.items() if v is not None and v != []}
 
