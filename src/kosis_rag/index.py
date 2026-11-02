@@ -24,6 +24,7 @@ from pathlib import Path
 
 from kosis_rag.loader import _META_FIELDS
 from kosis_rag.metadata import REGION_LEVELS
+from kosis_rag.roles import table_roles
 from kosis_rag.schemas import TableRecord
 
 REPO = Path(__file__).resolve().parents[2]
@@ -31,7 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 # candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
 # retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
-DOC_FORMAT = "meta-region-items-head"  # T2-25 1+2+3; before: "meta-labels100" (kosis_a_kure_202610291341)
+DOC_FORMAT = "meta-region-items-head-measure"  # T2-27; before: "meta-region-items-head" (T2-25 1+2+3, …202610300954)
 COLLECTION_PREFIX = "kosis_a_kure_"  # A: one vector per table; the build version follows (T2-05)
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
@@ -79,14 +80,17 @@ def to_document(record: TableRecord) -> str:
 
     Region labels were 81% of all labels and, listed, made a table read like a list of place names; the level
     summary says which regions a table covers in a few tokens. Exact place names stay in `search_text` (BM25).
+    The summary line also names what the table counts (T2-27), so "출생아 수" is not read off "출생아수별 부인".
     """
     info = record.info
     cleaned = [clean_item(i) for i in record.items]
     items = list(dict.fromkeys(name for name, _ in cleaned))
     units = list(dict.fromkeys(unit for _, unit in cleaned if unit))
     regions = " / ".join(region_summary(c.levels) for c in record.classes if c.levels) or "지역 구분 없음"
+    measure, _ = table_roles(record)
+    counted = f" | 세는 대상: {measure}" if measure else ""
     lines = [
-        f"{info.table_name} | {'·'.join(record.prd_se)} {record.start}~{record.end} | 지역 단위: {regions} | 항목: {', '.join(items[:8])}",
+        f"{info.table_name}{counted} | {'·'.join(record.prd_se)} {record.start}~{record.end} | 지역 단위: {regions} | 항목: {', '.join(items[:8])}",
         f"통계표: {info.table_name}",
         f"조사명: {info.survey_name} | 작성기관: {info.organization}" + (f" | 주제: {record.topic}" if record.topic else ""),
         f"수록기간: {record.start}~{record.end} ({'·'.join(record.prd_se)}), 목록 표기 {info.period}",

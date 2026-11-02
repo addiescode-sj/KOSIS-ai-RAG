@@ -99,3 +99,10 @@ def test_reload_upserts_in_batches_and_drops_tables_no_longer_in_the_input():
     assert load(client, ids, docs, [{}] * 3, [[0.0]] * 3, "c") == 3
     assert load(client, ids, docs, [{}] * 3, [[0.0]] * 3, "c") == 3
     assert client.collection.rows == {"a": "A", "b": "B", "c": "C"}
+
+
+@offline
+def test_summary_line_names_what_the_table_counts():
+    record = _record()
+    record.info = record.info.model_copy(update={"table_name": "시도/연령/출생아수별 부인"})
+    assert to_document(record).splitlines()[0].startswith("시도/연령/출생아수별 부인 | 세는 대상: 부인 | Y 2015~2020")
