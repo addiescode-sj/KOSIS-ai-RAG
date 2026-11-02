@@ -29,6 +29,13 @@ def _record(name, classes=()):
     ("총조사인구 총괄(시군구/성/5세연령별)", "총조사인구 총괄", ["시군구", "성", "5세연령"]),
     ("서울특별시 인구 현황", None, ["행정구역", "성"]),
     ("국적별 한국국적을 취득한 자-혼인 귀화자(계)", "한국국적을 취득한 자-혼인 귀화자", ["국적"]),  # "특별시" is not a breakdown; falls back to class names
+    # T2-30: bundle tables name what they count in brackets; a counted word may follow 별 with no space
+    ("시도/인구동태건수 및 동태율(출생,사망,혼인,이혼)", "출생·사망·혼인·이혼", ["행정구역", "성"]),
+    ("장래 인구변동요인(출생, 사망, 국제이동) / 전국", "출생·사망·국제이동", ["행정구역", "성"]),
+    ("성별/연령/활동제약돌봄유형별인구-시도", "인구", ["성", "연령", "활동제약돌봄유형"]),
+    ("시도/시군구별 혼인종류", "혼인종류", ["시도", "시군구"]),  # "/시군구별 …" is not a region tail
+    ("주요 인구지표(성비,인구성장률,인구구조,부양비 등) / 전국", None, ["행정구역", "성"]),  # "… 등" is an example list
+    ("성 및 연령별 추계인구(1세별, 5세별) / 전국", "추계인구", ["성", "연령"]),
 ])
 def test_name_gives_what_is_counted_and_the_breakdowns(name, measure, dims):
     assert table_roles(_record(name, classes=("행정구역별", "성별"))) == (measure, dims)
@@ -39,3 +46,14 @@ def test_same_word_on_either_side_of_the_name():
     counted, _ = table_roles(_record("시도/성/연령별 혼인율"))
     breakdown, dims = table_roles(_record("성별/연령별/혼인상태별 인구"))
     assert "혼인" in counted and "혼인" not in breakdown and "혼인상태" in dims
+
+
+@offline
+def test_bundle_table_passes_the_counted_filter_for_each_listed_word():
+    from kosis_rag.filters import TableFilter, lacks_role
+    from kosis_rag.query import parse_query
+
+    bundle = _record("시도/인구동태건수 및 동태율(출생,사망,혼인,이혼)", classes=("행정구역별",))
+    for question in ("2024년 서울 출생아 수", "2024년 부산 사망자 수", "2024년 혼인 건수", "2024년 이혼 건수"):
+        assert lacks_role(bundle, parse_query(question).to_filter()) is None, question
+    assert lacks_role(bundle, TableFilter(measures=["인구"])) == "세는 대상 출생·사망·혼인·이혼 (요청 인구)"
