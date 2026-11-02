@@ -45,14 +45,29 @@ def bm25_retrievers(records: list[TableRecord], k: int) -> dict[str, BM25TableRe
     }
 
 
+# Staged search (T2-06, T2-07): name -> settings over .env (CHROMA_COLLECTION, EMBED_CKPT, RERANK_CKPT, HCX_API_KEY).
+STAGED = {
+    "hybrid": {"cond_filter": False, "rerank_ckpt": "", "stage2": "none"},
+    "hybrid+cond": {"cond_filter": True, "rerank_ckpt": "", "stage2": "none"},
+    "staged": {"cond_filter": True, "stage2": "none"},  # + stage 1 (RERANK_CKPT)
+    "clova-only": {"cond_filter": True, "rerank_ckpt": "", "stage2": "clova"},
+    "staged-clova": {"cond_filter": True, "stage2": "clova"},  # stage 1 + CLOVA
+}
+
+
 def build(name: str, items: list[RetrievalItem], k: int) -> BaseRetriever:
     if name == "oracle":
         return OracleRetriever(gold={i.question: [s[0] for s in i.required] for i in items})
     if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
         return ChromaTableRetriever.connect(k=k)
+    if name in STAGED:  # the pipeline keeps its own pool of 50; the runner cuts to k
+        from kosis_rag.pipeline import SearchSettings, build_search
+
+        overrides = {key: (value or None) if key == "rerank_ckpt" else value for key, value in STAGED[name].items()}
+        return build_search(SearchSettings.from_env(**overrides))
     retrievers = bm25_retrievers(load_records(), k)
     if name not in retrievers:
-        raise ValueError(f"unknown retriever {name!r}; known: oracle, {', '.join(retrievers)}")
+        raise ValueError(f"unknown retriever {name!r}; known: oracle, chroma, {', '.join([*retrievers, *STAGED])}")
     return retrievers[name]
 
 

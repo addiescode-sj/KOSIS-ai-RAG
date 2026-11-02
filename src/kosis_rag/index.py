@@ -10,6 +10,11 @@ Chroma's default (English) embedding function; queries must be embedded with the
 summarizes region classes by level and caps the other labels per class so every table fits the model's input.
 
     PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python -m kosis_rag.index
+    ... python -m kosis_rag.index --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
+
+`--model bge-m3-ft` loads the fine-tuned bge-m3 (kosis_rag.model) and embeds the text format it was trained on
+(kosis_rag.text, `--text-format`) into its own collection (FT_COLLECTION_PREFIX); the checkpoint id goes into the collection metadata
+so `ChromaTableRetriever.connect` embeds questions with the same weights. Metadata (filters) is the same either way.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list
 # Per-table fields as list metadata (T2-30 KOS-101). Bump it whenever to_metadata changes: it is part of the build name.
 META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
 COLLECTION_PREFIX = "kosis_kure__"  # T2-30: content-named builds; before T2-30 "kosis_a_kure_<YYYYMMDDHHMM>" (kept on servers)
+FT_COLLECTION_PREFIX = "kosis_a_bgeft_"  # T2-06: fine-tuned bge-m3 over a kosis_rag.text format
 COLLECTION_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,510}[a-z0-9]$")  # Chroma: 3-512 chars, alphanumeric at both ends
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
@@ -164,15 +170,19 @@ def kure_embedder(device: str | None = None) -> tuple[Embed, Callable[[str], int
     return embed, lambda text: len(model.tokenizer(text)["input_ids"]), model.max_seq_length
 
 
-def build_record(index_version: str, data_sha256: str, n_docs: int, dim: int, max_tokens: int, over_limit: int) -> dict:
+def build_record(index_version: str, data_sha256: str, n_docs: int, dim: int, max_tokens: int, over_limit: int,
+                 embed_model: str = EMBED_MODEL, doc_format: str = DOC_FORMAT, embed_ckpt: str | None = None) -> dict:
     """What the collection was built from; stored as collection metadata so every teammate sees the same record.
     index_version is when it was last loaded (a reload of the same build updates it)."""
-    return {
-        "index_version": index_version, "data_sha256": data_sha256, "doc_format": DOC_FORMAT, "meta_format": META_FORMAT,
-        "embed_model": EMBED_MODEL,
+    record = {
+        "index_version": index_version, "data_sha256": data_sha256, "doc_format": doc_format, "meta_format": META_FORMAT,
+        "embed_model": embed_model,
         "dim": dim, "normalized": True, "hnsw:space": "cosine", "n_docs": n_docs, "max_doc_tokens": max_tokens,
         "over_token_limit": over_limit,
     }
+    if embed_ckpt:
+        record["embed_ckpt"] = embed_ckpt
+    return record
 
 
 def load(client, ids: list[str], docs: list[str], metas: list[dict], embeddings: list[list[float]],
@@ -203,8 +213,14 @@ def _batches(items: Iterable, size: int):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Load the table metadata into ChromaDB (T2-24).")
     parser.add_argument("--tables", type=Path, default=REPO / "data" / "tables.jsonl")
+    parser.add_argument("--model", choices=("kure", "bge-m3-ft"), default="kure",
+                        help="kure: KURE-v1 over the T2-27 text (default); bge-m3-ft: fine-tuned bge-m3 (T2-06)")
+    parser.add_argument("--ckpt", default=None, help="bge-m3-ft: checkpoint .pt or run folder (default: EMBED_CKPT in .env)")
+    parser.add_argument("--text-format", default=None,
+                        help="bge-m3-ft: kosis_rag.text format (default: TEXT_FORMAT in .env, else the newest)")
     parser.add_argument("--collection", default=None,
-                        help=f"default: {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>")
+                        help=f"default: kure {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
+                             f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
     parser.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
     parser.add_argument("--list", action="store_true", help="list the builds on the server and which one is active")
     args = parser.parse_args(argv)
@@ -213,13 +229,26 @@ def main(argv: list[str] | None = None) -> int:
 
     index_version = datetime.now().strftime("%Y%m%d%H%M")
     data_sha256 = hashlib.sha256(args.tables.read_bytes()).hexdigest()
-    name = args.collection or collection_name(data_sha256)
+    ft = args.model == "bge-m3-ft"
+    name = args.collection or (FT_COLLECTION_PREFIX + index_version if ft else collection_name(data_sha256))
     records = read_records(args.tables)
     ids = [r.info.key for r in records]
-    docs = [to_document(r) for r in records]
     metas = [to_metadata(r) for r in records]
+    if ft:
+        from kosis_rag import model, text
 
-    embed, count_tokens, max_tokens = kure_embedder(args.device)
+        load_dotenv()
+        fmt = args.text_format or os.getenv("TEXT_FORMAT") or text.DOC_FORMAT
+        docs = [text.build_doc(r, fmt)["embed_text"] for r in records]
+        embedder = model.load_embedder(args.ckpt or os.getenv("EMBED_CKPT"), device=args.device, doc_format=fmt)
+        embed, count_tokens, max_tokens = embedder.embed_documents, embedder.count_tokens, model.DOC_TOKENS
+        info = {"embed_model": embedder.name, "doc_format": fmt, "embed_ckpt": embedder.ckpt}
+        print(f"text format: {fmt}")
+        print(f"bge-m3 checkpoint: {embedder.ckpt}")
+    else:
+        docs = [to_document(r) for r in records]
+        embed, count_tokens, max_tokens = kure_embedder(args.device)
+        info = {}
     tokens = [count_tokens(d) for d in docs]
     print(f"tokens per document: max {max(tokens)} (model limit {max_tokens}), over limit {sum(t > max_tokens for t in tokens)}")
     order = sorted(range(len(docs)), key=lambda i: len(docs[i]))  # similar lengths per batch
@@ -233,7 +262,7 @@ def main(argv: list[str] | None = None) -> int:
     from kosis_rag.vectorstore import chroma_client
 
     record = build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
-                          sum(t > max_tokens for t in tokens))
+                          sum(t > max_tokens for t in tokens), **info)
     count = load(chroma_client(), ids, docs, metas, vectors, name, record)
     print(f"collection {name}: {count} documents")
     print(f"to search it, set CHROMA_COLLECTION={name} in .env (the previous builds stay; switch back the same way)")
