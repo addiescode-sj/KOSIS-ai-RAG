@@ -27,7 +27,7 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from evals import ops, report_html
+from evals import ops, report_html, trace
 from evals.evaluators import calculation, retrieval
 from evals.schemas import DATASETS, GOLDEN, QUERY_GOLDEN, ROOT, TABLES, CalcItem, QueryItem, load_items, load_jsonl
 
@@ -36,6 +36,7 @@ CALC_GOLDEN = DATASETS / "calculation_golden.jsonl"
 POOL = DATASETS / "retrieval_pool.csv"
 METADATA_SAMPLE = DATASETS / "metadata_sample.jsonl"  # L0 accuracy sample, labelled by the evaluation side (§3.3)
 OPS_FIELDS = ("latency_ms", "llm_calls", "input_tokens", "output_tokens", "model", "failed", "retried")
+TRACE_FIELDS = ("spans", "retrieve_ms")
 
 
 def sha256(path: Path) -> str:
@@ -224,13 +225,30 @@ def ops_section(op: dict) -> str:
     ]) + "\n"
 
 
+def failure_section(rows: list[dict], exported: bool) -> str:
+    """Stage counts and one line per non-PASS question: the span it failed in and why (evals.trace.blame)."""
+    failed = [r for r in rows if r.get("failure")]
+    counts = Counter(r["failure"]["stage"] for r in failed)
+    lines = ["", "## 실패 단계 (trace)", "",
+             "- 판정 순서: " + " > ".join(f"{k}({v})" for k, v in trace.STAGES.items()) + " — 첫 번째로 맞는 규칙 하나 (plans/T2-15.md)",
+             "- 단계별: " + (", ".join(f"{trace.STAGES[k]} {counts[k]}" for k in trace.STAGES if counts[k]) or "실패 없음"),
+             f"- Jaeger: {'trace 전송함 (' + trace.JAEGER_UI + ')' if exported else 'OTEL_EXPORTER_OTLP_ENDPOINT 미설정, 전송 안 함'}"]
+    if failed:
+        lines += ["", "| qid | 판정 | 단계 | span | 사유 | 거친 span |", "| --- | --- | --- | --- | --- | --- |"]
+        for r in failed:
+            f = r["failure"]
+            path = " → ".join(s["name"] + ("✕" if s["status"] == "error" else "") for s in r.get("spans") or []) or "-"
+            lines.append(f"| {r['qid']} | {r['verdict']} | {f['label']} | {f['span'] or '-'} | {f['reason'].replace('|', '/')} | {path} |")
+    return "\n".join(lines) + "\n"
+
+
 def grade(items: list[CalcItem], answers: list[dict]) -> list[dict]:
     """L3 grading of each answer against the golden table's cells, with the ops fields kept per row."""
     rows = []
     for item, a in zip(items, answers):
         cells = calculation.read_cells(ROOT / "data" / "values" / f"{item.table_key}.parquet")
         g = calculation.grade(item, a["answer"], cells, a["error"])
-        rows.append({**g.model_dump(), **{k: a[k] for k in OPS_FIELDS if k in a},
+        rows.append({**g.model_dump(), "table_key": item.table_key, **{k: a[k] for k in OPS_FIELDS + TRACE_FIELDS if k in a},
                      "answer": a["answer"].model_dump(mode="json") if a["answer"] else None})
     return rows
 
@@ -313,6 +331,13 @@ def main(argv: list[str] | None = None) -> int:
 
     layers = {"l0": run_l0, "l1": run_l1, "l2": run_l2, "ablation": run_ablation, "l3": run_l3, "e2e": run_e2e}
     rows, summary, report = layers[args.layer](args)
+    exported = False
+    if args.layer in ("l3", "e2e"):  # only these rows carry verdict/spans for trace.blame
+        for r in rows:
+            r["failure"] = trace.blame(r)
+        summary["failures"] = dict(Counter(r["failure"]["stage"] for r in rows if r["failure"]))
+        exported = trace.export(rows, args.layer, args.retriever if args.layer == "e2e" else None)
+        report += failure_section(rows, exported)
     op = ops.summarize(rows)
     report += ops_section(op)
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{args.stage}"
@@ -334,6 +359,7 @@ def main(argv: list[str] | None = None) -> int:
         "from_run": str(args.from_run) if args.from_run else None,
         "summary": summary,
         "ops": op,
+        "jaeger": {"ui": trace.JAEGER_UI, "service": "kosis-evals"} if exported else None,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (out / "ops.json").write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
