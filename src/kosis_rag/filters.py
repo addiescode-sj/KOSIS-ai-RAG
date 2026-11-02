@@ -30,6 +30,9 @@ SIDO = {
 SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
 MIN_SIDO = 3  # a class is administrative only with at least this many 시도 labels ("국적(지역)별" has none)
 REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels when present (T2-25, PR #10)
+# A requested cycle is met by data that holds its points as they are: annual data holds every 5th year, so a
+# "5년마다" (F) question can use a yearly table. Monthly data does not hold quarter values (they need adding up).
+CYCLE_MET_BY = {"F": {"F", "Y"}}
 SEX = re.compile(r"(?:^|\s|의\s?)성$|남녀")  # "성", "가구주의 성"; not "세대구성"
 
 
@@ -42,6 +45,9 @@ class TableFilter(BaseModel):
     # strict: every requested year present; partial: at least one. On the golden dev set strict removed every gold
     # table for 2 of 14 questions with years (both ask for two years), partial removed none (plans/T2-05.md).
     mode: Literal["strict", "partial"] = "strict"
+    # a range ("2015~2020", "1995년부터", "2040년까지", "2000년대"): a table passes with any point inside it
+    period_from: int | None = None
+    period_to: int | None = None
     regions: list[str] = Field(default_factory=list)  # official 시도 names, e.g. ["서울특별시"]
     # hard: drop a table with an administrative class that lacks every requested 시도; soft: keep it, rank it lower.
     # Tables without an administrative class are never dropped (most national tables).
@@ -50,7 +56,8 @@ class TableFilter(BaseModel):
     measures: list[str] = Field(default_factory=list)  # words one of which the counted thing must hold, e.g. ["혼인"]
 
     def is_empty(self) -> bool:
-        return not (self.years or self.cycle or self.organization or self.dimensions or self.measures
+        return not (self.years or self.period_from or self.period_to or self.cycle or self.organization
+                    or self.dimensions or self.measures
                     or (self.regions and self.region_mode == "hard"))
 
 
@@ -80,8 +87,15 @@ def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
     """None when the table meets the filter, else the reason in words (for the no-answer message and the harness)."""
     if f.organization and _org(record.info.organization) != _org(f.organization):
         return f"작성기관 {record.info.organization} (요청 {f.organization})"
-    if f.cycle and f.cycle not in set(record.cycle) | set(record.prd_se):
+    if f.cycle and not CYCLE_MET_BY.get(f.cycle, {f.cycle}) & (set(record.cycle) | set(record.prd_se)):
         return f"주기 {'·'.join(record.cycle or record.prd_se)} (요청 {f.cycle})"
+    if f.period_from or f.period_to:
+        years = {int(p[:4]) for p in record.periods if p[:4].isdigit()}
+        lo, hi = f.period_from or -1, f.period_to or 10_000
+        if not any(lo <= y <= hi for y in years):
+            asked = f"{f.period_from or ''}~{f.period_to or ''}"
+            actual = f"실제 {min(years)}~{max(years)}" if years else "실제 수록 시점 없음"
+            return f"요청 기간 {asked} 자료 없음 ({actual})"
     if f.years:
         years = {int(p[:4]) for p in record.periods if p[:4].isdigit()}
         if not years:

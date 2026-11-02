@@ -1,6 +1,6 @@
 """T2-25: compare search-document variants on a question set with in-memory cosine ranking (same model as Chroma).
 
-    PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python scripts/doc_experiment.py levels --data-dir <provided data>
+    PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python scripts/doc_experiment.py levels   # region levels from tables.jsonl
     PYTHONPATH=... python scripts/doc_experiment.py answers          # answer sets of the proxy questions (no retrieval)
     PYTHONPATH=... python scripts/doc_experiment.py run base v1_region v2_items region+items+head ...
     KOSIS_STAT_GOLDEN=<phase 1 stat_golden.jsonl> adds the 40 phase 1 golden questions to the proxy questions.
@@ -22,8 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from kosis_rag.index import LABEL_CAP, read_records, to_document
-from kosis_rag.metadata import REGION_CLASS
+from kosis_rag.index import LABEL_CAP, clean_item, read_records, region_summary, sido_names, to_document
 from kosis_rag.schemas import TableRecord
 
 REPO = Path(__file__).resolve().parents[1]
@@ -34,88 +33,22 @@ OUT = DATA / "doc_experiment"
 GOLDEN = Path(os.environ.get("KOSIS_STAT_GOLDEN", REPO / "vendor/phase1/eval/golden/stat_golden.jsonl"))
 PROXY = REPO / "eval" / "search_proxy_questions.jsonl"
 
-NATION = {"전국", "계", "총계", "합계"}
-URBAN = {"동부", "읍부", "면부"}
-SIDO = {"서울특별시", "부산광역시", "대구광역시", "인천광역시", "광주광역시", "대전광역시", "울산광역시", "세종특별자치시",
-        "경기도", "강원도", "강원특별자치도", "충청북도", "충청남도", "전라북도", "전북특별자치도", "전라남도", "경상북도",
-        "경상남도", "제주특별자치도", "제주도"}
-LEVEL_ORDER = ["전국", "동읍면부", "시도", "시군구", "읍면동", "하위 지역"]
-
-
-def region_level(code: str, label: str, class_name: str = "") -> str:
-    """Level from the label first (works for flat codes), then the KOSIS code length, then the class name."""
-    if label in NATION:
-        return "전국"
-    if label in URBAN:
-        return "동읍면부"
-    if label in SIDO:
-        return "시도"
-    n = len(code or "")
-    if n == 5:
-        return "시군구"
-    if 7 <= n <= 10:
-        return "읍면동"
-    # flat codes (e.g. 법무부 tables): the class name says what the lower level is
-    if "읍면동" in class_name:
-        return "읍면동"
-    if re.search(r"시군구|구시군", class_name):
-        return "시군구"
-    return "하위 지역"
-
-
-def is_region_class(levels: dict) -> bool:
-    """A class is about regions only if it lists 시도 (국적(지역)별 lists countries and is not one)."""
-    return levels.get("시도", 0) >= 3
-
-
-def build_levels(data_dir: Path) -> None:
-    """{table key: {region class name: {level: label count}}} from the Parquet codes."""
-    import pyarrow.parquet as pq
-
-    out = {}
-    for r in read_records(DATA / "tables.jsonl"):
-        path = data_dir / r.info.parquet
-        names = pq.read_schema(path).names
-        per = {}
-        for i in range(1, 9):
-            cols = [f"dim{i}_name", f"dim{i}_code", f"dim{i}_label"]
-            if cols[0] not in names:
-                continue
-            for row in pq.read_table(path, columns=cols).group_by(cols).aggregate([]).to_pylist():
-                name, code, label = row[cols[0]], row[cols[1]], row[cols[2]]
-                if name and label and REGION_CLASS.search(name):
-                    lv = per.setdefault(name, {})
-                    lv.setdefault(region_level(code, label, name), set()).add(label)
-        counts = {n: {k: len(v) for k, v in lv.items()} for n, lv in per.items()}
-        out[r.info.key] = {n: c for n, c in counts.items() if is_region_class(c)}
+def build_levels() -> None:
+    """{table key: {region class name: {level: label count}}}, from TableClass.levels (T2-01 builder)."""
+    out = {r.info.key: {c.name: c.levels for c in r.classes if c.levels} for r in read_records(DATA / "tables.jsonl")}
     LEVELS.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     print(f"{len(out)} tables -> {LEVELS}")
 
 
 # ---------- document variants (base = index.to_document) ----------
 
-UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
-
-
-def _clean_item(item: str) -> tuple[str, str | None]:
-    m = UNIT_SUFFIX.search(item)
-    name, unit = (item[: m.start()], m.group(1).strip()) if m else (item, None)
-    name = name.replace("_", " ").replace("ㆍ", "·").replace("–", "-")
-    return re.sub(r"\s+", " ", name).strip(), unit
-
-
-def _region_summary(levels: dict) -> str:
-    parts = [f"{lv}({levels[lv]:,})" if lv not in ("전국",) else lv for lv in LEVEL_ORDER if lv in levels]
-    return "·".join(parts)
-
-
 def variant_doc(record: TableRecord, levels: dict, opts: set[str]) -> str:
-    """Base document with the chosen cleanups: region (1), items (2), head line (3), paths (4), alias (5)."""
+    """Base document with the chosen cleanups: region (1), items (2), head line (3), paths (4), alias (5), sido names in the region summary."""
     info = record.info
     items = record.items
     units: list[str] = []
     if "items" in opts:
-        cleaned = [_clean_item(i) for i in items]
+        cleaned = [clean_item(i) for i in items]
         items = list(dict.fromkeys(n for n, _ in cleaned))
         units = list(dict.fromkeys(u for _, u in cleaned if u))
     paths = record.menu_paths
@@ -127,9 +60,11 @@ def variant_doc(record: TableRecord, levels: dict, opts: set[str]) -> str:
                     words.append(w)
         paths = [" > ".join(words)]
     table_levels = levels.get(info.key, {})
+    # sido: short 시도 names inside the region summary (T2-25 follow-up)
+    sido = {c.name: sido_names(c.labels) for c in record.classes} if "sido" in opts else {}
     lines = []
     if "head" in opts:
-        reg = " / ".join(_region_summary(v) for v in table_levels.values()) or "지역 구분 없음"
+        reg = " / ".join(region_summary(v, sido.get(n)) for n, v in table_levels.items()) or "지역 구분 없음"
         lines.append(f"{info.table_name} | {'·'.join(record.prd_se)} {record.start}~{record.end} | 지역 단위: {reg} | 항목: {', '.join(items[:8])}")
     lines += [
         f"통계표: {info.table_name}",
@@ -142,7 +77,7 @@ def variant_doc(record: TableRecord, levels: dict, opts: set[str]) -> str:
         lines.append("단위: " + ", ".join(units))
     for c in record.classes:
         if "region" in opts and c.name in table_levels:
-            lines.append(f"{c.name}: 지역 단위 {_region_summary(table_levels[c.name])}")
+            lines.append(f"{c.name}: 지역 단위 {region_summary(table_levels[c.name], sido.get(c.name))}")
             continue
         shown = c.labels[:LABEL_CAP]
         more = f" 외 {c.n_labels - len(shown)}개" if c.n_labels > len(shown) else ""
@@ -155,7 +90,9 @@ def variant_doc(record: TableRecord, levels: dict, opts: set[str]) -> str:
 
 
 VARIANTS = {
-    "base": None,  # index.to_document as loaded in kosis_a_kure_202610291341
+    "base": set(),  # meta-labels100, as loaded in kosis_a_kure_202610291341
+    "sido": {"region", "items", "head", "sido"},  # 1+2+3 plus short 시도 names in the region summary
+    "current": None,  # index.to_document (adopted 1+2+3); same text as region+items+head
     "v1_region": {"region"},
     "v2_items": {"items"},
     "v13_region_head": {"region", "head"},
@@ -285,10 +222,9 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("cmd", choices=["levels", "answers", "run"])
     parser.add_argument("names", nargs="*")
-    parser.add_argument("--data-dir", type=Path)
     args = parser.parse_args(argv)
     if args.cmd == "levels":
-        build_levels(args.data_dir)
+        build_levels()
     elif args.cmd == "answers":
         show_answers()
     else:

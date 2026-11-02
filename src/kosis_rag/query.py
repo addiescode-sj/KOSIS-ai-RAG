@@ -20,6 +20,10 @@ from kosis_rag.schemas import TableRecord
 
 YEAR = re.compile(r"(?<!\d)(19[5-9]\d|20[0-4]\d)(?!\d)(?!\s*년대)")
 RANGE = re.compile(r"(?<!\d)((?:19|20)\d\d)\s*년?\s*(?:~|-|–|부터)\s*((?:19|20)\d\d)(?!\d)")
+# open ranges and decades are ranges too, not single years: "1995년부터" is 1995 onwards, not 1995 alone
+OPEN_FROM = re.compile(r"(?<!\d)((?:19|20)\d\d)\s*년?\s*(?:부터|이후)")
+OPEN_TO = re.compile(r"(?<!\d)((?:19|20)\d\d)\s*년?\s*(?:까지|이전)")
+DECADE = re.compile(r"(?<!\d)((?:19|20)\d)0\s*년대")
 YEAR_MONTH = re.compile(r"(?<!\d)((?:19|20)\d\d)\s*년\s*(1[0-2]|0?[1-9])\s*월")
 RECENT = re.compile(r"최근|지난\s*\d|올해|작년|지난해|전년")
 CYCLES = [  # most specific first: a question that says 월별 and 연간 wants the monthly table
@@ -69,19 +73,39 @@ class ParsedQuery(BaseModel):
     measures: list[str] = Field(default_factory=list)  # what is counted, e.g. ["혼인"]
 
     def to_filter(self, region_mode: Literal["hard", "soft"] = "hard") -> TableFilter:
-        # one year: the table must hold it; two or more: any of them (strict removed gold tables on dev, plans/T2-05.md)
+        # one year: the table must hold it; two or more: any of them (strict removed gold tables on dev, plans/T2-05.md).
+        # A range ("A~B", "A년부터", "B년까지", "2000년대") passes a table holding any point in it.
+        span = {}
+        if not self.years and (self.period_start or self.period_end):
+            span = {"period_from": int(self.period_start[:4]) if self.period_start else None,
+                    "period_to": int(self.period_end[:4]) if self.period_end else None}
         return TableFilter(years=self.years, cycle=self.cycle, regions=self.regions, region_mode=region_mode,
                            mode="strict" if len(self.years) == 1 else "partial", dimensions=self.dimensions,
-                           measures=self.measures)
+                           measures=self.measures, **span)
+
+
+def _ranges(question: str) -> tuple[list[tuple[int | None, int | None]], str]:
+    """Closed, open and decade ranges in the question, and the question with them blanked out."""
+    found: list[tuple[int | None, int | None]] = []
+    for pattern, to_range in ((RANGE, lambda m: (int(m[1]), int(m[2]))),
+                              (DECADE, lambda m: (int(m[1]) * 10, int(m[1]) * 10 + 9)),
+                              (OPEN_FROM, lambda m: (int(m[1]), None)), (OPEN_TO, lambda m: (None, int(m[1])))):
+        for m in pattern.finditer(question):
+            found.append(to_range(m))
+        question = pattern.sub(lambda m: " " * len(m[0]), question)
+    return found, question
 
 
 def parse_query(question: str) -> ParsedQuery:
-    ranges = [(int(a), int(b)) for a, b in RANGE.findall(question)]
-    years = sorted({int(y) for y in YEAR.findall(question)})
+    ranges, rest = _ranges(question)
+    years = [] if ranges else sorted({int(y) for y in YEAR.findall(rest)})  # a range wins over single years
     months = [f"{y}{int(m):02d}" for y, m in YEAR_MONTH.findall(question)]
     if ranges:
-        start, end = min(a for a, _ in ranges), max(b for _, b in ranges)
-        period_start, period_end = str(start), str(end)
+        starts = [a for a, _ in ranges if a is not None]
+        ends = [b for _, b in ranges if b is not None]
+        open_end = any(a is not None and b is None for a, b in ranges)  # "1995년부터"
+        period_start = str(min(starts)) if starts else None
+        period_end = str(max(ends)) if ends and not open_end else None
     elif months:
         period_start, period_end = min(months), max(months)
     elif years:
