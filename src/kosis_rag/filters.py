@@ -1,4 +1,5 @@
-"""Structured filters for table search (T2-05, D; T2-14): year, cycle, organization and 시도 decided on the registry.
+"""Structured filters for table search (T2-05, D; T2-14; T2-27): year, cycle, organization, 시도, breakdowns and what
+a table counts, decided on the registry.
 
 Filters are decided in Python on the registry (tables.jsonl, 2,364 records), not by Chroma range queries:
 a table passes only if its real periods contain the requested years, so a table whose listed range covers a year
@@ -8,10 +9,12 @@ it does not actually hold (5-year censuses, collection gaps) is left out, and th
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from kosis_rag.roles import table_roles
 from kosis_rag.schemas import TableRecord
 
 # Same organization under its old and new names (통계청 became 국가데이터처)
@@ -26,6 +29,8 @@ SIDO = {
 }
 SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
 MIN_SIDO = 3  # a class is administrative only with at least this many 시도 labels ("국적(지역)별" has none)
+REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels when present (T2-25, PR #10)
+SEX = re.compile(r"(?:^|\s|의\s?)성$|남녀")  # "성", "가구주의 성"; not "세대구성"
 
 
 class TableFilter(BaseModel):
@@ -41,9 +46,12 @@ class TableFilter(BaseModel):
     # hard: drop a table with an administrative class that lacks every requested 시도; soft: keep it, rank it lower.
     # Tables without an administrative class are never dropped (most national tables).
     region_mode: Literal["hard", "soft"] = "hard"
+    dimensions: list[str] = Field(default_factory=list)  # breakdowns the table must all have, e.g. ["성", "연령"]
+    measures: list[str] = Field(default_factory=list)  # words one of which the counted thing must hold, e.g. ["혼인"]
 
     def is_empty(self) -> bool:
-        return not (self.years or self.cycle or self.organization or (self.regions and self.region_mode == "hard"))
+        return not (self.years or self.cycle or self.organization or self.dimensions or self.measures
+                    or (self.regions and self.region_mode == "hard"))
 
 
 def table_regions(record: TableRecord) -> set[str] | None:
@@ -84,8 +92,36 @@ def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
             missing = [y for y in f.years if y not in years]
             cycle = f", 주기 {'·'.join(record.cycle)}" if record.cycle else ""
             return f"요청 {'·'.join(map(str, missing))}년 없음 (실제 {min(years)}~{max(years)}, {len(years)}개 시점{cycle})"
+    if reason := lacks_role(record, f):
+        return reason
     if f.region_mode == "hard":
         return lacks_region(record, f)
+    return None
+
+
+def has_dimension(record: TableRecord, dim: str, names: list[str]) -> bool:
+    """Whether the table breaks down by `dim`; `names` are its breakdown names (from its name and classes)."""
+    if dim in REGION_LEVEL_DIMS:
+        levels = {lv for c in record.classes for lv in (getattr(c, "levels", None) or {})}
+        if levels:
+            return dim in levels
+        return any(dim in n or "행정구역" in n for n in names)  # no level counts: go by names
+    if dim == "성":
+        return any(SEX.search(n) for n in names)
+    return any(dim in n for n in names)
+
+
+def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
+    """Reason when the table misses a requested breakdown or counts something else, else None (T2-27)."""
+    if not (f.dimensions or f.measures):
+        return None
+    measure, dims = table_roles(record)
+    names = dims + [c.name for c in record.classes]
+    missing = [d for d in f.dimensions if not has_dimension(record, d, names)]
+    if missing:
+        return f"분류 {'·'.join(missing)} 없음 (분류: {'·'.join(dims) or '없음'})"
+    if f.measures and measure and not any(word in measure for word in f.measures):
+        return f"세는 대상 {measure} (요청 {'·'.join(f.measures)})"  # a name that says nothing is kept
     return None
 
 

@@ -88,3 +88,43 @@ def test_condition_retriever_post_filters_or_reranks_a_plain_retriever():
     soft = ConditionRetriever(base=base, records=RECORDS, region_mode="soft")
     assert [d.metadata["key"] for d in soft.invoke("서울 인구")] == ["101_DT_NATION", "101_DT_SEOUL", "101_DT_BUSAN"]
 
+
+@offline
+@pytest.mark.parametrize("question, dims, measures", [
+    ("2023년 시도별 혼인 건수", ["시도"], ["혼인"]),
+    ("성별 연령별 미혼 인구", ["성", "연령"], []),  # 미혼 is a breakdown value, not what is counted
+    ("남녀로 나눈 출생아 수", ["성"], ["출생", "출산", "생아"]),
+    ("태어난 곳별 인구", ["출생지"], []),
+    ("월별 이혼율", [], ["이혼"]),  # 월별 is a cycle, not a breakdown
+])
+def test_parser_reads_breakdowns_and_what_is_counted(question, dims, measures):
+    parsed = parse_query(question)
+    assert (parsed.dimensions, parsed.measures) == (dims, measures)
+
+
+def _named(key, name, classes):
+    record = _record(key, [])
+    record.info = record.info.model_copy(update={"table_name": name})
+    record.classes = [TableClass(name=c, labels=["계"], n_labels=1) for c in classes]
+    return record
+
+
+@offline
+def test_breakdown_and_counted_filters_keep_tables_that_do_not_say():
+    tables = {
+        "101_DT_MAR": _named("101_DT_MAR", "시도/성/연령별 혼인율", ["시도별", "성별", "연령별"]),
+        "101_DT_WIFE": _named("101_DT_WIFE", "시도/연령/출생아수별 부인", ["시도별", "연령별", "출생아수별"]),
+        "101_DT_BIRTH": _named("101_DT_BIRTH", "시도/성별 출생", ["시도별", "성별"]),
+        "101_DT_VITAL": _named("101_DT_VITAL", "인구동향(출생,사망,혼인,이혼)", ["행정구역별"]),  # says no measure
+    }
+    keys, removed = filter_tables(tables, TableFilter(measures=["출생", "출산", "생아"]))
+    assert keys == {"101_DT_BIRTH", "101_DT_VITAL"}
+    assert removed["101_DT_WIFE"] == "세는 대상 부인 (요청 출생·출산·생아)"
+    keys, removed = filter_tables(tables, TableFilter(dimensions=["성", "연령"]))
+    assert keys == {"101_DT_MAR"} and removed["101_DT_BIRTH"].startswith("분류 연령 없음")
+
+
+@offline
+def test_condition_retriever_returns_at_most_ten():
+    base = _Fixed(keys=["101_DT_NATION"] * 15)
+    assert len(ConditionRetriever(base=base, records=RECORDS, k=20).invoke("인구")) == 10
