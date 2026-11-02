@@ -5,6 +5,9 @@
     python -m evals.run_eval --layer l3 --stage T1-27-regrade --from-run <run folder>  # re-grade, no model call
     python -m evals.run_eval --layer l3 --stage p2-l3 --interval 5                     # calls HCX per question
     python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e --interval 5   # search top 1 -> L3
+    python -m evals.run_eval --layer l0 --stage T2-28-l0                               # metadata fill rates, no search
+    python -m evals.run_eval --layer l2 --stage T2-28-l2 --split dev                   # parse_query vs query_golden
+    python -m evals.run_eval --layer ablation --stage T2-28-slots --split dev --slot-source pred [--retriever chroma]
 
 L1 runs every item (BM25 is fast) so the no-answer threshold tau is chosen on dev and applied to the split shown.
 Every run writes results.jsonl, manifest.json, ops.json (latency, tokens, cost, tool failure rate), report.md and
@@ -20,16 +23,18 @@ import datetime as dt
 import hashlib
 import json
 import subprocess
+import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
 from evals import ops, report_html
 from evals.evaluators import calculation, retrieval
-from evals.schemas import DATASETS, GOLDEN, ROOT, TABLES, CalcItem, load_items, load_jsonl
+from evals.schemas import DATASETS, GOLDEN, QUERY_GOLDEN, ROOT, TABLES, CalcItem, QueryItem, load_items, load_jsonl
 
 REPORTS = ROOT / "evals" / "reports"
 CALC_GOLDEN = DATASETS / "calculation_golden.jsonl"
 POOL = DATASETS / "retrieval_pool.csv"
+METADATA_SAMPLE = DATASETS / "metadata_sample.jsonl"  # L0 accuracy sample, labelled by the evaluation side (§3.3)
 OPS_FIELDS = ("latency_ms", "llm_calls", "input_tokens", "output_tokens", "model", "failed", "retried")
 
 
@@ -70,6 +75,122 @@ def run_l1(args) -> tuple[list[dict], dict, str]:
     no_answer = retrieval.prf([(r["no_answer_pred"], not r["answerable"]) for r in shown])
     summary = {"tau": tau, "metrics": agg, "no_answer": no_answer, "errors": sum(1 for r in shown if r["error"])}
     return shown, summary, l1_report(args, summary)
+
+
+def run_l0(args) -> tuple[list[dict], dict, str]:
+    """L0 metadata quality over the registry; the load check runs only with --retriever chroma (needs the server)."""
+    from evals.evaluators import metadata
+    from evals.runners import retrieval as runner
+
+    records = {r.info.key: r for r in runner.load_records()}
+    gold = set().union(*(i.gold_keys for i in load_items(GOLDEN)))
+    sample = ({json.loads(line)["key"]: json.loads(line) for line in METADATA_SAMPLE.read_text(encoding="utf-8").splitlines()
+               if line.strip()} if METADATA_SAMPLE.exists() else None)
+    loaded = None
+    if args.retriever == "chroma":
+        from kosis_rag.retriever import ChromaTableRetriever
+        loaded = set(ChromaTableRetriever.connect().collection.get(include=[])["ids"])
+    s = metadata.score(records, gold, sample, loaded)
+    rows = [{"key": k, **metadata.fields(r), "latency_ms": 0.0} for k, r in records.items()]
+    lines = ["| 필드 | 채움률 (전체) | 채움률 (골든 정답 표) |", "| --- | --- | --- |"]
+    lines += [f"| {f} | {s['all']['fill'][f]:.3f} | {s['gold']['fill'][f]:.3f} |" for f in metadata.FIELDS]
+    fmt = lambda v: "—" if v is None else f"{v:.3f}"
+    report = "\n".join([
+        f"# L0 metadata quality — {args.stage}", "",
+        f"- 표 {s['n_tables']}개, 골든 정답 표 {s['n_gold']}개 · 필드는 필터가 쓰는 함수로 읽음 (kosis_rag.filters / roles)", "",
+        *lines, "",
+        f"- regions \"해당 없음\"(행정구역 분류 없는 표): 전체 {s['all']['regions_none']:.3f} · 골든 {s['gold']['regions_none']:.3f}",
+        f"- measure 미매핑(이름이 세는 대상을 말하지 않음·기타): 전체 {s['all']['measure_unmapped']:.3f} · 골든 {s['gold']['measure_unmapped']:.3f}",
+        f"- dimension 미매핑(질문 분류 어휘로 고를 수 없는 분류 이름): 전체 {fmt(s['all']['dimension_unmapped'])}"
+        f" ({s['all']['dimension_names']}개) · 골든 {fmt(s['gold']['dimension_unmapped'])} ({s['gold']['dimension_names']}개)",
+        "- 정규화 정확도: " + (", ".join(f"{k} {fmt(v)}" for k, v in s["accuracy"].items()) + f" (표본 {s['n_sample']})"
+                         if s["accuracy"] else f"표본 대기 ({METADATA_SAMPLE.relative_to(ROOT)} 없음)"),
+        "- 적재 일치: " + (("일치" if s["load"]["match"] else f"불일치 — 빠짐 {s['load']['missing']}, 남음 {s['load']['extra']}")
+                        + f" ({s['load']['loaded']}개)" if "load" in s else "확인 안 함 (--retriever chroma 로 확인)"),
+    ]) + "\n"
+    return rows, s, report
+
+
+def run_l2(args) -> tuple[list[dict], dict, str]:
+    """L2: parse_query on every labelled question against query_golden.jsonl."""
+    from kosis_rag.query import parse_query
+
+    from evals.evaluators import query
+
+    items: list[QueryItem] = load_jsonl(QUERY_GOLDEN, QueryItem)
+    rows = []
+    for item in items:
+        if args.split != "all" and item.split != args.split:
+            continue
+        started = time.perf_counter()
+        pred = parse_query(item.question).model_dump()
+        rows.append({"qid": item.qid, "split": item.split, **query.score_query(item, pred), "pred": pred,
+                     "latency_ms": (time.perf_counter() - started) * 1000})
+    agg = query.aggregate(rows)
+    fmt = lambda v: "—" if v is None else f"{v:.3f}"
+    cols = (*query.FIELDS, "all_fields")
+    lines = ["| split | n | " + " | ".join(cols) + " |", "|" + " --- |" * (len(cols) + 2)]
+    for name, m in agg.items():
+        lines.append(f"| {name} | {m['n']} | " + " | ".join(f"{fmt(m[c])} ({m['n_' + c]})" for c in cols) + " |")
+    report = "\n".join([
+        f"# L2 query understanding — {args.stage}", "",
+        f"- `parse_query` (규칙, LLM 0) vs `{QUERY_GOLDEN.relative_to(ROOT)}` · 괄호는 라벨이 있는 문항 수, — 는 라벨 없음", "",
+        *lines, "",
+        "- 빈 슬롯도 채점: 정답이 빈 필드에 값을 내면 오답. measures는 정답 개념이 예측 검색어 안에 있으면 정답.",
+    ]) + "\n"
+    return rows, {"metrics": agg}, report
+
+
+def run_ablation(args) -> tuple[list[dict], dict, str]:
+    """Slot ablation (§4.4): filter recall per combination; with --retriever chroma also Hit/MRR, flips, verdicts."""
+    from kosis_rag.query import parse_query
+
+    from evals.runners import ablation
+    from evals.runners import retrieval as runner
+
+    items = [i for i in load_items(GOLDEN) if args.split == "all" or i.split == args.split]
+    records = {r.info.key: r for r in runner.load_records()}
+    if args.slot_source == "gold":
+        slots = {q.qid: ablation.gold_parsed(q) for q in load_jsonl(QUERY_GOLDEN, QueryItem)}
+    else:
+        slots = {i.qid: parse_query(i.question) for i in items}
+    on = ablation.combos(args.slots.split(","))
+    retriever = None
+    if args.retriever == "chroma":
+        from kosis_rag.retriever import ChromaTableRetriever
+        retriever = ChromaTableRetriever.connect(k=args.k)
+    rows = ablation.run(items, slots, records, on, retriever, args.k)
+    tau = args.tau
+    if tau is None and retriever is not None:  # chosen once on `none`, kept for every combination
+        tau = retrieval.best_tau([(r["top_score"], not r["answerable"]) for r in rows if r["combo"] == "none" and r["split"] == "dev"])
+    s = ablation.summarize(rows, on, slots, tau if tau is not None else 0.0)
+    fmt = lambda v, p=3: "—" if v is None else (f"{v:.{p}f}" if isinstance(v, float) else str(v))
+    lines = ["| 조합 | n | MRR | Hit@1 | Hit@5 | Hit@10 | 필터 recall | 후보 중앙값 | no_period 거절 |", "|" + " --- |" * 9]
+    for c, m in s["combos"].items():
+        lines.append(f"| {c} | {m['n']} | {fmt(m.get('mrr'))} | {fmt(m.get('hit@1'))} | {fmt(m.get('hit@5'))} | {fmt(m.get('hit@10'))} "
+                     f"| {fmt(m['filter_recall'])} | {fmt(m['candidates_median'], 0)} | {fmt(m['no_period_refusal'])} ({m['n_no_period']}) |")
+    slot_lines = ["| 슬롯 | 슬롯 있는 문항 | only vs none: Hit@5 순증 · Hit@1 · recall Δ | all vs all-s: Hit@5 순증 · Hit@1 · recall Δ | 조건부 ΔMRR | 판정 |",
+                  "|" + " --- |" * 6]
+    for name, v in s["slots"].items():
+        o, mi = v["only"], v["minus"]
+        slot_lines.append(f"| {name} | {v['n_with_slot']} | {o['hit5_net']:+d} · {o['hit1_net']:+d} · {o['recall_delta']:+.3f} "
+                          f"| {mi['hit5_net']:+d} · {mi['hit1_net']:+d} · {mi['recall_delta']:+.3f} | {fmt(v['conditional_mrr_delta'])} | {v['verdict']} |")
+    flips = [f"- {n}: only 좋아짐 {v['only'].get('better', [])} · 나빠짐 {v['only'].get('worse', [])}" for n, v in s["slots"].items()]
+    lost = sorted({(r["combo"], r["qid"]) for r in rows if r["answerable"] and not r["filter_pass"]})
+    report = "\n".join([
+        f"# Slot ablation — {args.stage}", "",
+        f"- 슬롯 출처 `{args.slot_source}` · 슬롯 {args.slots} · split `{args.split}` · 검색기 `{args.retriever if retriever else '없음 (필터만)'}`"
+        f" · k={min(args.k, 10)} · tau {fmt(tau, 4)} (none에서 한 번 선택)", "",
+        *lines, "", *slot_lines, "",
+        "- 판정 (§4.4): 도움 = 두 비교 모두 Hit@5 순증 ≥ 2, Hit@1 순감 없음, recall 하락 없음 / 해로움 = 어느 쪽이든 Hit@5 순감 또는 recall 하락 / 그 밖 불분명."
+        + (" 검색 없이 돌리면 recall만 보므로 해로움 또는 불분명만 나온다." if retriever is None else ""),
+        "- 단계적 완화: 없음 (T2-29 미구현).",
+        "", "## 뒤집힌 문항 (Hit@5)", "", *flips,
+        "", f"## 필터가 정답 표를 지운 문항 ({len(lost)})", "",
+        *[f"- {c} {q}: " + "; ".join(f"{k} {why}" for k, why in next(r for r in rows if r['combo'] == c and r['qid'] == q)['gold_removed'].items())
+          for c, q in lost],
+    ]) + "\n"
+    return rows, s, report
 
 
 def l1_report(args, s: dict) -> str:
@@ -178,17 +299,20 @@ def run_e2e(args) -> tuple[list[dict], dict, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one evaluation layer (L1 retrieval, L3 calculation, e2e).")
-    parser.add_argument("--layer", choices=("l1", "l3", "e2e"), required=True)  # l2: T2-14; e2e is the first part of L4 (T2-10)
+    parser.add_argument("--layer", choices=("l0", "l1", "l2", "ablation", "l3", "e2e"), required=True)  # e2e: first part of L4
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
     parser.add_argument("--split", choices=("dev", "test", "all"), default="test")
     parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
+    parser.add_argument("--slot-source", choices=("gold", "pred"), default="pred", help="ablation: query_golden labels or parse_query")
+    parser.add_argument("--slots", default="year,cycle,region,dimension,measure", help="ablation: slots to switch")
     parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
     args = parser.parse_args(argv)
 
-    rows, summary, report = {"l1": run_l1, "l3": run_l3, "e2e": run_e2e}[args.layer](args)
+    layers = {"l0": run_l0, "l1": run_l1, "l2": run_l2, "ablation": run_ablation, "l3": run_l3, "e2e": run_e2e}
+    rows, summary, report = layers[args.layer](args)
     op = ops.summarize(rows)
     report += ops_section(op)
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{args.stage}"
@@ -196,14 +320,17 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True)
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
-    golden = GOLDEN if args.layer == "l1" else CALC_GOLDEN
+    golden = {"l2": QUERY_GOLDEN, "l3": CALC_GOLDEN, "e2e": CALC_GOLDEN}.get(args.layer, GOLDEN)
     manifest = {
         "run_id": run_id, "layer": args.layer, "stage": args.stage, "split": args.split,
         "golden": {"path": str(golden.relative_to(ROOT)), "sha256": sha256(golden)},
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),
         "vendor_phase1": git("-C", "vendor/phase1", "rev-parse", "HEAD"),
-        "retriever": args.retriever if args.layer != "l3" else None, "top_k": args.k if args.layer != "l3" else None,
+        "retriever": args.retriever if args.layer in ("l1", "ablation", "e2e") else None,
+        "top_k": args.k if args.layer in ("l1", "ablation", "e2e") else None,
+        "slot_source": args.slot_source if args.layer == "ablation" else None,
+        "slots": args.slots if args.layer == "ablation" else None,
         "from_run": str(args.from_run) if args.from_run else None,
         "summary": summary,
         "ops": op,
@@ -211,11 +338,14 @@ def main(argv: list[str] | None = None) -> int:
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (out / "ops.json").write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "report.md").write_text(report, encoding="utf-8")
-    target = args.retriever if args.layer == "l1" else ",".join(op["models"]) or "summarize_stat"
+    target = args.retriever if args.layer in ("l1", "ablation") else ",".join(op["models"]) or "summarize_stat"
+    if args.layer in ("l0", "l2"):
+        target = "registry" if args.layer == "l0" else "parse_query"
     if args.layer == "e2e":
         target = f"{args.retriever}+{target}"
     ops.append_history(run_id, args.layer, args.stage, target, op)
-    report_html.write(out)
+    if args.layer in ("l1", "l3", "e2e"):  # ponytail: l0/l2/ablation write report.md only; add charts when they are presented
+        report_html.write(out)
     print(report)
     print(f"-> {out}")
     return 0
