@@ -29,7 +29,7 @@ SIDO = {
 }
 SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
 MIN_SIDO = 3  # a class is administrative only with at least this many 시도 labels ("국적(지역)별" has none)
-REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels (T2-25), not on names
+REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels when present (T2-25, PR #10)
 SEX = re.compile(r"(?:^|\s|의\s?)성$|남녀")  # "성", "가구주의 성"; not "세대구성"
 
 
@@ -102,10 +102,10 @@ def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
 def has_dimension(record: TableRecord, dim: str, names: list[str]) -> bool:
     """Whether the table breaks down by `dim`; `names` are its breakdown names (from its name and classes)."""
     if dim in REGION_LEVEL_DIMS:
-        levels = {lv for c in record.classes for lv in c.levels}
+        levels = {lv for c in record.classes for lv in (getattr(c, "levels", None) or {})}
         if levels:
             return dim in levels
-        return any(dim in n or "행정구역" in n for n in names)  # no level counts (old tables.jsonl): go by names
+        return any(dim in n or "행정구역" in n for n in names)  # no level counts: go by names
     if dim == "성":
         return any(SEX.search(n) for n in names)
     return any(dim in n for n in names)
