@@ -153,10 +153,17 @@ def summarize(rows: list[dict], on_by_combo: dict[str, frozenset[str]], slots: d
         members = [r for r in rows if r["combo"] == combo]
         scored = [r for r in members if r["answerable"]]
         no_period = [r for r in members if r["no_answer_reason"] == "no_period"]
+        no_answer = [r for r in members if not r["answerable"]]
+        zero = lambda rs: sum(r["n_candidates"] == 0 for r in rs) / len(rs) if rs else None  # noqa: E731
         m = {
             "n": len(scored),
             "filter_recall": sum(r["filter_pass"] for r in scored) / max(len(scored), 1),
             "candidates_median": statistics.median(r["n_candidates"] for r in scored) if scored else None,
+            # hard filter left 0 tables: where a step-wise relaxation (T2-29) would have to start; answerable
+            # zeros are a subset of filter_pass == 0, no-answer zeros are the filter half of refused()
+            "zero_answerable": zero(scored),
+            "zero_no_answer": zero(no_answer),
+            "n_no_answer": len(no_answer),
             "no_period_refusal": (sum(refused(r, tau) for r in no_period) / len(no_period)) if no_period else None,
             "n_no_period": len(no_period),
         }

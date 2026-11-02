@@ -124,6 +124,8 @@ def test_ablation_without_search_scores_recall_and_slot_free_items_match_none():
     s = ablation.summarize(rows, on, slots, tau=0.0)
     assert s["combos"]["all"]["filter_recall"] == 1.0
     assert s["combos"]["only:year"]["no_period_refusal"] == 1.0 and s["combos"]["none"]["no_period_refusal"] == 0.0
+    assert s["combos"]["only:year"]["zero_no_answer"] == 1.0 and s["combos"]["none"]["zero_no_answer"] == 0.0
+    assert s["combos"]["all"]["zero_answerable"] == 0.0 and s["combos"]["all"]["n_no_answer"] == 1
     assert s["slots"]["year"]["verdict"] == "불분명"  # no search: recall did not drop, help cannot be shown
 
 
@@ -148,3 +150,28 @@ def test_l0_fill_rates_and_unmapped():
     assert s["load"]["missing"] == ["101_DT_OLD"] and not s["load"]["match"]
     acc = metadata.score(RECORDS, set(), sample={"101_DT_BIRTH": {"measure": "출생아수", "dimensions": ["시도"]}})["accuracy"]
     assert acc == {"measure": 1.0, "dimensions": 1.0}
+
+
+@offline
+def test_l012_runs_every_layer_once_and_keeps_ops_per_layer(monkeypatch, tmp_path):
+    import json
+
+    from evals import ops, run_eval
+
+    seen = []
+    fake = lambda name, latency: lambda args: (seen.append((name, args.slot_source, args.split))  # noqa: E731
+                                               or ([{"qid": "q1", "combo": "all", "latency_ms": latency}], {"name": name}, f"# {name}\n"))
+    monkeypatch.setattr(run_eval, "run_l0", fake("l0", 0.0))
+    monkeypatch.setattr(run_eval, "run_ablation", lambda args: fake(f"l1-{args.slot_source}", 0.0)(args))
+    monkeypatch.setattr(run_eval, "run_l2", fake("l2", 5.0))
+    monkeypatch.setattr(run_eval, "REPORTS", tmp_path)
+    monkeypatch.setattr(ops, "append_history", lambda run_id, layer, *a: seen.append(("history", layer)))
+    assert run_eval.main(["--layer", "l012", "--stage", "t"]) == 0
+    assert [s for s in seen if s[0] != "history"] == [("l0", "pred", "dev"), ("l1-gold", "gold", "dev"),
+                                                      ("l1-pred", "pred", "dev"), ("l2", "pred", "dev")]
+    assert [s[1] for s in seen if s[0] == "history"] == ["l0", "l1-gold", "l1-pred", "l2"]
+    [out] = tmp_path.iterdir()
+    m = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert set(m["summary"]) == set(m["ops"]) == {"l0", "l1-gold", "l1-pred", "l2"} and set(m["golden"]) == {"l0·l1", "l2"}
+    assert m["ops"]["l2"]["latency_ms"]["p50"] == 5.0  # not pulled down by the 0.0 rows of the other layers
+    assert {json.loads(line)["layer"] for line in (out / "results.jsonl").open(encoding="utf-8")} == set(m["ops"])
