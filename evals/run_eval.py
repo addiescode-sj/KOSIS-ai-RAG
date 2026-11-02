@@ -8,6 +8,7 @@
     python -m evals.run_eval --layer l0 --stage T2-28-l0                               # metadata fill rates, no search
     python -m evals.run_eval --layer l2 --stage T2-28-l2 --split dev                   # parse_query vs query_golden
     python -m evals.run_eval --layer ablation --stage T2-28-slots --split dev --slot-source pred [--retriever chroma]
+    python -m evals.run_eval --layer l012 --stage T2-28-l012                           # L0 + L1 filter (gold, pred) + L2, dev
 
 L1 runs every item (BM25 is fast) so the no-answer threshold tau is chosen on dev and applied to the split shown.
 Every run writes results.jsonl, manifest.json, ops.json (latency, tokens, cost, tool failure rate), report.md and
@@ -166,10 +167,12 @@ def run_ablation(args) -> tuple[list[dict], dict, str]:
         tau = retrieval.best_tau([(r["top_score"], not r["answerable"]) for r in rows if r["combo"] == "none" and r["split"] == "dev"])
     s = ablation.summarize(rows, on, slots, tau if tau is not None else 0.0)
     fmt = lambda v, p=3: "—" if v is None else (f"{v:.{p}f}" if isinstance(v, float) else str(v))
-    lines = ["| 조합 | n | MRR | Hit@1 | Hit@5 | Hit@10 | 필터 recall | 후보 중앙값 | no_period 거절 |", "|" + " --- |" * 9]
+    lines = ["| 조합 | n | MRR | Hit@1 | Hit@5 | Hit@10 | 필터 recall | 후보 중앙값 | 0건 답 있음 | 0건 답 없음 | no_period 거절 |",
+             "|" + " --- |" * 11]
     for c, m in s["combos"].items():
         lines.append(f"| {c} | {m['n']} | {fmt(m.get('mrr'))} | {fmt(m.get('hit@1'))} | {fmt(m.get('hit@5'))} | {fmt(m.get('hit@10'))} "
-                     f"| {fmt(m['filter_recall'])} | {fmt(m['candidates_median'], 0)} | {fmt(m['no_period_refusal'])} ({m['n_no_period']}) |")
+                     f"| {fmt(m['filter_recall'])} | {fmt(m['candidates_median'], 0)} | {fmt(m['zero_answerable'])} "
+                     f"| {fmt(m['zero_no_answer'])} ({m['n_no_answer']}) | {fmt(m['no_period_refusal'])} ({m['n_no_period']}) |")
     slot_lines = ["| 슬롯 | 슬롯 있는 문항 | only vs none: Hit@5 순증 · Hit@1 · recall Δ | all vs all-s: Hit@5 순증 · Hit@1 · recall Δ | 조건부 ΔMRR | 판정 |",
                   "|" + " --- |" * 6]
     for name, v in s["slots"].items():
@@ -185,13 +188,26 @@ def run_ablation(args) -> tuple[list[dict], dict, str]:
         *lines, "", *slot_lines, "",
         "- 판정 (§4.4): 도움 = 두 비교 모두 Hit@5 순증 ≥ 2, Hit@1 순감 없음, recall 하락 없음 / 해로움 = 어느 쪽이든 Hit@5 순감 또는 recall 하락 / 그 밖 불분명."
         + (" 검색 없이 돌리면 recall만 보므로 해로움 또는 불분명만 나온다." if retriever is None else ""),
-        "- 단계적 완화: 없음 (T2-29 미구현).",
+        "- 단계적 완화: 없음 (T2-29 미구현). 0건 = hard 필터가 남긴 표가 0개인 문항 비율, 완화가 시작될 자리다(완화 후 결과는 아님).",
         "", "## 뒤집힌 문항 (Hit@5)", "", *flips,
         "", f"## 필터가 정답 표를 지운 문항 ({len(lost)})", "",
         *[f"- {c} {q}: " + "; ".join(f"{k} {why}" for k, why in next(r for r in rows if r['combo'] == c and r['qid'] == q)['gold_removed'].items())
           for c, q in lost],
     ]) + "\n"
     return rows, s, report
+
+
+def run_l012(args) -> tuple[list[dict], dict, str]:
+    """L0 + L1 filter (gold and pred slots) + L2 in one run folder; rows carry `layer`, summary and ops stay per layer."""
+    with_source = lambda src: argparse.Namespace(**{**vars(args), "slot_source": src})  # noqa: E731
+    parts = {"l0": run_l0(args), "l1-gold": run_ablation(with_source("gold")), "l1-pred": run_ablation(with_source("pred")),
+             "l2": run_l2(args)}
+    # run() skips questions without a slot reading; gold reads query_golden, pred reads the retrieval golden set
+    gold, pred = ({(r["combo"], r["qid"]) for r in parts[p][0]} for p in ("l1-gold", "l1-pred"))
+    assert gold == pred, f"gold and pred slot runs cover different questions: {sorted(gold ^ pred)[:5]}"
+    rows = [{**r, "layer": name} for name, (part, _, _) in parts.items() for r in part]
+    report = "\n".join(f"<!-- {name} -->\n{rep}" for name, (_, _, rep) in parts.items())
+    return rows, {name: s for name, (_, s, _) in parts.items()}, report
 
 
 def l1_report(args, s: dict) -> str:
@@ -214,10 +230,10 @@ def l1_report(args, s: dict) -> str:
     ]) + "\n"
 
 
-def ops_section(op: dict) -> str:
+def ops_section(op: dict, title: str = "운영 지표") -> str:
     c = op["cost"]
     cost = f"{c['total']:.2f} {c['currency']}" if c["total"] is not None else f"단가 미설정 ({', '.join(c['unpriced_models']) or '토큰 없음'}; evals/pricing.json)"
-    return "\n".join(["", "## 운영 지표", "",
+    return "\n".join(["", f"## {title}", "",
         f"- Latency: p50 {op['latency_ms']['p50']:.1f} ms · p95 {op['latency_ms']['p95']:.1f} ms · 평균 {op['latency_ms']['mean']:.1f} ms",
         f"- Token Usage: 입력 {op['tokens']['input']:,} · 출력 {op['tokens']['output']:,} (호출당 {op['tokens']['per_call_mean']:.0f}) · LLM 호출 {op['llm_calls']}",
         f"- Cost: {cost}",
@@ -317,9 +333,9 @@ def run_e2e(args) -> tuple[list[dict], dict, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one evaluation layer (L1 retrieval, L3 calculation, e2e).")
-    parser.add_argument("--layer", choices=("l0", "l1", "l2", "ablation", "l3", "e2e"), required=True)  # e2e: first part of L4
+    parser.add_argument("--layer", choices=("l0", "l1", "l2", "ablation", "l012", "l3", "e2e"), required=True)  # e2e: first part of L4
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
-    parser.add_argument("--split", choices=("dev", "test", "all"), default="test")
+    parser.add_argument("--split", choices=("dev", "test", "all"), help="default: dev for l012 (the slot baselines), test otherwise")
     parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
@@ -328,8 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--slots", default="year,cycle,region,dimension,measure", help="ablation: slots to switch")
     parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
     args = parser.parse_args(argv)
+    args.split = args.split or ("dev" if args.layer == "l012" else "test")
 
-    layers = {"l0": run_l0, "l1": run_l1, "l2": run_l2, "ablation": run_ablation, "l3": run_l3, "e2e": run_e2e}
+    layers = {"l0": run_l0, "l1": run_l1, "l2": run_l2, "ablation": run_ablation, "l012": run_l012, "l3": run_l3, "e2e": run_e2e}
     rows, summary, report = layers[args.layer](args)
     exported = False
     if args.layer in ("l3", "e2e"):  # only these rows carry verdict/spans for trace.blame
@@ -338,24 +355,30 @@ def main(argv: list[str] | None = None) -> int:
         summary["failures"] = dict(Counter(r["failure"]["stage"] for r in rows if r["failure"]))
         exported = trace.export(rows, args.layer, args.retriever if args.layer == "e2e" else None)
         report += failure_section(rows, exported)
-    op = ops.summarize(rows)
-    report += ops_section(op)
+    if args.layer == "l012":  # per layer: L0 and filter-only rows carry latency 0.0 and would bury the L2 timings
+        op = {name: ops.summarize([r for r in rows if r["layer"] == name]) for name in summary}
+        report += "".join(ops_section(o, f"운영 지표 — {name}") for name, o in op.items())
+    else:
+        op = ops.summarize(rows)
+        report += ops_section(op)
     run_id = f"{dt.datetime.now():%Y%m%d-%H%M%S}-{args.stage}"
     out = REPORTS / run_id
     out.mkdir(parents=True)
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
+    ref = lambda path: {"path": str(path.relative_to(ROOT)), "sha256": sha256(path)}  # noqa: E731
     golden = {"l2": QUERY_GOLDEN, "l3": CALC_GOLDEN, "e2e": CALC_GOLDEN}.get(args.layer, GOLDEN)
+    slotted = args.layer in ("ablation", "l012")
     manifest = {
         "run_id": run_id, "layer": args.layer, "stage": args.stage, "split": args.split,
-        "golden": {"path": str(golden.relative_to(ROOT)), "sha256": sha256(golden)},
+        "golden": {"l0·l1": ref(GOLDEN), "l2": ref(QUERY_GOLDEN)} if args.layer == "l012" else ref(golden),
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),
         "vendor_phase1": git("-C", "vendor/phase1", "rev-parse", "HEAD"),
-        "retriever": args.retriever if args.layer in ("l1", "ablation", "e2e") else None,
-        "top_k": args.k if args.layer in ("l1", "ablation", "e2e") else None,
-        "slot_source": args.slot_source if args.layer == "ablation" else None,
-        "slots": args.slots if args.layer == "ablation" else None,
+        "retriever": args.retriever if args.layer in ("l1", "ablation", "l012", "e2e") else None,
+        "top_k": args.k if args.layer in ("l1", "ablation", "l012", "e2e") else None,
+        "slot_source": "gold,pred" if args.layer == "l012" else args.slot_source if slotted else None,
+        "slots": args.slots if slotted else None,
         "from_run": str(args.from_run) if args.from_run else None,
         "summary": summary,
         "ops": op,
@@ -364,12 +387,16 @@ def main(argv: list[str] | None = None) -> int:
     (out / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     (out / "ops.json").write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "report.md").write_text(report, encoding="utf-8")
-    target = args.retriever if args.layer in ("l1", "ablation") else ",".join(op["models"]) or "summarize_stat"
-    if args.layer in ("l0", "l2"):
-        target = "registry" if args.layer == "l0" else "parse_query"
-    if args.layer == "e2e":
-        target = f"{args.retriever}+{target}"
-    ops.append_history(run_id, args.layer, args.stage, target, op)
+    if args.layer == "l012":
+        for name, o in op.items():
+            ops.append_history(run_id, name, args.stage, {"l0": "registry", "l2": "parse_query"}.get(name, args.retriever), o)
+    else:
+        target = args.retriever if args.layer in ("l1", "ablation") else ",".join(op["models"]) or "summarize_stat"
+        if args.layer in ("l0", "l2"):
+            target = "registry" if args.layer == "l0" else "parse_query"
+        if args.layer == "e2e":
+            target = f"{args.retriever}+{target}"
+        ops.append_history(run_id, args.layer, args.stage, target, op)
     if args.layer in ("l1", "l3", "e2e"):  # ponytail: l0/l2/ablation write report.md only; add charts when they are presented
         report_html.write(out)
     print(report)
