@@ -21,12 +21,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import time
 from datetime import datetime
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+from kosis_rag.fields import table_fields
 from kosis_rag.loader import _META_FIELDS
 from kosis_rag.metadata import REGION_LEVELS
 from kosis_rag.roles import table_roles
@@ -37,9 +41,12 @@ REPO = Path(__file__).resolve().parents[2]
 # candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
 # retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
-DOC_FORMAT = "meta-region-items-head-measure2"  # T2-30 KOS-97: bundle and joined names now say what they count; before: "meta-region-items-head-measure" (T2-27, …202611021052)
-COLLECTION_PREFIX = "kosis_a_kure_"  # A: one vector per table; the build version follows (T2-05)
+DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list or summarize what is counted; before: measure2 (KOS-97), measure (T2-27)
+# Per-table fields as list metadata (T2-30 KOS-101). Bump it whenever to_metadata changes: it is part of the build name.
+META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
+COLLECTION_PREFIX = "kosis_kure__"  # T2-30: content-named builds; before T2-30 "kosis_a_kure_<YYYYMMDDHHMM>" (kept on servers)
 FT_COLLECTION_PREFIX = "kosis_a_bgeft_"  # T2-06: fine-tuned bge-m3 over a kosis_rag.text format
+COLLECTION_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,510}[a-z0-9]$")  # Chroma: 3-512 chars, alphanumeric at both ends
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
 SIDO_SHORT = {
@@ -115,17 +122,35 @@ def to_document(record: TableRecord) -> str:
     return "\n".join(lines)
 
 
-def to_metadata(record: TableRecord, index_version: str = "") -> dict:
-    """Scalars only (Chroma). Keys of loader._META_FIELDS stay as they are, so loader.to_candidate works unchanged."""
+def to_metadata(record: TableRecord) -> dict:
+    """Chroma metadata: the listing scalars, plus the per-table fields (T2-30) as `f_*` lists for `$contains` filters.
+
+    Keys of loader._META_FIELDS stay as they are, so loader.to_candidate works unchanged. Chroma rejects None and
+    empty lists, so a field the table does not have is left out; a table with no administrative class gets
+    f_national instead of f_regions. No load time per document, so reloading a build gives the same metadata.
+    """
     info = record.info
+    f = table_fields(record)
     meta = {name: getattr(info, name) for name in _META_FIELDS}
     meta |= {
         "start": record.start, "end": record.end,
         "cycle": "|".join(record.cycle), "prd_se": "|".join(record.prd_se),
         "topic": record.topic, "unit": record.unit, "n_labels": sum(c.n_labels for c in record.classes),
-        "part": "core", "index_version": index_version or None,
+        "part": "core",
+        "f_years": f.available_years, "f_cycle": f.cycle, "f_regions": f.regions, "f_national": f.regions is None,
+        "f_region_level": f.region_level, "f_measure": f.measure, "f_unit": f.measure_unit, "f_dims": f.dimension_keys,
+        "f_implied": f.implied_keys, "f_fixed": f.fixed, "f_measure_keys": f.measure_keys,
     }
-    return {k: v for k, v in meta.items() if v is not None}  # Chroma rejects None
+    return {k: v for k, v in meta.items() if v is not None and v != []}
+
+
+def collection_name(data_sha256: str) -> str:
+    """The build name from what went into it: same tables.jsonl, document and metadata format -> same name."""
+    digest = hashlib.sha256(f"{data_sha256}|{DOC_FORMAT}|{META_FORMAT}".encode()).hexdigest()[:8]
+    name = f"{COLLECTION_PREFIX}{DOC_FORMAT}__{digest}"
+    if not COLLECTION_NAME.match(name) or ".." in name:
+        raise ValueError(f"{name!r} is not a valid Chroma collection name; DOC_FORMAT must use a-z, 0-9, - and _ only")
+    return name
 
 
 def read_records(path: Path) -> list[TableRecord]:
@@ -147,9 +172,11 @@ def kure_embedder(device: str | None = None) -> tuple[Embed, Callable[[str], int
 
 def build_record(index_version: str, data_sha256: str, n_docs: int, dim: int, max_tokens: int, over_limit: int,
                  embed_model: str = EMBED_MODEL, doc_format: str = DOC_FORMAT, embed_ckpt: str | None = None) -> dict:
-    """What the collection was built from; stored as collection metadata so every teammate sees the same record."""
+    """What the collection was built from; stored as collection metadata so every teammate sees the same record.
+    index_version is when it was last loaded (a reload of the same build updates it)."""
     record = {
-        "index_version": index_version, "data_sha256": data_sha256, "doc_format": doc_format, "embed_model": embed_model,
+        "index_version": index_version, "data_sha256": data_sha256, "doc_format": doc_format, "meta_format": META_FORMAT,
+        "embed_model": embed_model,
         "dim": dim, "normalized": True, "hnsw:space": "cosine", "n_docs": n_docs, "max_doc_tokens": max_tokens,
         "over_token_limit": over_limit,
     }
@@ -165,6 +192,8 @@ def load(client, ids: list[str], docs: list[str], metas: list[dict], embeddings:
         name, embedding_function=None,
         metadata=record or {"embed_model": EMBED_MODEL, "doc_format": DOC_FORMAT, "dim": len(embeddings[0]), "hnsw:space": "cosine"},
     )
+    if record and collection.metadata != record:  # get_or_create keeps the first loader's record: refresh it
+        collection.modify(metadata={k: v for k, v in record.items() if not k.startswith("hnsw:")})
     step = client.get_max_batch_size()
     for i in range(0, len(ids), step):
         collection.upsert(ids=ids[i:i + step], documents=docs[i:i + step], metadatas=metas[i:i + step],
@@ -190,21 +219,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--text-format", default=None,
                         help="bge-m3-ft: kosis_rag.text format (default: TEXT_FORMAT in .env, else the newest)")
     parser.add_argument("--collection", default=None,
-                        help=f"default: {COLLECTION_PREFIX} or {FT_COLLECTION_PREFIX} + <YYYYMMDDHHMM>, a new build")
+                        help=f"default: kure {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
+                             f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
     parser.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
+    parser.add_argument("--list", action="store_true", help="list the builds on the server and which one is active")
     args = parser.parse_args(argv)
+    if args.list:
+        return list_builds()
 
     index_version = datetime.now().strftime("%Y%m%d%H%M")
+    data_sha256 = hashlib.sha256(args.tables.read_bytes()).hexdigest()
     ft = args.model == "bge-m3-ft"
-    name = args.collection or (FT_COLLECTION_PREFIX if ft else COLLECTION_PREFIX) + index_version
+    name = args.collection or (FT_COLLECTION_PREFIX + index_version if ft else collection_name(data_sha256))
     records = read_records(args.tables)
     ids = [r.info.key for r in records]
-    metas = [to_metadata(r, index_version) for r in records]
+    metas = [to_metadata(r) for r in records]
     if ft:
-        import os
-
-        from dotenv import load_dotenv
-
         from kosis_rag import model, text
 
         load_dotenv()
@@ -231,11 +261,31 @@ def main(argv: list[str] | None = None) -> int:
 
     from kosis_rag.vectorstore import chroma_client
 
-    record = build_record(index_version, hashlib.sha256(args.tables.read_bytes()).hexdigest(), len(docs),
-                          len(vectors[0]), max(tokens), sum(t > max_tokens for t in tokens), **info)
+    record = build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
+                          sum(t > max_tokens for t in tokens), **info)
     count = load(chroma_client(), ids, docs, metas, vectors, name, record)
     print(f"collection {name}: {count} documents")
+    print(f"to search it, set CHROMA_COLLECTION={name} in .env (the previous builds stay; switch back the same way)")
     return 0 if count == len(ids) else 1
+
+
+def list_builds() -> int:
+    """Every table collection on the server with what it was built from; * marks CHROMA_COLLECTION (the active one)."""
+    from kosis_rag.vectorstore import chroma_client
+
+    load_dotenv()
+    active = os.getenv("CHROMA_COLLECTION")
+    client = chroma_client()
+    for c in sorted(client.list_collections(), key=lambda c: (c.metadata or {}).get("index_version") or ""):
+        m = c.metadata or {}
+        if "doc_format" not in m:
+            continue  # not a table build (e.g. lab collections)
+        mark = "*" if c.name == active else " "
+        print(f"{mark} {c.name}  {m.get('doc_format')}  meta {m.get('meta_format', '-')}  docs {c.count()}  "
+              f"loaded {m.get('index_version', '-')}  data {str(m.get('data_sha256', '-'))[:16]}")
+    if active and active not in {c.name for c in client.list_collections()}:
+        print(f"CHROMA_COLLECTION={active} is not on this server")
+    return 0
 
 
 if __name__ == "__main__":

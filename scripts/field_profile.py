@@ -90,7 +90,7 @@ def _a2_section(records, fields: list[TableFields]) -> list[str]:
              "| 사전 | 대상 | 미매핑 | 비고 |", "| --- | --- | ---: | --- |",
              f"| 분류 표준 이름 | 분류 이름 등장 {len(names):,}회 | {len(unmapped) / len(names):.1%} ({len(unmapped):,}회) | "
              f"고유 이름 {len(set(names)):,}개 중 {len(set(unmapped)):,}개 미매핑(긴 꼬리), 표준 이름 "
-             f"{len({k for f in fields for k in f.dimension_keys})}개 |",
+             f"{len({k for d in names for k in dimension_keys(d)})}개 |",
              f"| 시군구 → 시도 | 시군구 분류 라벨 {region_total:,}개 | "
              f"{region_miss / max(region_total, 1):.1%} ({region_miss:,}개) | {len(sigungu)}개 시군구. 미매핑은 대부분 옛 이름 |",
              f"| 단위 표기 | 표 {n:,}개 | {units[None] / n:.1%} ({units[None]:,}개) | 원본에 단위가 없는 표. 배율 변환은 하지 않음 |", "",
@@ -99,6 +99,33 @@ def _a2_section(records, fields: list[TableFields]) -> list[str]:
              "- 평가 L0의 `dimension_unmapped`는 \"질문 분류어 13개 중 하나로 걸러질 수 있는가\"를 재는 다른 정의다. "
              "위 수치는 \"표준 이름 표에 붙었는가\"이다.",
              "- 질문 쪽 별칭: \"1인 가구\"~\"6인 가구\", \"7인 이상 가구\" → 가구원수 분류의 라벨(`vocab.LABEL_ALIASES`).", ""]
+    return lines
+
+
+def _a7_section(records, fields: list[TableFields]) -> list[str]:
+    """KOS-109: breakdowns found outside the classes and the measure for names without the usual shape."""
+    implied = Counter(k for f in fields for k in f.implied_keys)
+    fixed = Counter(x for f in fields for x in f.fixed)
+    lines = ["## 6. 분류 밖에 있는 조건과 세는 대상 보강 (KOS-109, 평가 개선 문서 D1~D7)", "",
+             "분류 이름이 아닌 곳(세는 대상·항목 이름·라벨)에 있는 조건은 `implied_keys`에, 한 성만 대상인 표는 `fixed`에 "
+             "따로 둔다. `dimension_keys`(원래 분류)와 섞지 않아 규칙이 틀려도 원래 분류가 오염되지 않고, 필터가 이 필드를 "
+             "어떻게 쓸지는 필터 담당이 정한다.", "",
+             "| 규칙 | 키 | 표 수 |", "| --- | --- | ---: |",
+             f"| D1 세는 대상에 \"N인가구\" | 가구원수 | {implied['가구원수']:,} |",
+             f"| D2 항목에 남·여가 둘 다 / 혼인상태 값 2개 이상 / \"…년생\" 분류 | 성 · 혼인상태 · 연령 | "
+             f"{implied['성'] - sum(fixed.values()):,} · {implied['혼인상태']:,} · {implied['연령']:,} |",
+             f"| D3 이름·세는 대상이 한 성만 | 성 + `fixed` | 여성 {fixed['성=여성']:,} · 남성 {fixed['성=남성']:,} |",
+             f"| D5 단위 정보 없는 지역 분류(\"도별\"·\"지역별\"·\"대도시별\")의 라벨이 시도 이름 | 시도 | {implied['시도']:,} |",
+             f"| 합계 (표 기준, 겹침 제외) | | {sum(bool(f.implied_keys) for f in fields):,} |", "",
+             "- 단어 목록은 2,364표 항목 이름의 단어 빈도에서 골랐다: 남자·여자 각 462표, 남·여 62·61, 남편·아내 24·25, "
+             "미혼 60, 사별 66, 이혼 74, 유배우 30, 배우자있음 17.",
+             "- D4 `measure_keys`: 표기만 하나로(공백 제거, \"·\" 목록은 각 부분도). 고령자 → 인구 같은 뜻 넓히기는 하지 않는다.",
+             "- D6: 이름이 \"A별 X\" 꼴이 아닌 표도 이름이 나열하는 것(\"출생아수, 합계출산율, 자연증가 등\"), "
+             "현황·추이·분포·구조 앞 말, 항목이 하나뿐이면 그 항목을 세는 대상으로 읽는다. \"비율\"처럼 방법만 말하는 항목은 이름이 "
+             "그 말로 끝날 때만 이름을 쓴다(설문 문항 표는 비워 둠). 이미 있던 값은 바뀌지 않는다.",
+             "- D7: 표준 이름이 없는 분류는 정규화한 이름(공백·\"별\"·괄호 수식어 제거, `vocab.normalize_dimension`)을 그대로 키로 "
+             "쓴다(예: \"전입사유별\" → `전입사유`). 그래서 `dimension_keys` 채움률은 성과가 아니고, 표준 이름 매핑률은 5절의 "
+             "미매핑 비율로 따로 본다.", ""]
     return lines
 
 
@@ -158,13 +185,16 @@ def report(records) -> str:
                   "- `dimensions`의 \"현 거주지 성\"은 표 이름의 \"현 거주지 성, 연령 및 …\"을 쉼표로 나눈 결과다. "
                   "\"현 거주지\"(지역)와 \"성\"이 붙어 나온다. 이런 이름은 KOS-97 분류명 정규화에서 나눈다.",
                   "- 표 이름의 \"읍면동(연도 끝자리 0, 5), 시군구(그 외 연도)\"는 `region_level`과 `available_years`로는 "
-                  "\"읍면동은 2020·2025년만\"을 나타내지 못한다(7절).", ""]
+                  "\"읍면동은 2020·2025년만\"을 나타내지 못한다(8절).", ""]
 
     lines += _a2_section(records, fields)
-    lines += ["## 6. 평가 L0 evaluator와의 대응 (T2-28 `evals/evaluators/metadata.py`)", "",
+    lines += _a7_section(records, fields)
+    lines += ["## 7. 평가 L0 evaluator와의 대응 (T2-28 `evals/evaluators/metadata.py`)", "",
               "evaluator `fields()`가 `table_fields()`를 그대로 부른다. 필드 이름·값이 같고, "
-              "전국 표의 `regions = None`은 채움으로 센다. `measure_unit`·`dimension_keys`도 채움률을 잰다.", "",
-              "## 7. 알려진 한계", "",
+              "전국 표의 `regions = None`은 채움으로 센다. `measure_unit`·`dimension_keys`도 채움률을 잰다. "
+              "KOS-109부터 `dimension_keys`에는 표준 이름이 없는 분류의 정규화한 이름도 들어가므로(6절 D7), "
+              "표준 이름 매핑률은 5절의 미매핑 비율로 본다. 새 필드 `implied_keys`·`fixed`·`measure_keys`는 따로 있다.", "",
+              "## 8. 알려진 한계", "",
               "- 지역 단위별 수록 연도가 다른 표(예: 읍면동은 연도 끝자리 0·5만, 그 외 해는 시군구까지)는 "
               f"표 단위 `available_years` 하나로 구분하지 못한다. 표 이름에 드러난 표는 "
               f"{sum('끝자리' in r.info.table_name for r in records)}개다. Parquet 값에서 단위별 연도를 읽는 일은 A7 또는 별도 이슈로 넘긴다.",
