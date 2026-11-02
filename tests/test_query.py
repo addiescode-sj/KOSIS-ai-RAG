@@ -21,7 +21,7 @@ offline = pytest.mark.offline
     ("최근 20년간 분기별 혼인", {"period_start": None, "period_end": None, "cycle": "Q", "regions": []}),
     ("1990년대 충청도 인구", {"period_start": "1990", "period_end": "1999", "cycle": None,
                          "regions": ["충청북도", "충청남도"]}),
-    ("1995년부터 5년마다 총인구 변화", {"period_start": "1995", "period_end": None, "cycle": "F", "regions": []}),
+    ("1995년 이후 5년마다 가구 수 추이", {"period_start": "1995", "period_end": None, "cycle": "F", "regions": []}),
     ("2040년까지 장래 인구", {"period_start": None, "period_end": "2040", "cycle": None, "regions": []}),
     ("5년마다 조사하는 강원 가구 수", {"period_start": None, "period_end": None, "cycle": "F",
                                 "regions": ["강원특별자치도"]}),
@@ -145,7 +145,7 @@ def test_open_and_closed_ranges_pass_a_table_with_any_point_inside():
         "101_DT_NEW": _timed("101_DT_NEW", [str(y) for y in range(2015, 2026)], ["Y"], ["Y"]),
         "101_DT_EARLY": _timed("101_DT_EARLY", ["1970", "1975", "1980"], ["F"], ["F"]),
     }
-    f = parse_query("1995년부터 5년마다 총인구 변화").to_filter()
+    f = parse_query("1995년 이후 5년마다 가구 수 추이").to_filter()
     assert f.years == [] and (f.period_from, f.period_to) == (1995, None) and f.cycle == "F"
     keys, removed = filter_tables(tables, f)
     assert keys == {"101_DT_OLD", "101_DT_NEW"}  # yearly data holds every 5th year; 1995 alone is not required
