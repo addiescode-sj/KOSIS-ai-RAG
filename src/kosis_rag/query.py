@@ -1,8 +1,8 @@
 """Question -> search conditions (T2-14): years, period range, cycle and 시도 pulled out by rules, no model call.
 
-`ParsedQuery` is what the parser understood; `to_filter` turns it into the registry filter (filters.TableFilter) and
-`to_query_item_fields` into the L2 golden fields (evals.schemas.QueryItem), so the filter and the L2 grade read the
-same output. Two-digit years ("23년") are not read: "20년간" and "23년" cannot be told apart by rule.
+`ParsedQuery` is what the parser understood; `to_filter` turns it into the registry filter (filters.TableFilter).
+Its period and region fields follow evals.schemas.QueryItem (L2), so the evaluation layer can grade them as they are.
+Two-digit years ("23년") are not read: "20년간" and "23년" cannot be told apart by rule.
 """
 
 from __future__ import annotations
@@ -54,11 +54,6 @@ class ParsedQuery(BaseModel):
         # one year: the table must hold it; two or more: any of them (strict removed gold tables on dev, plans/T2-05.md)
         return TableFilter(years=self.years, cycle=self.cycle, regions=self.regions, region_mode=region_mode,
                            mode="strict" if len(self.years) == 1 else "partial")
-
-    def to_query_item_fields(self) -> dict:
-        """The L2 fields a rule parser answers (answerable is T2-09's call, not the parser's)."""
-        return {"period_start": self.period_start, "period_end": self.period_end, "cycle": self.cycle,
-                "regions": self.regions}
 
 
 def parse_query(question: str) -> ParsedQuery:

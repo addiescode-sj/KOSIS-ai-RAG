@@ -25,7 +25,7 @@ offline = pytest.mark.offline
                                 "regions": ["강원특별자치도"]}),
 ])
 def test_parser_reads_periods_cycle_and_sido(question, fields):
-    assert parse_query(question).to_query_item_fields() == fields
+    assert parse_query(question).model_dump(include=set(fields)) == fields
 
 
 @offline
@@ -88,14 +88,3 @@ def test_condition_retriever_post_filters_or_reranks_a_plain_retriever():
     soft = ConditionRetriever(base=base, records=RECORDS, region_mode="soft")
     assert [d.metadata["key"] for d in soft.invoke("서울 인구")] == ["101_DT_NATION", "101_DT_SEOUL", "101_DT_BUSAN"]
 
-
-@offline
-def test_l2_grade_compares_regions_as_a_set_and_skips_answerable():
-    from evals.evaluators.query import score_item
-    from evals.schemas import QueryItem
-
-    item = QueryItem(qid="X", split="dev", question="q", period_start="2020", period_end="2020",
-                     regions=["경기도", "서울특별시"], answerable=False)
-    row = score_item(item, {"period_start": "2020", "period_end": "2020", "cycle": None,
-                            "regions": ["서울특별시", "경기도"]})
-    assert row["all"] and "answerable" not in row
