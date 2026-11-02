@@ -35,7 +35,8 @@ def test_document_is_metadata_only_with_real_period_and_capped_labels():
 @offline
 def test_document_summarizes_region_classes_by_level_and_starts_with_a_summary_line():
     doc = to_document(_record(n_labels=3500, levels={"전국": 1, "시도": 17, "시군구": 250, "읍면동": 3306}))
-    assert doc.splitlines()[0] == "1인 가구 | Y 2015~2020 | 지역 단위: 전국·시도(17)·시군구(250)·읍면동(3,306) | 항목: 1인 가구"
+    assert doc.splitlines()[0] == ("1인 가구 | 세는 대상: 1인 가구 | Y 2015~2020 | 지역 단위: 전국·시도(17)·시군구(250)·읍면동(3,306) "
+                                   "| 항목: 1인 가구")  # the one item says what is counted (KOS-109)
     assert "행정구역별: 지역 단위 전국·시도(17)·시군구(250)·읍면동(3,306)" in doc
     assert "지역0" not in doc  # no place names in the embedding text (they stay in search_text)
 

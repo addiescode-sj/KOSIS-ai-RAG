@@ -21,6 +21,7 @@ from kosis_rag.filters import SIDO, SIDO_LABELS
 from kosis_rag.query import DIMENSION_WORDS, REGION_WORDS
 
 __all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "dimension_keys", "unit_key", "LABEL_ALIASES",
+           "measure_keys", "normalize_dimension",
            "build_sigungu", "load_sigungu"]
 
 REPO = Path(__file__).resolve().parents[2]
@@ -102,6 +103,11 @@ _BYEOL = re.compile(r"별$")
 _SPLIT_MIN = 1  # shortest key that may start a glued name ("현 거주지 성" -> 현거주지 + 성)
 
 
+def normalize_dimension(name: str) -> str:
+    """One spelling of a breakdown name: no spaces, no trailing 별 or bracket note, no leading 장래."""
+    return _normalize(name)
+
+
 def _normalize(name: str) -> str:
     name = _NOTE.sub("", name.strip())
     name = _BYEOL.sub("", name.strip())
@@ -140,6 +146,27 @@ LABEL_ALIASES: dict[str, tuple[str, str]] = {
     **{f"{n}인가구": ("가구원수", f"{n}인") for n in range(1, 7)},
     "7인 이상 가구": ("가구원수", "7인 이상"),
 }
+
+
+# Breakdowns a table holds outside its classes (T2-30 KOS-109, evaluation note D1-D3). Words picked from how often
+# they occur as whole words in the 2,364 tables' item names (남자/여자 462 tables each, 남/여 62/61, 남편/아내 24/25,
+# 미혼 60, 사별 66, 이혼 74, 유배우 30, 배우자있음 17), not from golden questions.
+MALE_WORDS = {"남자", "남", "남편", "남성"}
+FEMALE_WORDS = {"여자", "여", "아내", "여성"}
+FEMALE_ONLY = re.compile(r"여성|부인|아내|기혼여성|여자수")  # a table about women only: "기혼여성인구", "기혼부인수"
+MALE_ONLY = re.compile(r"남성|남편")
+MARITAL_WORDS = {"유배우", "미혼", "사별", "이혼", "배우자있음"}
+HOUSEHOLD_SIZE = re.compile(r"\d+인\s*가구")  # "1인가구", "2인 가구" in what a table counts
+
+
+def measure_keys(measure: str | None) -> list[str]:
+    """What a table counts, written one way: spaces dropped ("취업 인구" = "취업인구"); a "·" list also gives each
+    part ("통근·통학인구" -> 통근, 통학인구; "출생·사망·혼인·이혼" -> each). No meaning is widened (고령자 is not 인구)."""
+    if not measure:
+        return []
+    compact = re.sub(r"\s+", "", measure)
+    parts = [p for p in compact.replace("·", "|").replace(",", "|").split("|") if p]
+    return list(dict.fromkeys([compact.replace("·", ""), *parts])) if len(parts) > 1 else [compact]
 
 
 def build_sigungu(parquet: Path) -> dict[str, list[str]]:
