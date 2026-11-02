@@ -13,7 +13,7 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 from rank_bm25 import BM25Okapi
 
-from kosis_rag.filters import TableFilter, filter_tables
+from kosis_rag.filters import TableFilter, filter_tables, soft_rank
 from kosis_rag.schemas import TableRecord
 
 _WORD = re.compile(r"[0-9A-Za-z가-힣]+")
@@ -105,7 +105,8 @@ class ChromaTableRetriever(BaseRetriever):
             extra, n = {"where": {"key": {"$in": sorted(keys)}}}, min(self.k, len(keys))
         res = self.collection.query(query_embeddings=[self.embed_query(query)], n_results=n,
                                     include=["documents", "metadatas", "distances"], **extra)
-        return [
+        docs = [
             Document(page_content=doc, metadata={**meta, "score": 1.0 - dist}, id=key)
             for key, doc, meta, dist in zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0])
         ]
+        return soft_rank(docs, self.records, self.table_filter)

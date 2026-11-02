@@ -44,6 +44,15 @@ def score_item(item: RetrievalItem, keys: list[str], judged: set[str] | None = N
     return row
 
 
+def filter_pass(item: RetrievalItem, passed: set[str]) -> bool:
+    """Filter recall of one item: every table slot keeps at least one key among the tables that pass the filter.
+
+    Measured on the whole registry (filters.filter_tables), not on the retriever's top k, so a gold table the
+    filter kept but the ranking cut is not counted as a filter loss.
+    """
+    return all(passed & set(slot) for slot in item.required)
+
+
 def predict_no_answer(top_score: float | None, tau: float) -> bool:
     return top_score is None or top_score < tau
 
