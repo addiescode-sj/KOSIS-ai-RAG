@@ -19,8 +19,10 @@ offline = pytest.mark.offline
                                      "regions": ["대구광역시", "경상북도"]}),
     ("2024년 3월 월별 출생아 수", {"period_start": "202403", "period_end": "202403", "cycle": "M", "regions": []}),
     ("최근 20년간 분기별 혼인", {"period_start": None, "period_end": None, "cycle": "Q", "regions": []}),
-    ("1990년대 충청도 인구", {"period_start": None, "period_end": None, "cycle": None,
+    ("1990년대 충청도 인구", {"period_start": "1990", "period_end": "1999", "cycle": None,
                          "regions": ["충청북도", "충청남도"]}),
+    ("1995년부터 5년마다 총인구 변화", {"period_start": "1995", "period_end": None, "cycle": "F", "regions": []}),
+    ("2040년까지 장래 인구", {"period_start": None, "period_end": "2040", "cycle": None, "regions": []}),
     ("5년마다 조사하는 강원 가구 수", {"period_start": None, "period_end": None, "cycle": "F",
                                 "regions": ["강원특별자치도"]}),
 ])
@@ -128,3 +130,33 @@ def test_breakdown_and_counted_filters_keep_tables_that_do_not_say():
 def test_condition_retriever_returns_at_most_ten():
     base = _Fixed(keys=["101_DT_NATION"] * 15)
     assert len(ConditionRetriever(base=base, records=RECORDS, k=20).invoke("인구")) == 10
+
+
+def _timed(key, periods, cycle, prd_se):
+    record = _record(key, [])
+    record.periods, record.cycle, record.prd_se = periods, cycle, prd_se
+    return record
+
+
+@offline
+def test_open_and_closed_ranges_pass_a_table_with_any_point_inside():
+    tables = {
+        "101_DT_OLD": _timed("101_DT_OLD", ["1985", "1990", "1995", "2000", "2005", "2010"], ["F"], ["F"]),
+        "101_DT_NEW": _timed("101_DT_NEW", [str(y) for y in range(2015, 2026)], ["Y"], ["Y"]),
+        "101_DT_EARLY": _timed("101_DT_EARLY", ["1970", "1975", "1980"], ["F"], ["F"]),
+    }
+    f = parse_query("1995년부터 5년마다 총인구 변화").to_filter()
+    assert f.years == [] and (f.period_from, f.period_to) == (1995, None) and f.cycle == "F"
+    keys, removed = filter_tables(tables, f)
+    assert keys == {"101_DT_OLD", "101_DT_NEW"}  # yearly data holds every 5th year; 1995 alone is not required
+    assert removed["101_DT_EARLY"] == "요청 기간 1995~ 자료 없음 (실제 1970~1980)"
+    keys, _ = filter_tables(tables, parse_query("2016~2019년 인구").to_filter())
+    assert keys == {"101_DT_NEW"}  # overlap, not both ends
+
+
+@offline
+def test_yearly_question_still_needs_yearly_data():
+    tables = {"101_DT_F": _timed("101_DT_F", ["2015", "2020"], ["F"], ["F"]),
+              "101_DT_Y": _timed("101_DT_Y", ["2015", "2016"], ["Y"], ["Y"])}
+    keys, _ = filter_tables(tables, parse_query("연도별 인구").to_filter())
+    assert keys == {"101_DT_Y"}
