@@ -1,0 +1,41 @@
+"""T2-27: what a table counts and what it is broken down by, read from its name (names made up in KOSIS style)."""
+
+import pytest
+
+from kosis_ai.schemas import TableInfo
+from kosis_rag.roles import table_roles
+from kosis_rag.schemas import TableClass, TableRecord
+
+offline = pytest.mark.offline
+
+
+def _record(name, classes=()):
+    info = TableInfo(
+        key="101_DT_X", org_id="101", tbl_id="DT_X", survey_name="인구총조사", organization="국가데이터처",
+        table_name=name, period="년", source="api", coverage="A_정상", rows=1, numeric_rows=1, symbol_rows=0,
+        parquet="values/101_DT_X.parquet", url="http://kosis.kr/x", menu_path="인구",
+    )
+    return TableRecord(info=info, classes=[TableClass(name=c, labels=["계"], n_labels=1) for c in classes])
+
+
+@offline
+@pytest.mark.parametrize("name, measure, dims", [
+    ("시도/시군구/월별 혼인", "혼인", ["시도", "시군구", "월"]),
+    ("성, 연령 및 혼인상태별 인구 - 시군구", "인구", ["성", "연령", "혼인상태"]),
+    ("현 거주지별/성별/연령별/출생지별 인구-시도", "인구", ["현 거주지", "성", "연령", "출생지"]),
+    ("시도/연령/출생아수별 부인(15세 이상)", "부인", ["시도", "연령", "출생아수"]),
+    ("시도/성/연령별 북한출생 인구", "북한출생 인구", ["시도", "성", "연령"]),
+    ("시군구/성/연령(5세)별 사망자수(1997~), 사망률(1998~)", "사망자수, 사망률", ["시군구", "성", "연령(5세)"]),
+    ("총조사인구 총괄(시군구/성/5세연령별)", "총조사인구 총괄", ["시군구", "성", "5세연령"]),
+    ("서울특별시 인구 현황", None, ["행정구역", "성"]),
+    ("국적별 한국국적을 취득한 자-혼인 귀화자(계)", "한국국적을 취득한 자-혼인 귀화자", ["국적"]),  # "특별시" is not a breakdown; falls back to class names
+])
+def test_name_gives_what_is_counted_and_the_breakdowns(name, measure, dims):
+    assert table_roles(_record(name, classes=("행정구역별", "성별"))) == (measure, dims)
+
+
+@offline
+def test_same_word_on_either_side_of_the_name():
+    counted, _ = table_roles(_record("시도/성/연령별 혼인율"))
+    breakdown, dims = table_roles(_record("성별/연령별/혼인상태별 인구"))
+    assert "혼인" in counted and "혼인" not in breakdown and "혼인상태" in dims
