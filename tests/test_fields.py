@@ -31,6 +31,7 @@ def test_fields_of_a_mentor_shaped_table():
     assert f.regions == sorted(SIDO) and f.region_level == ["시군구", "시도", "읍면동"]
     assert (f.measure, f.measure_unit) == ("인구", "명")
     assert f.dimensions == ["성", "연령", "이동자유형"]
+    assert f.dimension_keys == ["성", "연령"]  # 이동자유형 has no standard key yet
 
 
 @offline

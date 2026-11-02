@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from kosis_rag.filters import REGION_LEVEL_DIMS, has_dimension, table_regions
 from kosis_rag.roles import table_roles
 from kosis_rag.schemas import TableRecord
+from kosis_rag.vocab import dimension_keys
 
 # units accepted from an item name's last bracket, e.g. "남자 (명)"; "(15세 이상)" or "(치매 포함)" are not units
 ITEM_UNITS = {"명", "가구", "건", "%", "호", "세", "천명당", "개", "명/㎢", "세대", "만원", "원", "천원", "개월", "㎡", "쌍"}
@@ -30,7 +31,8 @@ class TableFields(BaseModel):
     region_level: list[str] = Field(default_factory=list)  # of 시도·시군구·읍면동, the levels the table breaks down to
     measure: str | None = None  # what is counted, from the table name (T2-27)
     measure_unit: str | None = None  # one unit for every value; None when unknown, partial or mixed
-    dimensions: list[str] = Field(default_factory=list)  # breakdowns as named by the table (normalized in KOS-97)
+    dimensions: list[str] = Field(default_factory=list)  # breakdowns as named by the table
+    dimension_keys: list[str] = Field(default_factory=list)  # the same as standard keys (vocab.py); unmapped names drop
 
 
 def item_unit(items: list[str]) -> str | None:
@@ -58,4 +60,5 @@ def table_fields(record: TableRecord) -> TableFields:
         measure=measure,
         measure_unit=record.unit or item_unit(record.items),
         dimensions=dims,
+        dimension_keys=list(dict.fromkeys(k for d in dims for k in dimension_keys(d))),
     )

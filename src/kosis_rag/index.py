@@ -32,7 +32,7 @@ REPO = Path(__file__).resolve().parents[2]
 # candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
 # retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
-DOC_FORMAT = "meta-region-items-head-measure"  # T2-27; before: "meta-region-items-head" (T2-25 1+2+3, …202610300954)
+DOC_FORMAT = "meta-region-items-head-measure2"  # T2-30 KOS-97: bundle and joined names now say what they count; before: "meta-region-items-head-measure" (T2-27, …202611021052)
 COLLECTION_PREFIX = "kosis_a_kure_"  # A: one vector per table; the build version follows (T2-05)
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
