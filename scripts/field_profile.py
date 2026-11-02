@@ -162,13 +162,8 @@ def report(records) -> str:
 
     lines += _a2_section(records, fields)
     lines += ["## 6. 평가 L0 evaluator와의 대응 (T2-28 `evals/evaluators/metadata.py`)", "",
-              "| 이 스키마 (`TableFields`) | evaluator `fields()` | 차이 |", "| --- | --- | --- |",
-              "| `available_years` | `years` | 이름만 다름 |",
-              "| `regions = None` | `regions = \"none\"` | 전국 표 표기 |",
-              "| `cycle` | `cycle` | 같은 규칙 (`record.cycle or record.prd_se`) |",
-              "| `region_level`, `measure`, `dimensions` | 같은 이름 | 같은 함수 |",
-              "| `dimension_keys` | 없음 | 새 필드 (표준 분류 이름) |",
-              "| `measure_unit` | 없음 | 새 필드 |", "",
+              "evaluator `fields()`가 `table_fields()`를 그대로 부른다. 필드 이름·값이 같고, "
+              "전국 표의 `regions = None`은 채움으로 센다. `measure_unit`·`dimension_keys`도 채움률을 잰다.", "",
               "## 7. 알려진 한계", "",
               "- 지역 단위별 수록 연도가 다른 표(예: 읍면동은 연도 끝자리 0·5만, 그 외 해는 시군구까지)는 "
               f"표 단위 `available_years` 하나로 구분하지 못한다. 표 이름에 드러난 표는 "

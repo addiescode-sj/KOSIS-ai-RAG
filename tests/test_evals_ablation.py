@@ -70,6 +70,12 @@ def test_combos_and_masking_follow_to_filter():
     gold_f = ablation.filter_for(ablation.gold_parsed(open_from), frozenset({"year", "cycle"}))
     assert gold_f == ablation.filter_for(parse_query(open_from.question), frozenset({"year", "cycle"}))
     assert (gold_f.years, gold_f.period_from, gold_f.period_to) == ([], 1995, None)
+    # a gold measure concept filters with the parser's words for it; a concept the parser does not know stays as is
+    births = QueryItem(qid="q", split="dev", question="출생아 수", measures=["출생"])
+    assert (ablation.filter_for(ablation.gold_parsed(births), frozenset({"measure"}))
+            == ablation.filter_for(parse_query(births.question), frozenset({"measure"})))
+    homes = QueryItem(qid="q", split="dev", question="1인 가구", measures=["가구"])
+    assert ablation.gold_parsed(homes).measures == ["가구"]
 
 
 class _Filterable(BaseRetriever):
