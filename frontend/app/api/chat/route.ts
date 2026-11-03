@@ -4,7 +4,8 @@ import type { ChatMessage, SearchResult } from "@/lib/chat-types";
 import { parseSSE } from "@/lib/sse";
 
 // Proxy to the FastAPI search graph (POST /search/stream, T2-37), re-sent as the AI SDK UI message stream:
-// each finished node -> data-node part, the result -> data-result part + the answer as a text part.
+// each finished node -> data-node part, guide reply pieces -> data-draft part (T2-38),
+// the result -> data-result part + the final answer as a text part (it replaces the draft on screen).
 // The answer and its citations come from the backend as they are; nothing here makes numbers or tables.
 export async function POST(request: Request) {
   const { messages } = (await request.json()) as { messages: ChatMessage[] };
@@ -24,8 +25,14 @@ export async function POST(request: Request) {
       });
       if (!res.ok || !res.body) throw new Error(`검색 서버 오류 (${res.status}): ${await detail(res)}`);
 
+      let draft = "";
       for await (const { event, data } of parseSSE(res.body)) {
         const payload = JSON.parse(data);
+        if (event === "token") {
+          draft += payload.delta;
+          writer.write({ type: "data-draft", id: "draft", data: { text: draft } }); // same id: the part is updated
+          continue;
+        }
         if (event === "error") throw new Error(`파이프라인 오류: ${payload.type} ${payload.detail}`);
         if (event === "result") {
           const result = payload as SearchResult;
