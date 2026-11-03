@@ -15,7 +15,8 @@ export type TableCandidate = {
 
 export type SearchResult = {
   question: string;
-  candidates: TableCandidate[];
+  candidates: TableCandidate[]; // the tables shown to the guide LLM
+  picked: TableCandidate[]; // the ones the answer recommends and cites (T2-39); [] on refusal
   no_answer: boolean;
   no_answer_reason: string | null;
   answer: string;

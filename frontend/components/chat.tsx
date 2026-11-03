@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { type ChatMessage, NODE_LABELS, type NodeStep, type SearchResult } from "@/lib/chat-types";
+import { type ChatMessage, NODE_LABELS, type NodeStep, type SearchResult, type TableCandidate } from "@/lib/chat-types";
 
 const EXAMPLES = ["2023년 시도별 출생아 수", "시군구별 인구 이동 통계", "65세 이상 인구 비율", "비트코인 가격"];
 
@@ -110,6 +110,8 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
     else if (p.type === "data-result") result = p.data;
     else if (p.type === "text") answer += p.text;
   }
+  const pickedKeys = new Set(result?.picked.map((c) => c.key));
+  const others = result ? result.candidates.filter((c) => !pickedKeys.has(c.key)) : [];
 
   return (
     <div className="flex flex-col gap-3">
@@ -148,27 +150,42 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
         </Card>
       )}
 
-      {result && result.candidates.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          {result.candidates.map((c, i) => (
-            <Card key={c.key} className="gap-2 py-4">
-              <CardHeader className="px-4">
-                <CardTitle className="text-sm">
-                  <a href={c.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-                    {i + 1}. {c.table_name} <ExternalLink className="size-3" />
-                  </a>
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  KOSIS / {c.survey_name} / {c.organization}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="px-4">
-                <Badge variant="outline">수록기간 {c.period}</Badge>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      {/* The tables the answer recommends and cites (T2-39); the rest of what the LLM saw folds away */}
+      {result && result.picked.length > 0 && <TableCards tables={result.picked} />}
+      {result && others.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer text-muted-foreground">
+            {result.picked.length > 0 ? `다른 후보 ${others.length}개` : `검색된 후보 ${others.length}개`}
+          </summary>
+          <div className="pt-2">
+            <TableCards tables={others} />
+          </div>
+        </details>
       )}
+    </div>
+  );
+}
+
+function TableCards({ tables }: { tables: TableCandidate[] }) {
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {tables.map((c, i) => (
+        <Card key={c.key} className="gap-2 py-4">
+          <CardHeader className="px-4">
+            <CardTitle className="text-sm">
+              <a href={c.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
+                {i + 1}. {c.table_name} <ExternalLink className="size-3" />
+              </a>
+            </CardTitle>
+            <CardDescription className="text-xs">
+              KOSIS / {c.survey_name} / {c.organization}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-4">
+            <Badge variant="outline">수록기간 {c.period}</Badge>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
