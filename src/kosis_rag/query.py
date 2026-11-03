@@ -97,6 +97,14 @@ def _ranges(question: str) -> tuple[list[tuple[int | None, int | None]], str]:
 
 
 def parse_query(question: str) -> ParsedQuery:
+    """Read the search conditions the question states (years, period range, cycle, 시도, breakdowns, measure) by rule.
+
+    In: question = the user question in Korean.
+    Out: ParsedQuery; a field the question does not state stays empty. A range wins over single years; months
+        ("2023년 3월") set period_start/end as YYYYMM.
+    Side effects: none (regex only, no model call).
+    Node: parse.
+    """
     ranges, rest = _ranges(question)
     years = [] if ranges else sorted({int(y) for y in YEAR.findall(rest)})  # a range wins over single years
     months = [f"{y}{int(m):02d}" for y, m in YEAR_MONTH.findall(question)]
