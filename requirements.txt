@@ -5,6 +5,7 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 langchain-core>=1.7.0
+langgraph>=1.0,<2
 rank-bm25>=0.2.2
 
 # Phase 1 runtime (vendor/phase1/requirements.txt)

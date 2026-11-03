@@ -56,6 +56,11 @@ class TableFilter(BaseModel):
     measures: list[str] = Field(default_factory=list)  # words one of which the counted thing must hold, e.g. ["혼인"]
 
     def is_empty(self) -> bool:
+        """Whether the filter would keep every table (no condition set; soft-mode regions only re-rank).
+
+        In: self. Out: True when no condition can remove a table. Side effects: none.
+        Node: retrieve (through hybrid_search).
+        """
         return not (self.years or self.period_from or self.period_to or self.cycle or self.organization
                     or self.dimensions or self.measures
                     or (self.regions and self.region_mode == "hard"))
@@ -84,7 +89,14 @@ def _org(name: str) -> str:
 
 
 def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
-    """None when the table meets the filter, else the reason in words (for the no-answer message and the harness)."""
+    """None when the table meets the filter, else the reason in words (for the no-answer message and the harness).
+
+    In: record = one table from the registry; f = the question's conditions.
+    Out: None (kept) or the first failing condition in words: organization, cycle, period range, years, breakdowns /
+        measure (T2-27), then 시도 in hard mode.
+    Side effects: none.
+    Node: retrieve (through hybrid_search, for retrievers without with_filter, and filter_tables).
+    """
     if f.organization and _org(record.info.organization) != _org(f.organization):
         return f"작성기관 {record.info.organization} (요청 {f.organization})"
     if f.cycle and not CYCLE_MET_BY.get(f.cycle, {f.cycle}) & (set(record.cycle) | set(record.prd_se)):
@@ -140,7 +152,14 @@ def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
 
 
 def filter_tables(records: dict[str, TableRecord], f: TableFilter) -> tuple[set[str], dict[str, str]]:
-    """(keys that pass, {removed key: reason})."""
+    """(keys that pass, {removed key: reason}).
+
+    Does: decides the filter on the whole registry before a vector search (Chroma gets the passing keys).
+    In: records = key -> TableRecord; f = the question's conditions.
+    Out: (passing keys, removed key -> why_excluded reason).
+    Side effects: none.
+    Node: retrieve (through ChromaTableRetriever.with_filter inside hybrid_search).
+    """
     passed, removed = set(), {}
     for key, record in records.items():
         reason = why_excluded(record, f)
@@ -152,7 +171,14 @@ def filter_tables(records: dict[str, TableRecord], f: TableFilter) -> tuple[set[
 
 
 def soft_rank(docs: list, records: dict[str, TableRecord], f: TableFilter) -> list:
-    """Soft region mode: tables lacking the requested 시도 move behind the others, order otherwise kept."""
+    """Soft region mode: tables lacking the requested 시도 move behind the others, order otherwise kept.
+
+    In: docs = candidates in rank order (metadata["key"] set); records = the registry; f = the question's conditions.
+    Out: docs unchanged unless f asks for regions in soft mode; then tables with the region (or without 시도 rows)
+        first, both groups in their input order.
+    Side effects: none.
+    Node: retrieve (through hybrid_search).
+    """
     if not f.regions or f.region_mode != "soft":
         return docs
 
