@@ -37,6 +37,7 @@ class SearchResult(BaseModel):
     question: str
     candidates: list[TableCandidate] = Field(default_factory=list)
     no_answer: bool = False
+    no_answer_reason: str | None = None  # out_of_scope | no_item when the stage 2 LLM said why (T2-09)
     answer: str  # final text; citations are appended by code
     answer_origin: str  # "llm" | "template" (LLM failed or failed verification) | "refusal"
     llm_status: str | None = None  # Phase 1 LLMResult.status when the model was called

@@ -52,7 +52,12 @@ STAGED = {
     "staged": {"cond_filter": True, "stage2": "none"},  # + stage 1 (RERANK_CKPT)
     "clova-only": {"cond_filter": True, "rerank_ckpt": "", "stage2": "clova"},
     "staged-clova": {"cond_filter": True, "stage2": "clova"},  # stage 1 + CLOVA
+    "hybrid+cond-hcx": {"cond_filter": True, "rerank_ckpt": "", "stage2": "hcx"},  # T2-09, HCX_THINKING=none | low
+    "staged-hcx": {"cond_filter": True, "stage2": "hcx"},
 }
+
+
+STAGE2_FIELDS = ("stage2_picked_n", "stage2_reason", "stage2_error", "stage2_calls")  # None when no stage 2 ran
 
 
 def build(name: str, items: list[RetrievalItem], k: int) -> BaseRetriever:
@@ -81,15 +86,20 @@ def run(retriever: BaseRetriever, items: list[RetrievalItem], k: int) -> list[di
             docs = retriever.invoke(item.question, config={"callbacks": [counter]})[:k]
         except Exception as exc:  # a failing question is recorded, the run goes on
             docs, error = [], f"{type(exc).__name__}: {exc}"
+        meta = docs[0].metadata if docs else {}
         rows.append({
             "qid": item.qid, "split": item.split, "qtype": item.qtype, "answerable": item.answerable,
+            "no_answer_reason": item.no_answer_reason,
             "keys": [d.metadata["key"] for d in docs],
-            "top_score": docs[0].metadata.get("score") if docs else None,
+            # a stage 2 re-ranker moves another table to the top: tau judges the stage 1 top score either way (T2-09)
+            "top_score": meta.get("stage2_input_top_score", meta.get("score")),
+            **{f: meta.get(f) for f in STAGE2_FIELDS},
             "latency_ms": (time.perf_counter() - started) * 1000,
-            "llm_calls": counter.calls,
-            "input_tokens": counter.input_tokens,
-            "output_tokens": counter.output_tokens,
-            "model": ",".join(sorted(counter.models)) or None,
+            # stage 2 calls its API directly (no LangChain callback): add what it recorded on the documents
+            "llm_calls": counter.calls + (meta.get("stage2_calls") or 0),
+            "input_tokens": counter.input_tokens + (meta.get("stage2_input_tokens") or 0),
+            "output_tokens": counter.output_tokens + (meta.get("stage2_output_tokens") or 0),
+            "model": ",".join(sorted(counter.models | ({meta["stage2"]} if meta.get("stage2_calls") else set()))) or None,
             "failed": error is not None,
             "retried": False,  # retrievers here do not retry; a retrying one reports it through its own metadata
             "error": error,

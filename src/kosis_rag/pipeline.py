@@ -3,7 +3,7 @@ and the eval runners use.
 
     question -> [T2-14 conditions] -> fine-tuned bge-m3 (Chroma) top 50 + BM25 top 50 -> RRF (HybridRetriever)
              -> stage 1: fine-tuned bge-reranker-v2-m3 over the top 50 (CrossEncoderReranker, when RERANK_CKPT is set)
-             -> stage 2: LLM re-ranker over the top 20 (LLMReranker, STAGE2=clova | none)
+             -> stage 2: LLM re-ranker over the top 20 (LLMReranker, STAGE2=clova | hcx | none)
 
 Settings come from .env (SearchSettings.from_env); every stage can be switched off, so the same code measures
 "none / stage 1 / stage 2 only / stage 1 + stage 2" (plans/T2-07.md). The weights are not in git (data/models/).
@@ -14,7 +14,7 @@ doc_format, which TEXT_FORMAT (when set) must match; weights trained on another 
     EMBED_CKPT=data/models/bge-m3-seen-e2.pt
     RERANK_CKPT=data/models/bge-reranker-unseen-e2.pt   # empty = no stage 1
     RERANK_MODE=blend                                   # blend | score
-    STAGE2=clova                                        # clova | none
+    STAGE2=clova                                        # clova | hcx | none (HCX_THINKING=none | low for hcx)
     COND_FILTER=on                                      # on | off: T2-14 conditions before the hybrid
     TEXT_FORMAT=n3-L60                                  # optional check: n3-L60 | n2-L60
 """

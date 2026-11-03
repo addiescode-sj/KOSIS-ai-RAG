@@ -225,6 +225,15 @@ def l1_report(args, s: dict) -> str:
         m = s["metrics"][name]
         lines.append(f"| {name} | {m['n']} | " + " | ".join(f"{m.get(c, 0):.3f}" for c in cols) + " |")
     na = s["no_answer"]
+    rules = []
+    if "no_answer_rules" in s:  # T2-09: the LLM re-ranker's verdict next to tau
+        nr = s["no_answer_rules"]
+        rules = ["", "| 답 없음 규칙 | P | R | F1 | tp / fp / fn | 사유별 recall |", "| --- | --- | --- | --- | --- | --- |"]
+        rules += [f"| {name} | {m['precision']:.3f} | {m['recall']:.3f} | {m['f1']:.3f} | {m['tp']} / {m['fp']} / {m['fn']} | "
+                  + ", ".join(f"{g} {a}/{b}" for g, (a, b) in m["recall_by_reason"].items()) + " |"
+                  for name, m in nr.items() if name in ("tau", "llm", "either")]
+        rules += ["", f"- llm: 2차 LLM이 고른 표 0개(호출 오류 제외) · either: llm 또는 tau · LLM 사유 일치 "
+                      f"{nr['llm_reason_match'][0]}/{nr['llm_reason_match'][1]} · LLM 호출 오류 {nr['llm_errors']}건"]
     return "\n".join([
         f"# L1 retrieval — {args.stage}", "",
         f"- retriever `{args.retriever}`, k={args.k}, split `{args.split}`, 답 있는 문항 기준", "",

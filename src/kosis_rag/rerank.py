@@ -14,8 +14,10 @@ re-ranker is one more entry with the same signature.
 
 metadata["score"] is left as the hybrid gave it (the dense cosine the no-answer threshold is calibrated on, T2-09).
 The stages add their own fields: input_rank, stage1_score, stage1_rank, stage1_seconds; stage2, stage2_picked,
-stage2_picked_n (0 = the LLM picked nothing, a no-answer signal for T2-09), stage2_error, stage2_calls,
-stage2_input_tokens, stage2_output_tokens, stage2_seconds.
+stage2_picked_n (0 = the LLM picked nothing, a no-answer signal for T2-09), stage2_reason (why nothing was picked,
+when the re-ranker says), stage2_input_top_score (metadata["score"] of the stage 1 top table, so a score threshold
+judges the same table with or without stage 2), stage2_error, stage2_calls, stage2_input_tokens,
+stage2_output_tokens, stage2_seconds.
 """
 
 from __future__ import annotations
@@ -93,15 +95,18 @@ class LLMReranker(BaseRetriever):
         docs = self.base.invoke(query)
         keys = [d.metadata["key"] for d in docs[: self.k_in]]
         started = time.perf_counter()
-        calls, usage, error = 0, {}, None
+        calls, usage, reason, error = 0, {}, None, None
         try:
             out = self.select(query, keys) if keys else []
             picked_keys = list(getattr(out, "keys", out))
             calls, usage = getattr(out, "calls", 1 if keys else 0), dict(getattr(out, "usage", {}) or {})
+            reason = getattr(out, "reason", None)
             picked = set(picked_keys) & set(keys)  # an invented key never reaches the answer
         except Exception as exc:  # the answer still gets the stage-1 order
             picked, error = set(), f"{type(exc).__name__}: {exc}"
-        meta = {"stage2": self.name, "stage2_picked_n": len(picked), "stage2_error": error, "stage2_calls": calls,
+        meta = {"stage2": self.name, "stage2_picked_n": len(picked), "stage2_reason": reason,
+                "stage2_input_top_score": docs[0].metadata.get("score") if docs else None,
+                "stage2_error": error, "stage2_calls": calls,
                 "stage2_input_tokens": usage.get("promptTokens", usage.get("input_tokens")),
                 "stage2_output_tokens": usage.get("completionTokens", usage.get("output_tokens")),
                 "stage2_seconds": time.perf_counter() - started}
@@ -118,6 +123,13 @@ def clova(text_of: dict[str, str], options: dict) -> Select:
     return ClovaReranker(text_of=text_of, **options)
 
 
+def hcx(text_of: dict[str, str], options: dict) -> Select:
+    from kosis_rag.hcx import HcxSelector
+
+    return HcxSelector(text_of=text_of, **options)
+
+
 LLM_RERANKERS: dict[str, Callable[[dict[str, str], dict], Select]] = {
     "clova": clova,
+    "hcx": hcx,
 }
