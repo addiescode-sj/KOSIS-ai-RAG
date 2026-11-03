@@ -103,8 +103,10 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
   const steps: NodeStep[] = [];
   let result: SearchResult | undefined;
   let answer = "";
+  let draft = "";
   for (const p of message.parts) {
     if (p.type === "data-node") steps.push(p.data);
+    else if (p.type === "data-draft") draft = p.data.text;
     else if (p.type === "data-result") result = p.data;
     else if (p.type === "text") answer += p.text;
   }
@@ -119,8 +121,17 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
             <span className="tabular-nums">{(s.seconds * 1000).toFixed(1)} ms</span>
           </li>
         ))}
-        {running && !result && <Pending label="다음 단계 진행 중" />}
+        {running && !result && !draft && <Pending label="다음 단계 진행 중" />}
       </ol>
+
+      {draft && !answer && (
+        <Card>
+          <CardContent className="flex flex-col gap-2">
+            <Pending label="안내 문장 작성 중 (검증된 부분만 표시)" />
+            <p className="text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{draft}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {answer && (
         <Card className={result?.no_answer ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30" : undefined}>
@@ -128,6 +139,9 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
             <div className="flex gap-2">
               {result?.no_answer && <Badge variant="outline">맞는 표 없음</Badge>}
               {result && <Badge variant="secondary">{ORIGIN[result.answer_origin] ?? result.answer_origin}</Badge>}
+              {draft && result?.answer_origin === "template" && (
+                <Badge variant="outline">LLM 문장이 검증을 통과하지 못해 코드 안내로 대체</Badge>
+              )}
             </div>
             <p className="text-sm leading-6 whitespace-pre-wrap">{answer}</p>
           </CardContent>

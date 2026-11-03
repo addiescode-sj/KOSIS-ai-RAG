@@ -26,7 +26,8 @@ export type SearchResult = {
 // One finished graph node from /search/stream: its name and its own trace entry (seconds, ...)
 export type NodeStep = { name: string; seconds: number };
 
-export type ChatMessage = UIMessage<never, { node: NodeStep; result: SearchResult }>;
+// draft = the guide reply so far, only the part that already passed the backend check (T2-38); the final answer replaces it
+export type ChatMessage = UIMessage<never, { node: NodeStep; draft: { text: string }; result: SearchResult }>;
 
 export const NODE_LABELS: Record<string, string> = {
   parse: "질의 조건 파싱",
