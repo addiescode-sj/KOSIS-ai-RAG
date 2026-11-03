@@ -41,11 +41,11 @@ def test_l2_oracle_is_one_and_invented_slots_are_wrong():
                      regions=["서울특별시"], years=[2023], dimensions=[], measures=["출생"])
     oracle = {"period_start": "2023", "period_end": "2023", "cycle": None, "regions": ["서울특별시"], "years": [2023],
               "dimensions": [], "measures": ["출생", "출산", "생아"]}  # the parser's search words hold the concept
-    assert set(query.score_query(item, oracle).values()) == {1}
+    assert {v for k, v in query.score_query(item, oracle).items() if k != "pr"} == {1}
     row = query.score_query(item, {**oracle, "dimensions": ["성"]})  # a breakdown the question never named
     assert row["dimensions"] == 0 and row["all_fields"] == 0
     draft = QueryItem(qid="q2", split="dev", question="q", cycle="M")  # T2-14 draft: no years, dimensions, measures
-    assert set(query.score_query(draft, oracle)) == {"period_start", "period_end", "cycle", "regions", "all_fields"}
+    assert set(query.score_query(draft, oracle)) == {"period_start", "period_end", "cycle", "regions", "all_fields", "pr"}
 
 
 @offline

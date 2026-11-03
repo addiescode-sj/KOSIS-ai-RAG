@@ -6,7 +6,7 @@ from langchain_core.retrievers import BaseRetriever
 from kosis_ai.schemas import Refusal, StatAnswer, StatResult
 
 from evals.runners import e2e
-from evals.schemas import CalcItem
+from evals.schemas import CalcItem, QueryItem, RetrievalItem
 
 
 class Fixed(BaseRetriever):
@@ -53,7 +53,13 @@ def test_top1_table_is_used_and_located(monkeypatch):
     assert e2e.locate(item(), row, "FAIL")["cause"] == "retrieval"
     right = e2e.run(Fixed(keys=["101_DT_GOLD"]), [item()], k=10)[0]
     assert e2e.locate(item(), right, "FAIL") | {"top_keys": None} == {
-        "used_table": "101_DT_GOLD", "right_table": True, "gold_rank": 1, "top_keys": None, "cause": "answer"}
+        "used_table": "101_DT_GOLD", "right_table": True, "right_alternate": False, "l1_linked": False, "gold_rank": 1,
+        "top_keys": None, "cause": "answer"}
+    # §6.3: with the L1 item of the same qid, an alternate key of its slot is the right table too
+    l1 = RetrievalItem(qid="c1", split="test", qtype="sibling", source="v2", question="q",
+                       required=[["101_DT_GOLD", "101_DT_OTHER"]])
+    alt = e2e.locate(item(), row, "FAIL", l1)
+    assert alt["right_table"] and alt["right_alternate"] and alt["l1_linked"] and alt["cause"] == "answer" and alt["gold_rank"] == 1
 
 
 def test_empty_retrieval_is_a_run_failure(monkeypatch):
