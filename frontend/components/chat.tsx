@@ -22,7 +22,10 @@ export function Chat() {
   const bottom = useRef<HTMLDivElement>(null);
   const busy = status === "submitted" || status === "streaming";
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [messages, status]);
+  useEffect(() => {
+    // Block body: Chrome's scrollIntoView now returns a Promise, which React would call as the effect cleanup
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, status]);
 
   function send(text: string) {
     if (!text.trim() || busy) return;
@@ -38,7 +41,8 @@ export function Chat() {
       </header>
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 py-4">
+        {/* pr-4: a lane for the overlay scrollbar (w-2.5) so it never covers the messages */}
+        <div className="flex flex-col gap-4 py-4 pr-4">
           {messages.length === 0 && (
             <div className="flex flex-wrap gap-2 pt-8">
               {EXAMPLES.map((q) => (
@@ -57,7 +61,7 @@ export function Chat() {
               <AssistantMessage key={m.id} message={m} running={busy && i === messages.length - 1} />
             ),
           )}
-          {status === "submitted" && <Pending label="파이프라인 시작 중" />}
+          {status === "submitted" && messages.at(-1)?.role === "user" && <Pending label="파이프라인 시작 중" />}
           {error && (
             <Card className="border-destructive/50">
               <CardContent className="flex items-start gap-2 text-sm text-destructive">

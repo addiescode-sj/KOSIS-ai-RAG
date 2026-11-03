@@ -55,3 +55,6 @@ chroma/
 # Layered eval datasets and run outputs (question text, table keys, answers)
 evals/datasets/
 evals/reports/*/
+
+# Per-machine compose overrides (e.g. a shared Chroma folder)
+docker-compose.override.yml
