@@ -182,6 +182,20 @@ def test_graph_condition_filter_removes_a_table():  # j
     assert state.query.years == [2023]
 
 
+def test_graph_relaxes_a_condition_no_table_meets_and_records_it():  # T2-29 D1·D3
+    # no record has a 성 class: the breakdown is dropped, the year stays (C has no 2023), both paths agree
+    old, _, state, _ = _both("2023년 성별 인구", "[1] DT_A 표입니다.", settings=_settings(cond_filter=True))
+    assert state.result == old and not old.no_answer
+    assert state.query.dimensions == ["성"] and state.relaxed == ["dimensions"]
+    assert state.trace["retrieve"]["relaxed"] == ["dimensions"] and set(state.removed) == {"101_DT_C"}
+
+
+def test_graph_still_refuses_a_year_no_table_holds():  # T2-29 D2
+    old, _, state, _ = _both("1990년 인구", "안내", settings=_settings(cond_filter=True), select=None)
+    assert state.result == old and old.no_answer and not old.candidates
+    assert state.route == "refuse" and state.relaxed == [] and len(state.removed) == len(KEYS)
+
+
 def test_graph_keeps_the_whole_pool_and_records_each_node():
     _, _, state, _ = _both("출생아 수", "[1] DT_A 표입니다.")
     assert len(state.docs) == len(KEYS)  # only the answer sees docs[:k]
