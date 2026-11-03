@@ -57,6 +57,33 @@ def predict_no_answer(top_score: float | None, tau: float) -> bool:
     return top_score is None or top_score < tau
 
 
+def llm_no_answer(row: dict) -> bool:
+    """The LLM re-ranker picked nothing. A failed call (stage2_error) is not a verdict: it keeps the stage 1 order."""
+    return row.get("stage2_picked_n") == 0 and not row.get("stage2_error")
+
+
+def no_answer_rules(rows: list[dict]) -> dict:
+    """No-answer P/R/F1 under three rules on rows that carry `no_answer_pred` (tau) and stage 2 fields (T2-09).
+
+    tau: top-1 score below tau · llm: the LLM picked nothing · either: one of the two. Also per gold reason, the
+    recall of each rule (out_of_scope / no_period / no_item), how many answerable items each rule refused, and how
+    often the LLM's reason matched the gold reason on the unanswerable items it refused.
+    """
+    preds = {"tau": lambda r: r["no_answer_pred"], "llm": llm_no_answer,
+             "either": lambda r: r["no_answer_pred"] or llm_no_answer(r)}
+    out: dict = {}
+    for name, pred in preds.items():
+        m = prf([(pred(r), not r["answerable"]) for r in rows])
+        reasons = sorted({r["no_answer_reason"] for r in rows if not r["answerable"]})
+        m["recall_by_reason"] = {g: [sum(1 for r in rows if r["no_answer_reason"] == g and pred(r)),
+                                     sum(1 for r in rows if r["no_answer_reason"] == g)] for g in reasons}
+        out[name] = m
+    refused = [r for r in rows if not r["answerable"] and llm_no_answer(r)]
+    out["llm_reason_match"] = [sum(1 for r in refused if r.get("stage2_reason") == r["no_answer_reason"]), len(refused)]
+    out["llm_errors"] = sum(1 for r in rows if r.get("stage2_error"))
+    return out
+
+
 def prf(pairs: list[tuple[bool, bool]]) -> dict:
     """(predicted no-answer, gold no-answer) pairs -> precision, recall, F1 of the no-answer class."""
     tp = sum(p and g for p, g in pairs)
