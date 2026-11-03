@@ -1,0 +1,963 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KOSIS RAG API",
+    "description": "국가데이터처(KOSIS) 통계표 안내 검색 API.\n\n검색은 LangGraph 노드 `parse → retrieve → [rerank1] → [rerank2] → gate → refuse | guide` 로 돈다.\n- **nodes**: 노드 하나씩 부른다. 요청·응답 모두 `SearchState`라 앞 노드의 응답을 다음 노드에 그대로 보낸다.\n- **search**: 전체 그래프를 한 번에 (`/search` JSON, `/search/stream` SSE 노드 이벤트).\n\n표 ID·출처는 서버의 통계표 레지스트리에서만 나온다. 맞는 표가 없으면 거절 답(`no_answer=true`)을 준다.",
+    "version": "0.2.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "ops"
+        ],
+        "summary": "서버 상태",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health Health Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes": {
+      "get": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "켜진 노드 목록",
+        "operationId": "list_nodes_nodes_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/parse": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "질의 조건 파싱",
+        "description": "질문에서 연도·주기·지역·세는 대상 등 검색 조건을 규칙으로 읽어 `query`를 쓴다. LLM 호출 없음.",
+        "operationId": "node_parse_nodes_parse_post",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ParseRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/retrieve": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "하이브리드 검색",
+        "description": "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25를 RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다.",
+        "operationId": "node_retrieve",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchState"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/rerank1": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "1차 리랭커 (cross-encoder)",
+        "description": "상위 rerank_n을 cross-encoder 점수로 다시 정렬한다. 꺼져 있으면 409.",
+        "operationId": "node_rerank1",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchState"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/rerank2": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "2차 리랭커 (LLM)",
+        "description": "LLM이 상위 stage2_k 중에서 고른다. 아무것도 안 고르면 gate가 거절한다. 꺼져 있으면 409.",
+        "operationId": "node_rerank2",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchState"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/gate": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "거절 판정",
+        "description": "상위 k로 `refuse` / `guide`를 정해 `route`·`refusal_reason`을 쓴다.",
+        "operationId": "node_gate",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchState"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/nodes/answer": {
+      "post": {
+        "tags": [
+          "nodes"
+        ],
+        "summary": "답변 (거절 또는 안내)",
+        "description": "gate가 쓴 `route`로 refuse(코드 문장, LLM 없음) 또는 guide(LLM 안내 + 코드 검증·출처)를 실행해 `result`를 쓴다. route가 없거나, guide인데 docs가 비면 422.",
+        "operationId": "node_answer_nodes_answer_post",
+        "parameters": [
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
+              "default": 5,
+              "title": "K"
+            },
+            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchState"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "검색 + 답변 (JSON)",
+        "description": "전체 그래프를 돌려 `SearchResult`(후보 표·답변·출처)를 돌려준다. 노드별 지연은 응답 뒤 기록한다.",
+        "operationId": "search_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchArgs"
+              },
+              "example": {
+                "question": "2023년 시도별 출생아 수",
+                "k": 5
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search/stream": {
+      "post": {
+        "tags": [
+          "search"
+        ],
+        "summary": "검색 + 답변 (SSE 노드 이벤트)",
+        "description": "노드가 끝날 때마다 `event: <노드 이름>` (data = 그 노드의 trace: seconds 등)을 보내고,\n마지막에 `event: result` (data = `SearchResult`, `/search`와 같은 값)를 보낸다.\n\n예: `curl -N -X POST localhost:8000/search/stream -H 'content-type: application/json' -d '{\"question\": \"...\"}'`",
+        "operationId": "search_stream_search_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchArgs"
+              },
+              "example": {
+                "question": "2023년 시도별 출생아 수",
+                "k": 5
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "retry": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Document": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          },
+          "page_content": {
+            "type": "string",
+            "title": "Page Content"
+          },
+          "type": {
+            "type": "string",
+            "const": "Document",
+            "title": "Type",
+            "default": "Document"
+          }
+        },
+        "type": "object",
+        "required": [
+          "page_content"
+        ],
+        "title": "Document",
+        "description": "Class for storing a piece of text and associated metadata.\n\n!!! note\n\n    `Document` is for **retrieval workflows**, not chat I/O. For sending text\n    to an LLM in a conversation, use message types from `langchain.messages`.\n\nExample:\n    ```python\n    from langchain_core.documents import Document\n\n    document = Document(\n        page_content=\"Hello, world!\", metadata={\"source\": \"https://example.com\"}\n    )\n    ```"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "NodeList": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Nodes",
+            "description": "이 서버에서 켜진 노드, 실행 순서. answer는 gate의 route에 따라 refuse 또는 guide"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes"
+        ],
+        "title": "NodeList"
+      },
+      "ParseRequest": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question",
+            "description": "사용자 질문 (한국어)",
+            "examples": [
+              "2023년 시도별 출생아 수"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "ParseRequest"
+      },
+      "ParsedQuery": {
+        "properties": {
+          "years": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Years"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Start"
+          },
+          "period_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period End"
+          },
+          "cycle": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "Y",
+                  "Q",
+                  "M",
+                  "F"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle"
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "recent": {
+            "type": "boolean",
+            "title": "Recent",
+            "default": false
+          },
+          "dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dimensions"
+          },
+          "measures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Measures"
+          }
+        },
+        "type": "object",
+        "title": "ParsedQuery",
+        "description": "What the rules found in the question; empty fields mean the question did not say."
+      },
+      "SearchArgs": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question",
+            "description": "User question in Korean"
+          },
+          "k": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "K",
+            "description": "Number of candidate tables",
+            "default": 5
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "SearchArgs",
+        "description": "Tool input for search_tables / answer_table_question."
+      },
+      "SearchResult": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/TableCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "no_answer": {
+            "type": "boolean",
+            "title": "No Answer",
+            "default": false
+          },
+          "no_answer_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Answer Reason"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "answer_origin": {
+            "type": "string",
+            "title": "Answer Origin"
+          },
+          "llm_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "answer",
+          "answer_origin"
+        ],
+        "title": "SearchResult",
+        "description": "Return value of answer_table_question: candidates, the sentence, and how the sentence was made."
+      },
+      "SearchState": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParsedQuery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "removed": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Removed"
+          },
+          "relaxed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relaxed"
+          },
+          "docs": {
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            },
+            "type": "array",
+            "title": "Docs"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "refuse",
+                  "guide"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Reason"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trace": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Trace"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "SearchState",
+        "description": "What the nodes share. Every field has one writer, except docs (overwritten by each search stage) and trace."
+      },
+      "TableCandidate": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "org_id": {
+            "type": "string",
+            "title": "Org Id"
+          },
+          "tbl_id": {
+            "type": "string",
+            "title": "Tbl Id"
+          },
+          "table_name": {
+            "type": "string",
+            "title": "Table Name"
+          },
+          "survey_name": {
+            "type": "string",
+            "title": "Survey Name"
+          },
+          "organization": {
+            "type": "string",
+            "title": "Organization"
+          },
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "org_id",
+          "tbl_id",
+          "table_name",
+          "survey_name",
+          "organization",
+          "period",
+          "url"
+        ],
+        "title": "TableCandidate",
+        "description": "One table proposed for a question. tbl_id is kept from load to answer so Hit@k can be graded on it."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "nodes",
+      "description": "검색 그래프의 노드 하나를 실행한다 (무상태: SearchState in → SearchState out)."
+    },
+    {
+      "name": "search",
+      "description": "검색 그래프 전체 실행. 응답 뒤 노드별 지연을 `logs/api/`에 기록한다."
+    },
+    {
+      "name": "ops",
+      "description": "상태 확인."
+    }
+  ]
+}
