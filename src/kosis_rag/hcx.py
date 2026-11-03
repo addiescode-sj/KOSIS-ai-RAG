@@ -135,7 +135,28 @@ class HcxSelector:
         self.client = self.client or self._client()
         result = self.client.generate(SYSTEM, user_message(question, [self.text_of[k] for k in keys]))
         if result.status != STATUS_OK:
-            raise RuntimeError(f"HCX-007 call failed ({result.status}): {result.error}")
+            raise RuntimeError(f"{getattr(self.client, 'model', MODEL)} call failed ({result.status}): {result.error}")
         picked, reason = parse(result.text, len(keys))
         return HcxResult(keys=[keys[i - 1] for i in picked], calls=result.attempts, usage=dict(result.usage or {}),
                          reason=reason)
+
+
+@dataclass
+class OpenAIClient:
+    """Same generate() contract as HCXClient, over OpenAI chat completions: the same prompt and parser with another
+    model (T2-09 lab: HCX-007 vs gpt-4o-mini). OPENAI_API_KEY comes from this repo's .env; the SDK retries 429/5xx."""
+
+    model: str = "gpt-4o-mini"
+
+    def generate(self, system: str, user: str) -> Any:
+        from types import SimpleNamespace
+
+        from dotenv import load_dotenv
+        from openai import OpenAI
+
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+        r = OpenAI(max_retries=5).chat.completions.create(
+            model=self.model, temperature=0.0, max_tokens=MAX_TOKENS["none"], response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return SimpleNamespace(status=STATUS_OK, text=r.choices[0].message.content or "", attempts=1, error=None,
+                               usage={"input_tokens": r.usage.prompt_tokens, "output_tokens": r.usage.completion_tokens})
