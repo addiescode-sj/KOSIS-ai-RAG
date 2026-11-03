@@ -46,6 +46,28 @@ uv run python scripts/phase1.py grade_run --run eval/results/<run>
 docker compose up -d --build
 ```
 
+### 챗봇 데모를 내 컴퓨터에서 (docker compose, T2-11)
+
+```bash
+docker compose up -d --build --wait      # chroma :8001 · backend :8000 (/docs Swagger) · frontend :3000
+curl -s localhost:8000/nodes             # 예열: 첫 호출이 KURE-v1을 받고 검색 자원을 읽는다 (hf-cache 볼륨에 남음)
+open http://localhost:3000
+```
+
+- 검색 컬렉션은 `.env`의 `CHROMA_COLLECTION`. 내 `chroma-data` 볼륨에 없으면 `/search`·챗봇이 503을 낸다 → 아래 "색인" 중 하나로 적재.
+  공용 Chroma를 쓰려면 `.env`에 `COMPOSE_CHROMA_HOST` / `COMPOSE_CHROMA_PORT`를 넣는다(compose 안 backend의 접속 주소).
+- 1차 리랭커(`RERANK_CKPT`)·미세조정 임베딩(`EMBED_CKPT`)은 `data/models/` 아래 경로여야 컨테이너에서 보인다. 안내 문장은 `HCX_API_KEY`가 없으면 코드 템플릿으로 대체된다(거절·출처는 같음).
+- 프론트만 고칠 때: backend를 compose로 띄우고 `cd frontend && npm run dev` (`BACKEND_URL` 기본 `http://localhost:8000`).
+
+**색인 (빈 볼륨일 때)**: GPU가 없으면 Colab에서 임베딩만 계산해 받는다 —
+[`notebooks/colab_index.ipynb`](notebooks/colab_index.ipynb)을 T4 GPU 런타임에서 실행(`data/tables.jsonl` 업로드 → `kure_build.npz` 다운로드), 그다음
+
+```bash
+PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src uv run python -m kosis_rag.index --import ~/Downloads/kure_build.npz
+```
+
+출력된 `CHROMA_COLLECTION=...`을 `.env`에 넣고 `docker compose up -d backend`. 내 컴퓨터에서 바로 하려면 `--import` 대신 `python -m kosis_rag.index`.
+
 실전 1 코드 갱신: `git submodule update --remote vendor/phase1` 후 커밋.
 
 ## 평가: 검색 → 답변 종단 간 (e2e)

@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterator, Literal
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
@@ -141,11 +142,17 @@ def make_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *,
     def guide(state: SearchState) -> dict:
         """Build the guide answer on the top k.
 
-        In: state.question, state.docs. Out: {"result": SearchResult, "trace"}.
+        In: state.question, state.docs. Out: {"result": SearchResult, "trace"}; under graph.stream with "custom" mode
+            also {"delta": text} pieces of the reply that already pass the check (chain.streamable_prefix, T2-38).
         Side effects: one guide LLM call (failures come back as a status, then the code template). Node: guide.
         """
         started = time.perf_counter()
-        result = chain.guide_answer(state.question, state.docs[:k], client)
+        try:  # graph.stream(stream_mode=[..., "custom"]) receives the pieces; invoke ignores them
+            writer = get_stream_writer()
+        except RuntimeError:  # run outside a graph (the node API's /nodes/answer)
+            writer = None
+        on_text = (lambda piece: writer({"delta": piece})) if writer else None
+        result = chain.guide_answer(state.question, state.docs[:k], client, on_text=on_text)
         return {"result": result, "trace": timed("guide", state, started, origin=result.answer_origin)}
 
     nodes: dict[str, Node] = {"parse": parse, "retrieve": retrieve}
@@ -201,12 +208,16 @@ def stream_search(graph, question: str, config: dict | None = None) -> Iterator[
 
     In: as run_search.
     Out: ("<node>", that node's own trace entry) per finished node in run order (trace is cumulative, so only the
-        node's key is sent), then ("result", the final SearchState) — the same state run_search returns.
+        node's key is sent), ("token", {"delta": text}) while guide streams its checked reply (T2-38), then
+        ("result", the final SearchState) — the same state run_search returns.
     Side effects: as run_search. Node: none (it runs them).
     """
     final: dict = {}
-    for mode, chunk in graph.stream({"question": question}, config=config, stream_mode=["updates", "values"]):
-        if mode == "updates":
+    for mode, chunk in graph.stream({"question": question}, config=config,
+                                    stream_mode=["updates", "values", "custom"]):
+        if mode == "custom":
+            yield "token", chunk
+        elif mode == "updates":
             for name, update in chunk.items():
                 yield name, update["trace"][name]
         else:
