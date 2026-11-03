@@ -298,15 +298,41 @@ def trace_link(ui: str | None, trace_id: str | None) -> str:
 def timeline(r: dict) -> str:
     """The question's span path as chips: ✕ = error span, bold = the span blamed for the failure."""
     blamed = (r.get("failure") or {}).get("span")
-    chips = [("retrieve", "ok" if r.get("right_table", True) else "error", None)] if "right_table" in r else []
-    chips.append(("summarize_stat", "error" if blamed == "tool.summarize_stat" else "ok", None))
-    chips += [(s["name"], s["status"], s["duration_ms"]) for s in r.get("spans") or []]
+    if nodes := r.get("search_spans"):  # LangGraph search (T2-36): one chip per node
+        chips = [(s["name"], s["status"], s["duration_ms"]) for s in nodes]
+    else:
+        chips = [("retrieve", "ok" if r.get("right_table", True) else "error", None)] if "right_table" in r else []
+    if "verdict" in r:  # L3 / e2e: the tool and its Phase 1 spans
+        chips.append(("summarize_stat", "error" if blamed == "tool.summarize_stat" else "ok", None))
+        chips += [(s["name"], s["status"], s["duration_ms"]) for s in r.get("spans") or []]
     out = []
     for name, status, ms in chips:
         cls = "chip" + (" err" if status == "error" else "") + (" blame" if name in (blamed, f"tool.{name}") else "")
         out.append(f'<span class="{cls}" title="{esc(name)} · {esc(status)}{"" if ms is None else f" · {ms:.0f} ms"}">'
                    f'{"✕ " if status == "error" else ""}{esc(name)}</span>')
     return "".join(out)
+
+
+def search_failures_body(m: dict, rows: list[dict]) -> str:
+    """L1 over the LangGraph search: misses per node (evals.trace.blame_search) and, per miss, the node path."""
+    counts = m["summary"].get("search_failures")
+    if counts is None:
+        return ""
+    ui = (m.get("jaeger") or {}).get("ui")
+    failed = [r for r in rows if r.get("failure")]
+    nodes = sorted(counts, key=counts.get, reverse=True)
+    chart = hbars(nodes, [counts[n] for n in nodes]) if nodes else '<p class="note">실패 없음</p>'
+    body = "".join(
+        f'<tr><td>{esc(r["qid"])}</td><td>{esc(r.get("question", ""))}</td><td>{esc(r["qtype"])}</td>'
+        f'<td><b>{esc(r["failure"]["label"])}</b><div class="tools">{esc(r["failure"]["span"] or "-")}</div></td>'
+        f'<td>{esc(r["failure"]["reason"])}</td><td>{timeline(r)}</td><td>{trace_link(ui, r.get("trace_id"))}</td></tr>'
+        for r in failed)
+    table = (f'<table><tr><th>qid</th><th>질문</th><th>qtype</th><th>실패 · 노드</th><th>사유</th><th>노드 경로</th><th>Jaeger</th></tr>{body}</table>'
+             if failed else '<p class="note">실패 문항 없음</p>')
+    return "".join([
+        f'<div class="card"><h2>실패 노드 (LangGraph, {len(failed)}건)</h2>',
+        '<p class="note">Hit@k 놓침은 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 retrieve), 답 없음 오판은 gate. '
+        '굵은 테두리 = 판정한 노드, 마우스를 올리면 지연이 보인다.</p>', chart, table, "</div>"])
 
 
 def failures_body(m: dict, rows: list[dict]) -> str:
@@ -378,7 +404,7 @@ def render(run: Path, questions: dict[str, str] | None = None) -> str:
     return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f"<title>{esc(title)} · {esc(m['stage'])}</title><style>{CSS}</style></head>"
             f'<body><div class="viz-root"><main><h1>{esc(title)} · {esc(m["stage"])}</h1><div class="meta">{meta}</div>'
-            f"{body}{failures_body(m, rows)}{ops_body(m['ops'], rows, history)}{rows_table(layer, rows)}</main></div></body></html>")
+            f"{body}{failures_body(m, rows)}{search_failures_body(m, rows)}{ops_body(m['ops'], rows, history)}{rows_table(layer, rows)}</main></div></body></html>")
 
 
 def questions_of(layer: str) -> dict[str, str]:

@@ -39,7 +39,7 @@ CALC_GOLDEN = DATASETS / "calculation_golden.jsonl"
 POOL = DATASETS / "retrieval_pool.csv"
 METADATA_SAMPLE = DATASETS / "metadata_sample.jsonl"  # L0 accuracy sample, labelled by the evaluation side (§3.3)
 OPS_FIELDS = ("latency_ms", "llm_calls", "input_tokens", "output_tokens", "model", "failed", "retried")
-TRACE_FIELDS = ("spans", "retrieve_ms")
+TRACE_FIELDS = ("spans", "retrieve_ms", "search_spans")
 
 
 def sha256(path: Path) -> str:
@@ -80,6 +80,10 @@ def run_l1(args) -> tuple[list[dict], dict, str]:
     reasons = {i.qid: i.no_answer_reason for i in items if not i.answerable}
     summary = {"tau": tau, "metrics": agg, "no_answer": no_answer, "errors": sum(1 for r in shown if r["error"]),
                "refusal_by_reason": retrieval.refusal_by_reason(shown, reasons)}
+    if any(r["search_spans"] for r in shown):  # a graph search (T2-36): which node each miss is lost at
+        for r in shown:
+            r["failure"] = trace.blame_search(r, by_qid[r["qid"]].gold_keys, args.k)
+        summary["search_failures"] = dict(Counter(r["failure"]["span"] or "-" for r in shown if r["failure"]))
     return shown, summary, l1_report(args, summary)
 
 
@@ -322,6 +326,23 @@ def failure_section(rows: list[dict], exported: bool) -> str:
     return "\n".join(lines) + "\n"
 
 
+def search_failure_section(rows: list[dict], exported: bool) -> str:
+    """L1 graph runs: misses per graph node and one line per miss (evals.trace.blame_search)."""
+    failed = [r for r in rows if r.get("failure")]
+    counts = Counter(r["failure"]["span"] or "-" for r in failed)
+    lines = ["", "## 실패 노드 (LangGraph trace)", "",
+             "- 판정: Hit@k 놓침 → 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 retrieve), 답 없음 오판 → gate (plans/T2-36.md)",
+             "- 노드별: " + (", ".join(f"{k} {v}" for k, v in counts.most_common()) or "실패 없음") + f" (합 {len(failed)})",
+             f"- Jaeger: {'trace 전송함 (' + trace.JAEGER_UI + ')' if exported else 'OTEL_EXPORTER_OTLP_ENDPOINT 미설정, 전송 안 함'}"]
+    if failed:
+        lines += ["", "| qid | qtype | 실패 | 노드 | 사유 | 거친 노드 |", "| --- | --- | --- | --- | --- | --- |"]
+        for r in failed:
+            f = r["failure"]
+            path = " → ".join(s["name"] + ("✕" if s["status"] == "error" else "") for s in r["search_spans"]) or "-"
+            lines.append(f"| {r['qid']} | {r['qtype']} | {f['label']} | {f['span'] or '-'} | {f['reason'].replace('|', '/')} | {path} |")
+    return "\n".join(lines) + "\n"
+
+
 def grade(items: list[CalcItem], answers: list[dict]) -> list[dict]:
     """L3 grading of each answer against the golden table's cells, with the ops fields kept per row."""
     rows = []
@@ -456,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
         summary["failures"] = dict(Counter(r["failure"]["stage"] for r in rows if r["failure"]))
         exported = trace.export(rows, args.layer, args.retriever if args.layer == "e2e" else None)
         report += failure_section(rows, exported)
+    elif "search_failures" in summary:  # L1 over the LangGraph search
+        exported = trace.export(rows, args.layer, args.retriever)
+        report += search_failure_section(rows, exported)
     if owners := owner_section(args.layer, rows, summary):  # right under the title: the first thing a teammate reads
         head, _, rest = report.partition("\n\n")
         report = f"{head}\n\n{owners}{rest}"

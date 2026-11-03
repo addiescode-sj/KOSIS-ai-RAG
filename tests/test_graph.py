@@ -231,9 +231,43 @@ def test_eval_runner_graph_preset_matches_the_old_preset(monkeypatch):
                            required=[["101_DT_A"]])]
     old = runner.run(runner.build("staged-hcx", items, 10), items, 10)
     new = runner.run(runner.build("graph:staged-hcx", items, 10), items, 10)
-    drop = ("latency_ms",)
+    drop = ("latency_ms", "search_spans")
     assert [{k: v for k, v in r.items() if k not in drop} for r in new] == [{k: v for k, v in r.items() if k not in drop} for r in old]
     assert new[0]["keys"] and new[0]["stage2_picked_n"] == 0 and new[0]["stage2_reason"] == "no_item"
+    # T2-36: only the graph run records node spans
+    assert old[0]["search_spans"] == [] and [s["name"] for s in new[0]["search_spans"]][:2] == ["parse", "retrieve"]
+
+
+# --- evals tracing (T2-36): one span per node from the LangGraph callbacks ---
+
+def test_node_spans_record_each_node_once_with_its_output():
+    from evals.trace import NodeSpans
+
+    resources = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS), stage1_score=_stage1,
+                               select=_pick("101_DT_B"))
+    nodes = NodeSpans()
+    state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수", {"callbacks": [nodes]})
+    spans = {s["name"]: s for s in nodes.spans}
+    # inner runs (channel writes, the gate branch, the guide chain and its LLM) carry the node name too: not spans
+    assert [s["name"] for s in nodes.spans] == ["parse", "retrieve", "rerank1", "rerank2", "gate", "guide"]
+    assert spans["rerank2"]["keys"] == [d.metadata["key"] for d in state.docs]  # the last search node = the result
+    assert spans["rerank2"]["keys"][0] == "101_DT_B" and spans["rerank2"]["attributes"]["stage2_picked_n"] == 1
+    assert spans["rerank1"]["keys"][0] == "101_DT_C"  # the stage 1 fake puts DT_C first
+    assert spans["gate"]["attributes"]["route"] == "guide" and "keys" not in spans["gate"]
+    assert all(s["status"] == "ok" and s["duration_ms"] >= 0 for s in nodes.spans)
+    starts = [s["start_ms"] for s in nodes.spans]
+    assert starts == sorted(starts)
+
+
+def test_node_spans_mark_a_failing_node():
+    from evals.trace import NodeSpans
+
+    resources = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS), stage1_score=_boom)
+    nodes = NodeSpans()
+    with pytest.raises(TimeoutError):
+        run_search(build_graph(resources, MockClient()), "출생아 수", {"callbacks": [nodes]})
+    assert [(s["name"], s["status"]) for s in nodes.spans] == [("parse", "ok"), ("retrieve", "ok"), ("rerank1", "error")]
+    assert "TimeoutError" in nodes.spans[-1]["attributes"]["error"]
 
 
 # --- 4. the question is parsed once ---
