@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -43,7 +43,7 @@ PROMPT = ChatPromptTemplate.from_messages([
 
 Route = Literal["refuse", "guide"]
 
-_TBL_ID = re.compile(r"\bDT_[0-9A-Za-z_]+")
+_TBL_ID = re.compile(r"(?<![0-9A-Za-z_])DT_[0-9A-Za-z_]+")  # not \b: Korean letters count as \w ("표DT_X", T2-38)
 _YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 
 
@@ -73,26 +73,36 @@ def clova_chat(settings=None) -> BaseChatModel:
     return ChatClovaX(
         model=settings.model_name, temperature=settings.temperature, max_tokens=settings.max_tokens,
         timeout=settings.timeout_seconds, **({"api_key": key} if key else {}),
+        stream_usage=True,  # off by default for a non-OpenAI base URL: streamed chunks would carry no token usage (T2-38)
     )
 
 
-def llm_runnable(client: LLMClient | BaseChatModel) -> Runnable:
+def llm_runnable(client: LLMClient | BaseChatModel, on_chunk: Callable[[str], None] | None = None) -> Runnable:
     """Wrap a LangChain chat model or a Phase 1 client (mock) as a runnable: prompt messages in, LLMResult out.
 
     Does: lets the guide prompt call either model type the same way.
-    In: client = a LangChain BaseChatModel (ChatClovaX) or a Phase 1 LLMClient (MockClient in tests).
-    Out: a Runnable from a prompt value to an LLMResult (text, status, usage).
-    Side effects: none when built; invoking it calls the model (network for real models). A chat model's exception
-        is caught and returned as status STATUS_API_ERROR; a Phase 1 client reports failures in its own status.
+    In: client = a LangChain BaseChatModel (ChatClovaX) or a Phase 1 LLMClient (MockClient in tests);
+        on_chunk = called with the reply so far after each streamed chunk (T2-38; chat models only).
+    Out: a Runnable from a prompt value to an LLMResult (text, status, usage). A chat model is streamed and its
+        chunks summed (text and usage_metadata); a model that cannot stream gives one chunk.
+    Side effects: none when built; invoking it calls the model (network for real models). A chat model's exception,
+        also one in the middle of the stream, is caught and returned as status STATUS_API_ERROR; a Phase 1 client
+        reports failures in its own status (it gets no on_chunk calls).
     Node: guide (through guide_answer).
     """
 
     if isinstance(client, BaseChatModel):
         def chat(prompt_value) -> LLMResult:
+            msg = None
             try:
-                msg = client.invoke(prompt_value)
+                for chunk in client.stream(prompt_value):
+                    msg = chunk if msg is None else msg + chunk
+                    if on_chunk is not None:
+                        on_chunk(msg.content)
             except Exception as e:  # keep the Phase 1 contract: a failed call is a status, not a raise
                 return LLMResult(text="", status=STATUS_API_ERROR, error=f"{type(e).__name__}: {e}")
+            if msg is None:
+                return LLMResult(text="", status=STATUS_API_ERROR, error="empty stream")
             return LLMResult(text=msg.content, usage=dict(msg.usage_metadata or {}))
 
         return RunnableLambda(chat, name=f"chat_model:{client.get_name()}")
@@ -120,6 +130,26 @@ def unsupported_claims(text: str, question: str, candidates: list[TableCandidate
     ids = [t for t in _TBL_ID.findall(text) if t not in {c.tbl_id for c in candidates}]
     years = [y for y in _YEAR.findall(text) if y not in asked and not any(lo <= int(y) <= hi for lo, hi in ranges)]
     return ids + years
+
+
+def streamable_prefix(text: str, question: str, candidates: list[TableCandidate]) -> str | None:
+    """The part of a reply still being written that may already be shown (T2-38).
+
+    Does: lets the guide stream only what would pass the final check, so no invented id or year is ever on screen.
+    In: text = the reply so far; question, candidates = as unsupported_claims.
+    Out: the text up to its last whitespace (a cut word such as "DT_1B0" or "202" waits); "" while the reply may
+        still be NO_MATCH (also "NO_MATCH\n"); None once that part names an unsupported id or year — the reply will
+        fall back to the template, so nothing more is sent. Ids and years end at whitespace, so a claim found in a
+        prefix is found in the whole reply: None stays None as the text grows.
+    Side effects: none.
+    Node: guide (through guide_answer).
+    """
+    head = text.lstrip()
+    if NO_MATCH.startswith(head) or head.startswith(NO_MATCH):
+        return ""
+    words = re.match(r"[\s\S]*\s", text)
+    prefix = words.group(0) if words else ""
+    return None if unsupported_claims(prefix, question, candidates) else prefix
 
 
 def template_answer(candidates: list[TableCandidate]) -> str:
@@ -181,11 +211,13 @@ def refusal_answer(question: str, docs: list[Document], reason: str | None) -> S
                         no_answer_reason=reason, answer=REFUSALS.get(reason, REFUSAL_TEXT), answer_origin="refusal")
 
 
-def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseChatModel) -> SearchResult:
+def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseChatModel,
+                 on_text: Callable[[str], None] | None = None) -> SearchResult:
     """The guide answer: the LLM explains which candidate tables fit, code verifies it and adds the citations.
 
     In: question = the user question; docs = the tables shown (cut to k, not empty), in rank order;
-        client = the guide LLM (ChatClovaX or a Phase 1 client).
+        client = the guide LLM (ChatClovaX or a Phase 1 client); on_text = called with each newly showable piece
+        of the reply while it streams (streamable_prefix; T2-38), never with text the final check would reject.
     Out: SearchResult with the candidates. The LLM's NO_MATCH is a refusal (REFUSAL_TEXT); a failed call, an empty
         reply or a reply naming an id/year outside the candidates falls back to template_answer
         (answer_origin="template"); otherwise answer_origin="llm". Citations are appended by code.
@@ -193,8 +225,20 @@ def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseCh
     Node: guide.
     """
     candidates = [to_candidate(d) for d in docs]
-    # 1. ask the LLM for a guide sentence over the candidates
-    result: LLMResult = (PROMPT | llm_runnable(client)).invoke(
+    sent = ""
+    stopped = False
+
+    def on_chunk(so_far: str) -> None:
+        nonlocal sent, stopped
+        prefix = None if stopped else streamable_prefix(so_far, question, candidates)
+        if prefix is None:
+            stopped = True
+        elif len(prefix) > len(sent):
+            on_text(prefix[len(sent):])
+            sent = prefix
+
+    # 1. ask the LLM for a guide sentence over the candidates (streamed piece by piece when on_text is given)
+    result: LLMResult = (PROMPT | llm_runnable(client, on_chunk if on_text else None)).invoke(
         {"question": question, "context": format_context(candidates)}, config={"run_name": "table_guide_chain"}
     )
     text = result.text.strip()
