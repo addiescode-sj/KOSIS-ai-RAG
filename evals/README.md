@@ -14,6 +14,24 @@ uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5        
 uv run python -m evals.run_eval --layer e2e --retriever bm25-record --stage <이름> --interval 5 # 검색 1위 표 → summarize_stat
 ```
 
+### L3·L4 골든 파일 (T2-31)
+
+| 파일 | 만드는 명령 | 내용 |
+|---|---|---|
+| `calculation_golden.jsonl` | `python -m evals.builders.phase1` | 실전 1 골든 90문항, 10표. clarify·default·causal 같은 어려운 유형 |
+| `calculation_golden_diverse.jsonl` | `python -m evals.builders.diverse --rewrites evals/datasets/calculation_diverse_rewrites.jsonl` | 14개 조사, 72표, 264문항 (`D-` qid). value·compare·trend·거절 |
+
+기본값은 실전 1 파일만 읽는다. 둘 다 쓰려면 `--calc-golden`에 두 파일을 함께 넘긴다.
+
+```bash
+uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5 \
+  --calc-golden evals/datasets/calculation_golden.jsonl evals/datasets/calculation_golden_diverse.jsonl
+```
+
+diverse 문항의 숫자는 빌더가 Parquet 셀에서 직접 뽑는다. 질문 문장은 사람(또는 Claude)이 다시 쓰는데,
+`check_question`이 연도·라벨·항목명이 남아 있고 다른 숫자가 없는지 확인한 뒤에만 반영한다. 통과하지 못하면 템플릿 문장을 그대로 쓴다.
+`calculation_diverse_review_sample.csv`(5문항마다 1개)의 `ok`·`note` 열은 사람이 검수할 때 채운다.
+
 실패 단계 추적(`failure`, Jaeger 내보내기)은 `l3`·`e2e`에만 붙는다. `l0`·`l1`·`l2`·`ablation` 행에는 판정·span이 없다.
 
 결과는 `evals/reports/<시각>-<stage>/`에 저장된다. 이 폴더에는 질문 원문이 들어 있어 git에 올리지 않는다.

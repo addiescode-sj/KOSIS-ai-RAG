@@ -4,6 +4,7 @@
     python -m evals.run_eval --layer l1 --retriever oracle --stage selfcheck          # Hit@1 must be 100%
     python -m evals.run_eval --layer l3 --stage T1-27-regrade --from-run <run folder>  # re-grade, no model call
     python -m evals.run_eval --layer l3 --stage p2-l3 --interval 5                     # calls HCX per question
+    python -m evals.run_eval --layer l3 --stage T2-31 --calc-golden evals/datasets/calculation_golden.jsonl evals/datasets/calculation_golden_diverse.jsonl
     python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e --interval 5   # search top 1 -> L3
     python -m evals.run_eval --layer l0 --stage T2-28-l0                               # metadata fill rates, no search
     python -m evals.run_eval --layer l2 --stage T2-28-l2 --split dev                   # parse_query vs query_golden
@@ -23,6 +24,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import os
 import subprocess
 import time
 from collections import Counter, defaultdict
@@ -283,10 +285,27 @@ def verdict_table(rows: list[dict]) -> tuple[dict, Counter, list[str]]:
     return {k: dict(v) for k, v in by_kind.items()}, errors, lines
 
 
+def calc_items(paths: list[Path]) -> list[CalcItem]:
+    """L3/L4 items from one or more golden files (Phase 1 file, T2-31 diverse file); qids must not repeat."""
+    items = [i for p in paths for i in load_jsonl(p, CalcItem)]
+    qids = Counter(i.qid for i in items)
+    if dupes := [q for q, n in qids.items() if n > 1]:
+        raise SystemExit(f"duplicate qids across {[str(p) for p in paths]}: {dupes[:5]}")
+    return items
+
+
+def calc_ref(paths: list[Path]) -> dict:
+    """One golden ref for report_html: one file as is, several as joined paths and a hash over their hashes."""
+    shas = [sha256(p) for p in paths]
+    return {"path": " + ".join(os.path.relpath(p.resolve(), ROOT) for p in paths),
+            "sha256": shas[0] if len(shas) == 1 else hashlib.sha256("".join(shas).encode()).hexdigest(),
+            **({"files": dict(zip((p.name for p in paths), shas))} if len(paths) > 1 else {})}
+
+
 def run_l3(args) -> tuple[list[dict], dict, str]:
     from evals.runners import stat as runner
 
-    items: list[CalcItem] = load_jsonl(CALC_GOLDEN, CalcItem)
+    items: list[CalcItem] = calc_items(args.calc_golden)
     answers = runner.read_run(args.from_run, items) if args.from_run else runner.run(items, args.interval)
     rows = grade(items, answers)
     verdicts, errors, lines = verdict_table(rows)
@@ -307,7 +326,7 @@ def run_e2e(args) -> tuple[list[dict], dict, str]:
 
     if args.retriever == "oracle":
         raise SystemExit("e2e with the oracle retriever is L3: run --layer l3 instead")
-    items: list[CalcItem] = load_jsonl(CALC_GOLDEN, CalcItem)
+    items: list[CalcItem] = calc_items(args.calc_golden)
     raw = e2e.run(runner.build(args.retriever, [], args.k), items, args.k, args.interval)
     rows = [{**g, **e2e.locate(item, a, g["verdict"]), "error": a["error"]}
             for item, a, g in zip(items, raw, grade(items, raw))]
@@ -342,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
     parser.add_argument("--slot-source", choices=("gold", "pred"), default="pred", help="ablation: query_golden labels or parse_query")
     parser.add_argument("--slots", default="year,cycle,region,dimension,measure", help="ablation: slots to switch")
+    parser.add_argument("--calc-golden", type=Path, nargs="+", default=[CALC_GOLDEN],
+                        help="l3, e2e: golden files, e.g. calculation_golden.jsonl calculation_golden_diverse.jsonl")
     parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
     args = parser.parse_args(argv)
     args.split = args.split or ("dev" if args.layer == "l012" else "test")
@@ -367,11 +388,12 @@ def main(argv: list[str] | None = None) -> int:
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
     ref = lambda path: {"path": str(path.relative_to(ROOT)), "sha256": sha256(path)}  # noqa: E731
-    golden = {"l2": QUERY_GOLDEN, "l3": CALC_GOLDEN, "e2e": CALC_GOLDEN}.get(args.layer, GOLDEN)
+    golden = {"l2": QUERY_GOLDEN}.get(args.layer, GOLDEN)
     slotted = args.layer in ("ablation", "l012")
     manifest = {
         "run_id": run_id, "layer": args.layer, "stage": args.stage, "split": args.split,
-        "golden": {"l0·l1": ref(GOLDEN), "l2": ref(QUERY_GOLDEN)} if args.layer == "l012" else ref(golden),
+        "golden": {"l0·l1": ref(GOLDEN), "l2": ref(QUERY_GOLDEN)} if args.layer == "l012"
+        else calc_ref(args.calc_golden) if args.layer in ("l3", "e2e") else ref(golden),
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),
         "vendor_phase1": git("-C", "vendor/phase1", "rev-parse", "HEAD"),
