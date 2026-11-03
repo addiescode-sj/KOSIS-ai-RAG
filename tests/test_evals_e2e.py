@@ -54,7 +54,7 @@ def test_top1_table_is_used_and_located(monkeypatch):
     right = e2e.run(Fixed(keys=["101_DT_GOLD"]), [item()], k=10)[0]
     assert e2e.locate(item(), right, "FAIL") | {"top_keys": None} == {
         "used_table": "101_DT_GOLD", "right_table": True, "right_alternate": False, "l1_linked": False, "gold_rank": 1,
-        "top_keys": None, "cause": "answer"}
+        "top_keys": None, "gold_keys": ["101_DT_GOLD"], "cause": "answer"}
     # §6.3: with the L1 item of the same qid, an alternate key of its slot is the right table too
     l1 = RetrievalItem(qid="c1", split="test", qtype="sibling", source="v2", question="q",
                        required=[["101_DT_GOLD", "101_DT_OTHER"]])

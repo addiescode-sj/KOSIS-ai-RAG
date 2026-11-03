@@ -20,6 +20,7 @@ from kosis_rag.schemas import TableRecord
 
 from evals.ops import UsageCallback
 from evals.schemas import TABLES, RetrievalItem
+from evals.trace import NodeSpans
 
 
 class OracleRetriever(BaseRetriever):
@@ -114,11 +115,11 @@ def build(name: str, items: list[RetrievalItem], k: int) -> Runnable:
 def run(retriever: BaseRetriever, items: list[RetrievalItem], k: int) -> list[dict]:
     rows = []
     for item in items:
-        counter = UsageCallback()
+        counter, nodes = UsageCallback(), NodeSpans()
         started = time.perf_counter()
         error = None
         try:
-            docs = retriever.invoke(item.question, config={"callbacks": [counter]})[:k]
+            docs = retriever.invoke(item.question, config={"callbacks": [counter, nodes]})[:k]
         except Exception as exc:  # a failing question is recorded, the run goes on
             docs, error = [], f"{type(exc).__name__}: {exc}"
         meta = docs[0].metadata if docs else {}
@@ -138,5 +139,6 @@ def run(retriever: BaseRetriever, items: list[RetrievalItem], k: int) -> list[di
             "failed": error is not None,
             "retried": False,  # retrievers here do not retry; a retrying one reports it through its own metadata
             "error": error,
+            "search_spans": nodes.spans,  # graph nodes (T2-36); empty for a retriever that is not a graph
         })
     return rows
