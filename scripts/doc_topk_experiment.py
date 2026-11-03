@@ -2,6 +2,7 @@
 
     PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python scripts/doc_topk_experiment.py topk     # Chroma build + BM25 + RRF, k curve
     ... python scripts/doc_topk_experiment.py fields   # one field group dropped at a time (in-memory KURE-v1)
+    ... python scripts/doc_topk_experiment.py regions  # region names put back (시도, 시군구, region labels), dev and test
     ... python scripts/doc_topk_experiment.py chunk    # search_text chunks of the long tables, max-pool and RRF
     ... python scripts/doc_topk_experiment.py confirm --drop <field|none> --chunk <name|none>   # adopted set on test
 
@@ -17,15 +18,18 @@ import argparse
 import hashlib
 import json
 import time
+from functools import cache
 from pathlib import Path
 
 import numpy as np
 
 from evals.evaluators.retrieval import best_tau, first_rank, predict_no_answer, prf
 from evals.schemas import RetrievalItem, load_items
-from kosis_rag.index import EMBED_MODEL, LABEL_CAP, REPO, clean_item, read_records, region_summary, to_document
+from kosis_rag.index import (EMBED_MODEL, LABEL_CAP, REPO, clean_item, read_records, region_summary, sido_names,
+                             to_document)
 from kosis_rag.roles import table_roles
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.vocab import load_sigungu
 
 OUT = REPO / "data" / "doc_topk"
 KS = (1, 2, 3, 5, 10, 15, 20, 30, 50)
@@ -33,17 +37,32 @@ DEPTH = max(KS)
 RRF_C = 60  # same constant as retriever.HybridRetriever
 LONG_CHARS = 2000  # search_text longer than this is cut down in the embedding document
 FIELDS = ("survey", "labels", "items", "measure")  # field groups dropped one at a time
+REGION_ADDS = ("sido", "sigungu", "regionlabels")  # region names put back, one variant each (T2-21 follow-up)
 CHUNKS = {"c500": (500, 50), "c1000": (1000, 100)}  # chunk size, overlap
 SHOW_SLOPE = 0.2  # adopt the first k after which each extra k adds fewer than 0.2 questions (1 per 5)
 
 
-def variant_doc(record: TableRecord, drop: frozenset[str] = frozenset()) -> str:
-    """index.to_document with field groups left out; with nothing dropped it is the loaded document, byte for byte."""
+def sigungu_names(labels: list[str]) -> list[str]:
+    """The 시군구 in a label list (names in data/sigungu.json), each once."""
+    known = _sigungu()
+    return list(dict.fromkeys(label for label in labels if label in known))
+
+
+@cache
+def _sigungu() -> frozenset[str]:
+    return frozenset(load_sigungu())
+
+
+def variant_doc(record: TableRecord, drop: frozenset[str] = frozenset(), add: frozenset[str] = frozenset()) -> str:
+    """index.to_document with field groups left out or region names put back; with neither it is the loaded
+    document, byte for byte. add: "sido" names the 시도 in the region summary (T2-25 trial), "sigungu" also lists
+    the 시군구 names, "regionlabels" lists region labels like the other classes (as before T2-25)."""
     info = record.info
     cleaned = [clean_item(i) for i in record.items]
     items = list(dict.fromkeys(name for name, _ in cleaned))
     units = list(dict.fromkeys(unit for _, unit in cleaned if unit))
-    regions = " / ".join(region_summary(c.levels) for c in record.classes if c.levels) or "지역 구분 없음"
+    sido = {c.name: sido_names(c.labels) for c in record.classes} if add & {"sido", "sigungu"} else {}
+    regions = " / ".join(region_summary(c.levels, sido.get(c.name)) for c in record.classes if c.levels) or "지역 구분 없음"
     measure, _ = table_roles(record)
     counted = f" | 세는 대상: {measure}" if measure and "measure" not in drop else ""
     head_items = "" if "items" in drop else f" | 항목: {', '.join(items[:8])}"
@@ -61,14 +80,22 @@ def variant_doc(record: TableRecord, drop: frozenset[str] = frozenset()) -> str:
         lines.append("단위: " + ", ".join(units))
     for c in record.classes:
         if c.levels:
-            lines.append(f"{c.name}: 지역 단위 {region_summary(c.levels)}")
+            lines.append(f"{c.name}: 지역 단위 {region_summary(c.levels, sido.get(c.name))}")
+            if "sigungu" in add and (names := sigungu_names(c.labels)):
+                lines.append("시군구: " + ", ".join(names))
+            if "regionlabels" in add:
+                lines.append(_listed(c))
         elif "labels" in drop:
             lines.append(c.name)
         else:
-            shown = c.labels[:LABEL_CAP]
-            more = f" 외 {c.n_labels - len(shown)}개" if c.n_labels > len(shown) else ""
-            lines.append(f"{c.name}: " + ", ".join(shown) + more)
+            lines.append(_listed(c))
     return "\n".join(lines)
+
+
+def _listed(c: TableClass) -> str:
+    shown = c.labels[:LABEL_CAP]
+    more = f" 외 {c.n_labels - len(shown)}개" if c.n_labels > len(shown) else ""
+    return f"{c.name}: " + ", ".join(shown) + more
 
 
 def chunk_texts(records: list[TableRecord], size: int, overlap: int) -> tuple[list[str], list[str]]:
@@ -222,6 +249,27 @@ def cmd_fields(records: list[TableRecord], items: list[RetrievalItem]) -> None:
     save("fields", result)
 
 
+def cmd_regions(records: list[TableRecord], items: list[RetrievalItem]) -> None:
+    """Region names put back into the document, one variant each, on dev and test (in-memory KURE-v1)."""
+    model = _model()
+    keys = [r.info.key for r in records]
+    q = embed(model, [i.question for i in items], "questions")
+    qpos = {i.qid: n for n, i in enumerate(items)}
+    result = {}
+    for add in ((), *((a,) for a in REGION_ADDS)):
+        name = "base" if not add else "add-" + add[0]
+        docs = [variant_doc(r, add=frozenset(add)) for r in records]
+        sims = q @ embed(model, docs, f"doc-{name}").T
+        for sp in ("dev", "test"):
+            part = split(items, sp)
+            c = curve(part, {i.qid: rank_keys(sims[qpos[i.qid]], keys) for i in part})
+            c["doc_chars_mean"] = round(sum(map(len, docs)) / len(docs))
+            result[f"{name}/{sp}"] = c
+            print(f"{name:17s} {sp:4s} " + " ".join(f"@{k}:{c[f'hit@{k}']}" for k in (1, 5, 10, 20))
+                  + f"  mrr@10 {c['mrr@10']}  chars {c['doc_chars_mean']}")
+    save("regions", result)
+
+
 def cmd_chunk(records: list[TableRecord], items: list[RetrievalItem]) -> None:
     model = _model()
     keys = [r.info.key for r in records]
@@ -288,7 +336,7 @@ def cmd_confirm(records: list[TableRecord], items: list[RetrievalItem], drop: st
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("cmd", choices=("topk", "fields", "chunk", "confirm"))
+    parser.add_argument("cmd", choices=("topk", "fields", "regions", "chunk", "confirm"))
     parser.add_argument("--drop", default="none", choices=("none", *FIELDS))
     parser.add_argument("--chunk", default="none", choices=("none", *CHUNKS))
     args = parser.parse_args(argv)
@@ -298,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd_topk(records, items)
     elif args.cmd == "fields":
         cmd_fields(records, items)
+    elif args.cmd == "regions":
+        cmd_regions(records, items)
     elif args.cmd == "chunk":
         cmd_chunk(records, items)
     else:
