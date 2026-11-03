@@ -97,7 +97,7 @@ def test_n3_adds_roles_units_and_region_levels():
     sido = ["서울특별시", "부산광역시", "대구광역시"]
     rec = _record("101_DT_B", "시도/성/연령별 혼인건수", classes=[("행정구역별", ["전국", *sido]), ("성별", ["남자", "여자"])],
                   items=["혼인건수 (건)"], levels={"행정구역별": {"전국": 1, "시도": 3}})
-    doc = text.build_doc(rec)  # n3 is the default
+    doc = text.build_doc(rec, "n3-L60")  # deprecated format, still readable
     lines = doc["embed_text"].splitlines()
     assert lines[0] == "통계표: 시도별 성별 연령별 혼인건수"
     assert lines[1] == "세는 대상: 혼인건수" and lines[2] == "분류: 시도·성·연령"
@@ -263,11 +263,20 @@ def test_checkpoint_text_format_is_checked(tmp_path):
 
 
 @offline
+def test_default_text_is_n2_and_n3_is_deprecated():
+    rec = _record("101_DT_B", "시도/성/연령별 혼인건수", classes=[("행정구역별", ["전국", "서울특별시"])],
+                  items=["혼인건수 (건)"], levels={"행정구역별": {"전국": 1, "시도": 1}})
+    assert text.DOC_FORMAT == "n2-L60" and "n3-L60" in text.DEPRECATED and text.DOC_FORMAT not in text.DEPRECATED
+    assert text.build_doc(rec) == text.build_doc(rec, "n2-L60")
+    assert "세는 대상" not in text.build_doc(rec)["embed_text"]
+
+
+@offline
 def test_search_text_format_follows_collection(tmp_path):
     from kosis_rag.pipeline import text_format
 
     dense = ListRetriever(keys=[])
-    assert text_format(SearchSettings(), dense) == "n3-L60"  # no format on the retriever: default
+    assert text_format(SearchSettings(), dense) == "n2-L60"  # no format on the retriever: default
     s_n2 = SearchSettings(text_format="n2-L60")
     assert text_format(s_n2, dense) == "n2-L60"
     built = type("Built", (), {"doc_format": "n2-L60"})()

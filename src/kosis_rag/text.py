@@ -6,10 +6,14 @@ Every rule is a text pattern applied the same way to all tables (no table-specif
 
 - "n2-L60": surface rules from the lab (min `lab/normalize_text.py`, KOS-88): the table name without its region tail
   and trailing brackets, "성/연령별" spelled out, "15세이상" -> "15세 이상", item units dropped, menu path tails, and
-  label lists longer than 60 summarized. The first fine-tunings (plans 29, 43) used it.
-- "n3-L60" (default): n2 plus what the master rules know (T2-27 roles, T2-30 vocab, T2-25 region summary): what the
-  table counts ("세는 대상"), its breakdowns as standard keys ("분류"), its units, and region classes as level counts
-  ("전국·시도(17)·시군구(250)") instead of place names. Place names stay in the BM25 text.
+  label lists longer than 60 summarized. The first fine-tunings (plans 29, 43) used it. Default again since
+  2026-11-03: the search, its weights and the re-ranker use this text (plans/T2-06.md, docs/reports/t2-06-n3-text-dropped.md).
+- "n3-L60" (deprecated 2026-11-03, kept only to read collections and weights built on it): n2 plus what the master
+  rules know (T2-27 roles, T2-30 vocab, T2-25 region summary): what the table counts ("세는 대상"), its breakdowns
+  as standard keys ("분류"), its units, and region classes as level counts instead of place names. Trained and
+  measured against n2 it found the right family as well but picked the wrong sibling more often (the added lines are
+  the same for tables that share a name), so do not build or train on it. The roles / vocab / levels themselves stay:
+  the condition filters (kosis_rag.filters, query) read them from the record, not from this text.
 
     build_doc(record, fmt) -> {"key", "embed_text" (embedding / re-ranker passage), "bm25_text" (full text), "fields"}
     norm_query(question) -> the question with the same surface rules (both formats)
@@ -23,8 +27,9 @@ from typing import Any
 from kosis_rag.schemas import TableRecord
 
 MAX_LABELS = 60  # longer label lists are summarized in the embedding text
-FORMATS = ("n3-L60", "n2-L60")
-DOC_FORMAT = FORMATS[0]  # default for new collections and training
+FORMATS = ("n2-L60", "n3-L60")
+DOC_FORMAT = "n2-L60"  # default for new collections and training
+DEPRECATED = frozenset({"n3-L60"})  # readable, not for new collections or training
 
 GEO = r"(전국|시도|시군구|읍면동|동읍면|행정구역)"
 GEO_TAIL = re.compile(r"\s*(?:-|–|/)\s*" + GEO + r"\s*$")

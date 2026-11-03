@@ -217,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="kure: KURE-v1 over the T2-27 text (default); bge-m3-ft: fine-tuned bge-m3 (T2-06)")
     parser.add_argument("--ckpt", default=None, help="bge-m3-ft: checkpoint .pt or run folder (default: EMBED_CKPT in .env)")
     parser.add_argument("--text-format", default=None,
-                        help="bge-m3-ft: kosis_rag.text format (default: TEXT_FORMAT in .env, else the newest)")
+                        help="bge-m3-ft: kosis_rag.text format (default: TEXT_FORMAT in .env, else n2-L60)")
     parser.add_argument("--collection", default=None,
                         help=f"default: kure {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
                              f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
@@ -239,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
 
         load_dotenv()
         fmt = args.text_format or os.getenv("TEXT_FORMAT") or text.DOC_FORMAT
+        if fmt in text.DEPRECATED:
+            print(f"warning: {fmt} is deprecated (docs/reports/t2-06-n3-text-dropped.md); use {text.DOC_FORMAT}")
         docs = [text.build_doc(r, fmt)["embed_text"] for r in records]
         embedder = model.load_embedder(args.ckpt or os.getenv("EMBED_CKPT"), device=args.device, doc_format=fmt)
         embed, count_tokens, max_tokens = embedder.embed_documents, embedder.count_tokens, model.DOC_TOKENS
