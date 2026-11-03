@@ -204,6 +204,31 @@ def load(client, ids: list[str], docs: list[str], metas: list[dict], embeddings:
     return collection.count()
 
 
+def write_build(path: Path, *, name: str, ids: list[str], docs: list[str], metas: list[dict], vectors: list,
+                record: dict) -> None:
+    """One build as a .npz: vectors as float32, everything else as one JSON string (so reading never unpickles)."""
+    import json
+
+    import numpy as np
+
+    text = json.dumps({"name": name, "ids": ids, "docs": docs, "metas": metas, "record": record}, ensure_ascii=False)
+    np.savez_compressed(path, vectors=np.asarray(vectors, dtype=np.float32), text=np.array(text))
+
+
+def read_build(path: Path) -> dict:
+    """The build write_build wrote: {name, ids, docs, metas, record, vectors (list of lists)}; ValueError if they disagree."""
+    import json
+
+    import numpy as np
+
+    with np.load(path, allow_pickle=False) as f:
+        build = json.loads(str(f["text"]))
+        build["vectors"] = f["vectors"].tolist()
+    if not len(build["ids"]) == len(build["docs"]) == len(build["metas"]) == len(build["vectors"]):
+        raise ValueError(f"{path}: ids, docs, metas and vectors have different lengths")
+    return build
+
+
 def _batches(items: Iterable, size: int):
     items = list(items)
     for i in range(0, len(items), size):
@@ -223,9 +248,22 @@ def main(argv: list[str] | None = None) -> int:
                              f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
     parser.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
     parser.add_argument("--list", action="store_true", help="list the builds on the server and which one is active")
+    parser.add_argument("--export", type=Path, default=None,
+                        help="write the build to this .npz instead of Chroma (e.g. embed on a Colab GPU, T2-11)")
+    parser.add_argument("--import", dest="import_", type=Path, default=None,
+                        help="load a build written by --export into Chroma (no embedding)")
     args = parser.parse_args(argv)
     if args.list:
         return list_builds()
+    if args.import_:
+        from kosis_rag.vectorstore import chroma_client
+
+        build = read_build(args.import_)
+        count = load(chroma_client(), build["ids"], build["docs"], build["metas"], build["vectors"], build["name"],
+                     build["record"])
+        print(f"collection {build['name']}: {count} documents")
+        print(f"to search it, set CHROMA_COLLECTION={build['name']} in .env")
+        return 0 if count == len(build["ids"]) else 1
 
     index_version = datetime.now().strftime("%Y%m%d%H%M")
     data_sha256 = hashlib.sha256(args.tables.read_bytes()).hexdigest()
@@ -261,10 +299,15 @@ def main(argv: list[str] | None = None) -> int:
             vectors[i] = v
     print(f"embedded {len(docs)} documents ({time.perf_counter() - started:.0f}s)")
 
-    from kosis_rag.vectorstore import chroma_client
-
     record = build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
                           sum(t > max_tokens for t in tokens), **info)
+    if args.export:
+        write_build(args.export, name=name, ids=ids, docs=docs, metas=metas, vectors=vectors, record=record)
+        print(f"wrote {args.export}; load it with: python -m kosis_rag.index --import {args.export.name}")
+        return 0
+
+    from kosis_rag.vectorstore import chroma_client
+
     count = load(chroma_client(), ids, docs, metas, vectors, name, record)
     print(f"collection {name}: {count} documents")
     print(f"to search it, set CHROMA_COLLECTION={name} in .env (the previous builds stay; switch back the same way)")

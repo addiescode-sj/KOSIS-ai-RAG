@@ -3,7 +3,8 @@ FROM python:3.12-slim
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+# embed: sentence-transformers for the query embedder (KURE-v1); torch runs on CPU in the container
+RUN uv sync --frozen --no-dev --group embed
 COPY vendor/phase1 vendor/phase1
 COPY src src
 COPY backend backend
