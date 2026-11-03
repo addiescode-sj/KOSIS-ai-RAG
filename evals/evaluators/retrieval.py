@@ -117,3 +117,15 @@ def aggregate(rows: list[dict], by: str = "qtype") -> dict[str, dict]:
         keys = [k for k, v in members[0].items() if isinstance(v, (int, float)) and k != "rank" and not isinstance(v, bool)]
         out[name] = {"n": len(members), **{k: sum(m[k] for m in members if k in m) / len(members) for k in keys}}
     return out
+
+
+def refusal_by_reason(rows: list[dict], reasons: dict[str, str]) -> dict[str, dict]:
+    """§4.3: share of unanswerable questions predicted no-answer, per gold reason (no_period must not regress when
+    filters relax). reasons = {qid: no_answer_reason}; rows carry `no_answer_pred`."""
+    out: dict[str, dict] = {}
+    for r in rows:
+        if r["qid"] in reasons:
+            m = out.setdefault(reasons[r["qid"]], {"n": 0, "refused": 0})
+            m["n"] += 1
+            m["refused"] += int(r["no_answer_pred"])
+    return {k: {**m, "rate": m["refused"] / m["n"]} for k, m in sorted(out.items())}

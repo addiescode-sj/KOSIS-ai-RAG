@@ -12,6 +12,7 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import Runnable, RunnableLambda
 
 from kosis_rag.loader import to_document
 from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
@@ -61,19 +62,52 @@ STAGED = {
 STAGE2_FIELDS = ("stage2_picked_n", "stage2_reason", "stage2_error", "stage2_calls")  # None when no stage 2 ran
 
 
-def build(name: str, items: list[RetrievalItem], k: int) -> BaseRetriever:
+GRAPH = "graph:"  # graph:<STAGED name> = the same settings run through the LangGraph search (T2-10)
+
+
+def _staged_settings(name: str):
+    """SearchSettings for a STAGED preset: .env plus the preset's overrides (empty rerank_ckpt = stage 1 off).
+
+    In: name = a STAGED key. Out: SearchSettings. Side effects: loads .env into the environment.
+    Node: not used by the graph (the runner builds the search with it).
+    """
+    from kosis_rag.pipeline import SearchSettings
+
+    overrides = {key: (value or None) if key == "rerank_ckpt" else value for key, value in STAGED[name].items()}
+    return SearchSettings.from_env(**overrides)
+
+
+def build(name: str, items: list[RetrievalItem], k: int) -> Runnable:
+    """The search the L1 runner calls for a retriever name.
+
+    In: name = oracle | chroma | bm25-catalog | bm25-record | a STAGED preset | graph:<STAGED preset>;
+        items = the golden items (oracle only); k = hits for the simple retrievers.
+    Out: something with .invoke(question, config) -> ranked Documents (metadata["key"] set). graph:<preset> returns
+        the LangGraph search's whole ranked pool, the same documents the preset's nested retrievers return.
+    Side effects: loads tables.jsonl, connects to Chroma and loads models as the preset needs; ValueError for an
+        unknown name. Node: not used by the graph.
+    """
     if name == "oracle":
         return OracleRetriever(gold={i.question: [s[0] for s in i.required] for i in items})
     if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
         return ChromaTableRetriever.connect(k=k)
     if name in STAGED:  # the pipeline keeps its own pool of 50; the runner cuts to k
-        from kosis_rag.pipeline import SearchSettings, build_search
+        from kosis_rag.pipeline import build_search
 
-        overrides = {key: (value or None) if key == "rerank_ckpt" else value for key, value in STAGED[name].items()}
-        return build_search(SearchSettings.from_env(**overrides))
+        return build_search(_staged_settings(name))
+    if name.startswith(GRAPH) and name[len(GRAPH):] in STAGED:
+        # The graph's ranked pool (state.docs), uncut, with the run config (callbacks) passed through. The guide node
+        # gets Phase 1 MockClient: no model call, so L1 counts the same calls and tokens as the retriever above.
+        from kosis_chat.llm.model import MockClient
+        from kosis_rag.graph import build_graph, run_search
+        from kosis_rag.pipeline import load_resources
+
+        graph = build_graph(load_resources(_staged_settings(name[len(GRAPH):])), MockClient())
+        return RunnableLambda(lambda question, config: run_search(graph, question, config).docs, name=name)
     retrievers = bm25_retrievers(load_records(), k)
     if name not in retrievers:
-        raise ValueError(f"unknown retriever {name!r}; known: oracle, chroma, {', '.join([*retrievers, *STAGED])}")
+        known = [*retrievers, *STAGED, *(GRAPH + n for n in STAGED)]
+        raise ValueError(f"unknown retriever {name!r}; known: oracle, chroma, {', '.join(known)}")
     return retrievers[name]
 
 

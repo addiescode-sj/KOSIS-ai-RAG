@@ -14,6 +14,42 @@ uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5        
 uv run python -m evals.run_eval --layer e2e --retriever bm25-record --stage <이름> --interval 5 # 검색 1위 표 → summarize_stat
 ```
 
+### L3·L4 골든 파일 (T2-31)
+
+| 파일 | 만드는 명령 | 내용 |
+|---|---|---|
+| `calculation_golden.jsonl` | `python -m evals.builders.phase1` | 실전 1 골든 90문항, 10표. clarify·default·causal 같은 어려운 유형 |
+| `calculation_golden_diverse.jsonl` | `python -m evals.builders.diverse --rewrites evals/datasets/calculation_diverse_rewrites.jsonl` | 14개 조사, 72표, 264문항 (`D-` qid). value·compare·trend·거절 |
+
+기본값은 실전 1 파일만 읽는다. 둘 다 쓰려면 `--calc-golden`에 두 파일을 함께 넘긴다.
+
+```bash
+uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5 \
+  --calc-golden evals/datasets/calculation_golden.jsonl evals/datasets/calculation_golden_diverse.jsonl
+```
+
+diverse 문항의 숫자는 빌더가 Parquet 셀에서 직접 뽑는다. 질문 문장은 사람(또는 Claude)이 다시 쓰는데,
+`check_question`이 연도·라벨·항목명이 남아 있고 다른 숫자가 없는지 확인한 뒤에만 반영한다. 통과하지 못하면 템플릿 문장을 그대로 쓴다.
+`calculation_diverse_review_sample.csv`(5문항마다 1개)의 `ok`·`note` 열은 사람이 검수할 때 채운다.
+
+### 골든셋 v2 (T2-32, 전 계층)
+
+표 하나에 질문 하나를 만들고, 같은 qid(`V2-<표 키>`)를 L1·L2·L3에 함께 쓴다. 14개 조사 전체에서 표를 뽑았다. 기본 경로는 v1 그대로이므로 v2를 쓰려면 플래그로 넘긴다.
+
+```bash
+uv run python -m evals.run_eval --layer l1 --retriever bm25-record --stage <이름> \
+  --golden evals/datasets/retrieval_golden_v2.jsonl --pool evals/datasets/retrieval_pool_v2.csv
+uv run python -m evals.run_eval --layer l2 --stage <이름> --split all --query-golden evals/datasets/query_golden_v2.jsonl
+uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5 --calc-golden evals/datasets/calculation_golden_v2.jsonl
+```
+
+다시 만드는 순서는 `python -m evals.builders.golden_v2 draft → pool → finish`다(`golden_v2_texts.jsonl`에 문장을 쓰고, `retrieval_pool_v2.csv`의 `slot`을 채운다).
+
+- 숫자, L2의 기간·연도·지역, 풀의 `rule:*` 행은 코드가 만든다.
+- 질문 문장, measures·dimensions, `auto=claude` 행의 판정은 Claude가 했다.
+- 그래서 v2의 `unjudged@10`은 "Claude도 규칙도 보지 않은 표"의 비율이다.
+- `golden_v2_review_sample.csv`(5문항마다 1개)는 사람이 검수할 표본이다.
+
 실패 단계 추적(`failure`, Jaeger 내보내기)은 `l3`·`e2e`에만 붙는다. `l0`·`l1`·`l2`·`ablation` 행에는 판정·span이 없다.
 
 결과는 `evals/reports/<시각>-<stage>/`에 저장된다. 이 폴더에는 질문 원문이 들어 있어 git에 올리지 않는다.
@@ -108,6 +144,23 @@ L3·e2e 채점기가 붙이는 오류다. 정답 표의 Parquet 셀과 골든 �
 e2e에서는 1위 표가 틀리면 위 오류와 상관없이 1번 규칙(검색 실패)이 먼저 걸린다.
 
 ## 5. 리포트 읽는 법
+
+### 고칠 담당 (T2-34)
+
+`l0`·`l1`·`l2`·`l3`·`e2e` 리포트는 제목 바로 아래에 실패를 담당별로 묶어 보여 준다(문항 ID 5개까지).
+
+| 담당 | 묶이는 실패 |
+|---|---|
+| 데이터 (메타데이터·조건 파서) | L0 정답 표 measure·dimension 미매핑, 적재 키 불일치 / L2 `parse_query` 필드별 오답 |
+| AI — 검색·답 없음 판정 | L1 상위 5에 정답 표 없음, 답 없음 판정 틀림 / L4 검색 1위가 다른 표 |
+| AI — summarize_stat 계산 | L3 정답 표를 주고도 틀림 / L4 정답 표인데 틀림 |
+| AI — summarize_stat 질의 분석 | L4 답의 연도·지역이 L2 정답과 다름 (`StatAnswer.query`) |
+
+기준 문서 §6.3·§4.3·§5에 맞춘 항목:
+- L4 정답 표: `--golden`의 같은 qid L1 문항이 있으면 그 정답 슬롯의 키 전부를 정답으로 본다. 골든 v2만 qid가 이어진다.
+- L4 `{연도}`·`{지역}`: `--query-golden`의 같은 qid L2 라벨과 대조한다.
+- no_period 거절률: L1은 사유별 답 없음 판정률, L4는 `allowed_reasons`에 no_period가 있는 문항의 거절률·사유 일치율.
+- L2 목록 필드 P/R: regions·dimensions·years. P가 낮으면 지어낸 조건, R이 낮으면 놓친 조건이다. measures는 검색어 확장 규칙이라 P/R을 내지 않는다.
 
 1. **오류 유형** 카드에서 무엇이 틀렸는지 본다. 막대 아래에 각 오류의 의미, 판정된 단계, 해당 문항이 나온다.
 2. **실패 단계 (trace)** 카드에서 어느 단계가 가장 많이 실패했는지 본다. 개선할 곳의 우선순위가 된다.

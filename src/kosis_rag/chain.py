@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 
+from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.retrievers import BaseRetriever
@@ -39,11 +41,18 @@ PROMPT = ChatPromptTemplate.from_messages([
     ("human", "후보 통계표:\n{context}\n\n질문: {question}"),
 ])
 
+Route = Literal["refuse", "guide"]
+
 _TBL_ID = re.compile(r"\bDT_[0-9A-Za-z_]+")
 _YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
 
 
 def format_context(candidates: list[TableCandidate]) -> str:
+    """Write the candidate tables as the numbered list the guide prompt shows the LLM.
+
+    In: candidates = tables shown to the answer, in rank order. Out: one line per table,
+    "[n] tbl_id | table name | survey | organization | period". Side effects: none. Node: guide.
+    """
     return "\n".join(
         f"[{i}] {c.tbl_id} | {c.table_name} | {c.survey_name} | {c.organization} | {c.period}"
         for i, c in enumerate(candidates, 1)
@@ -68,7 +77,15 @@ def clova_chat(settings=None) -> BaseChatModel:
 
 
 def llm_runnable(client: LLMClient | BaseChatModel) -> Runnable:
-    """Wrap a LangChain chat model or a Phase 1 client (mock) as a runnable: prompt messages in, LLMResult out."""
+    """Wrap a LangChain chat model or a Phase 1 client (mock) as a runnable: prompt messages in, LLMResult out.
+
+    Does: lets the guide prompt call either model type the same way.
+    In: client = a LangChain BaseChatModel (ChatClovaX) or a Phase 1 LLMClient (MockClient in tests).
+    Out: a Runnable from a prompt value to an LLMResult (text, status, usage).
+    Side effects: none when built; invoking it calls the model (network for real models). A chat model's exception
+        is caught and returned as status STATUS_API_ERROR; a Phase 1 client reports failures in its own status.
+    Node: guide (through guide_answer).
+    """
 
     if isinstance(client, BaseChatModel):
         def chat(prompt_value) -> LLMResult:
@@ -90,7 +107,14 @@ def llm_runnable(client: LLMClient | BaseChatModel) -> Runnable:
 
 
 def unsupported_claims(text: str, question: str, candidates: list[TableCandidate]) -> list[str]:
-    """Table ids and years in the reply that neither the candidates nor the question contain."""
+    """Table ids and years in the reply that neither the candidates nor the question contain.
+
+    Does: checks the LLM's guide sentence for invented table ids or years before it is shown.
+    In: text = the LLM reply; question = the user question (its years are allowed); candidates = the tables shown.
+    Out: the unsupported ids and years, in the order found (empty = the reply passes).
+    Side effects: none.
+    Node: guide (through guide_answer).
+    """
     ranges = [(min(ys), max(ys)) for c in candidates if (ys := [int(y) for y in _YEAR.findall(c.period)])]
     asked = set(_YEAR.findall(question))
     ids = [t for t in _TBL_ID.findall(text) if t not in {c.tbl_id for c in candidates}]
@@ -99,12 +123,22 @@ def unsupported_claims(text: str, question: str, candidates: list[TableCandidate
 
 
 def template_answer(candidates: list[TableCandidate]) -> str:
+    """The guide sentence written by code when the LLM failed or its reply did not pass verification.
+
+    In: candidates = the tables shown, in rank order. Out: a fixed opening line and the top 3 tables (name, id,
+    organization, period). Side effects: none. Node: guide (through guide_answer).
+    """
     lines = ["질문과 관련 있어 보이는 통계표입니다."]
     lines += [f"[{i}] {c.table_name} ({c.tbl_id}) · {c.organization} · {c.period}" for i, c in enumerate(candidates[:3], 1)]
     return "\n".join(lines)
 
 
 def with_citations(text: str, candidates: list[TableCandidate]) -> str:
+    """Append the source lines (KOSIS / survey / table + link) of the top 3 candidates to the guide sentence.
+
+    In: text = the guide sentence; candidates = the tables shown. Out: text + "출처:" block written by code.
+    Side effects: none. Node: guide (through guide_answer).
+    """
     return text + "\n\n출처:\n" + "\n".join(f"- {c.to_source().citation()}" for c in candidates[:3])
 
 
@@ -112,26 +146,81 @@ def search(retriever: BaseRetriever, question: str, k: int = 5) -> list[TableCan
     return [to_candidate(d) for d in retriever.invoke(question)[:k]]
 
 
-def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question: str, k: int = 5) -> SearchResult:
-    docs = retriever.invoke(question)[:k]
-    candidates = [to_candidate(d) for d in docs]
-    if not candidates:
-        return SearchResult(question=question, no_answer=True, answer=REFUSAL_TEXT, answer_origin="refusal")
+def decide_route(docs: list[Document]) -> tuple[Route, str | None]:
+    """Decide whether the answer refuses before calling the guide LLM.
+
+    In: docs = the tables shown to the answer (already cut to k), in rank order, with the search metadata.
+    Out: (route, refusal reason). "refuse" when there are no docs, or when stage 2 ran without error and picked
+        nothing (T2-09; the reason is its stage2_reason, possibly None); otherwise ("guide", None).
+        A stage 2 error is not a refusal: the answer keeps the stage 1 order.
+    Side effects: none.
+    Node: gate.
+    """
+    if not docs:
+        return "refuse", None
     meta = docs[0].metadata
     if meta.get("stage2_picked_n") == 0 and not meta.get("stage2_error"):  # the LLM re-ranker picked nothing (T2-09)
-        reason = meta.get("stage2_reason")
-        return SearchResult(question=question, candidates=candidates, no_answer=True, no_answer_reason=reason,
-                            answer=REFUSALS.get(reason, REFUSAL_TEXT), answer_origin="refusal")
+        return "refuse", meta.get("stage2_reason")
+    return "guide", None
 
+
+def refusal_answer(question: str, docs: list[Document], reason: str | None) -> SearchResult:
+    """The refusal answer: no table fits the question, said in a sentence code picks (no LLM call).
+
+    In: question = the user question; docs = the tables shown (cut to k; empty when nothing was found);
+        reason = why stage 2 picked nothing (kosis_rag.hcx.REASONS) or None.
+    Out: SearchResult with no_answer=True and answer_origin="refusal". With no docs: no candidates and REFUSAL_TEXT.
+        Otherwise the candidates are kept, no_answer_reason=reason and the sentence is REFUSALS[reason] or
+        REFUSAL_TEXT.
+    Side effects: none.
+    Node: refuse.
+    """
+    if not docs:
+        return SearchResult(question=question, no_answer=True, answer=REFUSAL_TEXT, answer_origin="refusal")
+    return SearchResult(question=question, candidates=[to_candidate(d) for d in docs], no_answer=True,
+                        no_answer_reason=reason, answer=REFUSALS.get(reason, REFUSAL_TEXT), answer_origin="refusal")
+
+
+def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseChatModel) -> SearchResult:
+    """The guide answer: the LLM explains which candidate tables fit, code verifies it and adds the citations.
+
+    In: question = the user question; docs = the tables shown (cut to k, not empty), in rank order;
+        client = the guide LLM (ChatClovaX or a Phase 1 client).
+    Out: SearchResult with the candidates. The LLM's NO_MATCH is a refusal (REFUSAL_TEXT); a failed call, an empty
+        reply or a reply naming an id/year outside the candidates falls back to template_answer
+        (answer_origin="template"); otherwise answer_origin="llm". Citations are appended by code.
+    Side effects: one LLM call (network for a real model); model failures come back as a status, not an exception.
+    Node: guide.
+    """
+    candidates = [to_candidate(d) for d in docs]
+    # 1. ask the LLM for a guide sentence over the candidates
     result: LLMResult = (PROMPT | llm_runnable(client)).invoke(
         {"question": question, "context": format_context(candidates)}, config={"run_name": "table_guide_chain"}
     )
     text = result.text.strip()
+    # 2. the LLM says nothing fits
     if result.status == STATUS_OK and text == NO_MATCH:
         return SearchResult(question=question, candidates=candidates, no_answer=True, answer=REFUSAL_TEXT,
                             answer_origin="refusal", llm_status=result.status)
+    # 3. verify the reply; fall back to the code template
     origin = "llm"
     if result.status != STATUS_OK or not text or unsupported_claims(text, question, candidates):
         text, origin = template_answer(candidates), "template"
     return SearchResult(question=question, candidates=candidates, answer=with_citations(text, candidates),
                         answer_origin=origin, llm_status=result.status)
+
+
+def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question: str, k: int = 5) -> SearchResult:
+    """Search, then refuse or guide: the old (non-graph) answer path, same result as the graph.
+
+    In: retriever = the staged search (build_search); client = the guide LLM; question = the user question;
+        k = tables shown to the answer.
+    Out: SearchResult from refusal_answer or guide_answer on the top k.
+    Side effects: runs the retriever (Chroma, models, stage 2 LLM in production) and at most one guide LLM call.
+    Node: not used by the graph (the graph runs decide_route / refusal_answer / guide_answer as gate / refuse / guide).
+    """
+    docs = retriever.invoke(question)[:k]
+    route, reason = decide_route(docs)
+    if route == "refuse":
+        return refusal_answer(question, docs, reason)
+    return guide_answer(question, docs, client)
