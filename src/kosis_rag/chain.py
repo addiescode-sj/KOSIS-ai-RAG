@@ -37,6 +37,7 @@ PROMPT = ChatPromptTemplate.from_messages([
     ("system",
      "당신은 KOSIS 통계표 안내 도우미입니다. 아래 후보 통계표 목록만 근거로, 질문에 맞는 표를 1~3개 골라 왜 맞는지 짧게 설명하세요.\n"
      "규칙: 목록에 없는 표·기간·숫자를 지어내지 마세요. 통계 수치는 말하지 마세요. 표를 가리킬 때는 [번호]와 표 ID를 쓰세요.\n"
+     "고른 표만 [번호]와 표 ID로 가리키고, 고르지 않은 표는 언급하지 마세요.\n"
      f"맞는 표가 하나도 없으면 다른 말 없이 {NO_MATCH} 만 출력하세요."),
     ("human", "후보 통계표:\n{context}\n\n질문: {question}"),
 ])
@@ -45,6 +46,9 @@ Route = Literal["refuse", "guide"]
 
 _TBL_ID = re.compile(r"(?<![0-9A-Za-z_])DT_[0-9A-Za-z_]+")  # not \b: Korean letters count as \w ("표DT_X", T2-38)
 _YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+# "[1]", "[1, 2]", "[1~3]", full-width "［1］"; "[1]~[3]" is read as a range too (T2-39)
+_REF_RANGE = re.compile(r"[\[［]\s*(\d{1,3})\s*[\]］]\s*[~\-]\s*[\[［]\s*(\d{1,3})\s*[\]］]")
+_REF = re.compile(r"[\[［]\s*(\d{1,3}(?:\s*[,，~\-]\s*\d{1,3})*)\s*[\]］]")
 
 
 def format_context(candidates: list[TableCandidate]) -> str:
@@ -121,7 +125,8 @@ def unsupported_claims(text: str, question: str, candidates: list[TableCandidate
 
     Does: checks the LLM's guide sentence for invented table ids or years before it is shown.
     In: text = the LLM reply; question = the user question (its years are allowed); candidates = the tables shown.
-    Out: the unsupported ids and years, in the order found (empty = the reply passes).
+    Out: the unsupported ids and years, then [n] numbers outside the candidate list, in the order found
+        (empty = the reply passes).
     Side effects: none.
     Node: guide (through guide_answer).
     """
@@ -129,7 +134,56 @@ def unsupported_claims(text: str, question: str, candidates: list[TableCandidate
     asked = set(_YEAR.findall(question))
     ids = [t for t in _TBL_ID.findall(text) if t not in {c.tbl_id for c in candidates}]
     years = [y for y in _YEAR.findall(text) if y not in asked and not any(lo <= int(y) <= hi for lo, hi in ranges)]
-    return ids + years
+    numbers = [f"[{n}]" for _, n in _references(text) if not 1 <= n <= len(candidates)]  # e.g. [7] of 5 (T2-39)
+    return ids + years + numbers
+
+
+def _references(text: str) -> list[tuple[int, int]]:
+    """(position, number) of every [n] reference, ranges expanded ("[1~3]", "[1]~[3]" -> 1, 2, 3)."""
+
+    def span(lo: int, hi: int) -> list[int]:
+        return list(range(lo, hi + 1)) if lo <= hi <= lo + 20 else [lo, hi]  # a reversed or huge "range" is two refs
+
+    refs: list[tuple[int, int]] = []
+    taken: list[tuple[int, int]] = []
+    for m in _REF_RANGE.finditer(text):
+        refs += [(m.start(), n) for n in span(int(m.group(1)), int(m.group(2)))]
+        taken.append(m.span())
+    for m in _REF.finditer(text):
+        if any(a <= m.start() < b for a, b in taken):
+            continue
+        for part in re.split(r"\s*[,，]\s*", m.group(1)):
+            bounds = [int(x) for x in re.split(r"\s*[~\-]\s*", part)]
+            refs += [(m.start(), n) for n in span(bounds[0], bounds[-1])]
+    return sorted(refs)
+
+
+def picked_from_reply(text: str, candidates: list[TableCandidate]) -> list[TableCandidate]:
+    """The candidate tables a checked guide reply points at, in the order it first names them (T2-39).
+
+    Does: turns the LLM's choice into data, so citations and the shown tables are the ones the reply recommends.
+    In: text = a reply that passed unsupported_claims; candidates = the tables shown to the LLM, in rank order ([n] = n-th).
+    Out: candidates named by table id (_TBL_ID, so "표DT_X" counts) or by [n], without repeats. A [n] right before an id
+        ("[2] DT_A") defers to the id when they disagree: the id is the data. Empty when the reply names no table.
+    Side effects: none.
+    Node: guide (through guide_answer).
+    """
+    by_id = {c.tbl_id: c for c in candidates}
+    ids = [(m.start(), m.end(), m.group(0)) for m in _TBL_ID.finditer(text)]
+    hits: list[tuple[int, TableCandidate]] = [(start, by_id[t]) for start, _, t in ids if t in by_id]
+    for pos, n in _references(text):
+        if not 1 <= n <= len(candidates):
+            continue
+        close = text.find("]", pos)
+        close = text.find("］", pos) if close == -1 else close
+        if any(0 <= start - close <= 3 for start, _, _ in ids):  # "[2] DT_A": the id decides
+            continue
+        hits.append((pos, candidates[n - 1]))
+    picked: list[TableCandidate] = []
+    for _, c in sorted(hits, key=lambda h: h[0]):
+        if c not in picked:
+            picked.append(c)
+    return picked
 
 
 def streamable_prefix(text: str, question: str, candidates: list[TableCandidate]) -> str | None:
@@ -163,13 +217,13 @@ def template_answer(candidates: list[TableCandidate]) -> str:
     return "\n".join(lines)
 
 
-def with_citations(text: str, candidates: list[TableCandidate]) -> str:
-    """Append the source lines (KOSIS / survey / table + link) of the top 3 candidates to the guide sentence.
+def with_citations(text: str, tables: list[TableCandidate]) -> str:
+    """Append the source lines (KOSIS / survey / table + link) of the tables the sentence recommends.
 
-    In: text = the guide sentence; candidates = the tables shown. Out: text + "출처:" block written by code.
-    Side effects: none. Node: guide (through guide_answer).
+    In: text = the guide sentence; tables = the tables it points at (picked_from_reply, or the template's top 3).
+    Out: text + "출처:" block written by code. Side effects: none. Node: guide (through guide_answer).
     """
-    return text + "\n\n출처:\n" + "\n".join(f"- {c.to_source().citation()}" for c in candidates[:3])
+    return text + "\n\n출처:\n" + "\n".join(f"- {c.to_source().citation()}" for c in tables)
 
 
 def search(retriever: BaseRetriever, question: str, k: int = 5) -> list[TableCandidate]:
@@ -218,9 +272,10 @@ def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseCh
     In: question = the user question; docs = the tables shown (cut to k, not empty), in rank order;
         client = the guide LLM (ChatClovaX or a Phase 1 client); on_text = called with each newly showable piece
         of the reply while it streams (streamable_prefix; T2-38), never with text the final check would reject.
-    Out: SearchResult with the candidates. The LLM's NO_MATCH is a refusal (REFUSAL_TEXT); a failed call, an empty
-        reply or a reply naming an id/year outside the candidates falls back to template_answer
-        (answer_origin="template"); otherwise answer_origin="llm". Citations are appended by code.
+    Out: SearchResult with the candidates. The LLM's NO_MATCH is a refusal (REFUSAL_TEXT, picked=[]); a failed call,
+        an empty reply, a reply naming an id/year/[n] outside the candidates or naming no table at all falls back to
+        template_answer (answer_origin="template", picked = its top 3); otherwise answer_origin="llm" and picked =
+        the tables the reply names (picked_from_reply). Citations are appended by code for exactly the picked tables.
     Side effects: one LLM call (network for a real model); model failures come back as a status, not an exception.
     Node: guide.
     """
@@ -246,11 +301,12 @@ def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseCh
     if result.status == STATUS_OK and text == NO_MATCH:
         return SearchResult(question=question, candidates=candidates, no_answer=True, answer=REFUSAL_TEXT,
                             answer_origin="refusal", llm_status=result.status)
-    # 3. verify the reply; fall back to the code template
+    # 3. verify the reply and read which tables it recommends; fall back to the code template (its top 3)
+    picked = picked_from_reply(text, candidates) if result.status == STATUS_OK and text else []
     origin = "llm"
-    if result.status != STATUS_OK or not text or unsupported_claims(text, question, candidates):
-        text, origin = template_answer(candidates), "template"
-    return SearchResult(question=question, candidates=candidates, answer=with_citations(text, candidates),
+    if not picked or unsupported_claims(text, question, candidates):  # a reply naming no table cannot be cited
+        text, origin, picked = template_answer(candidates), "template", candidates[:3]
+    return SearchResult(question=question, candidates=candidates, picked=picked, answer=with_citations(text, picked),
                         answer_origin=origin, llm_status=result.status)
 
 

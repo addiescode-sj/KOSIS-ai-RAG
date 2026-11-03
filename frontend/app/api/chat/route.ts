@@ -20,7 +20,7 @@ export async function POST(request: Request) {
       const res = await fetch(`${backend}/search/stream`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ question, k: 5 }),
+        body: JSON.stringify({ question }), // k: the server's ANSWER_K (T2-39)
         signal: request.signal, // the user's stop reaches the backend
       });
       if (!res.ok || !res.body) throw new Error(`검색 서버 오류 (${res.status}): ${await detail(res)}`);

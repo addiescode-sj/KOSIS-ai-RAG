@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from kosis_rag.graph import Node, SearchState, build_graph, ground_docs, make_nodes, run_search, stream_search
 from kosis_rag.pipeline import SearchResources
-from kosis_rag.schemas import SearchArgs, SearchResult
+from kosis_rag.schemas import AskArgs, SearchResult
 
 LOG_DIR = Path("logs/api")  # gitignored; one JSON line per search, written after the response (BackgroundTasks)
 QUESTION = {"question": "2023년 시도별 출생아 수", "k": 5}
@@ -61,6 +61,10 @@ class Runtime:
 
     def nodes(self, k: int) -> dict[str, Node]:
         return make_nodes(self.resources, self.client, k=k)
+
+    def k(self, requested: int | None) -> int:
+        """The candidate budget: the request's k, else the server's ANSWER_K (T2-39)."""
+        return requested or self.resources.settings.answer_k
 
 
 _runtime: Runtime | None = None
@@ -116,7 +120,8 @@ class NodeList(BaseModel):
     nodes: list[str] = Field(description="이 서버에서 켜진 노드, 실행 순서. answer는 gate의 route에 따라 refuse 또는 guide")
 
 
-K = Query(5, ge=1, le=20, description="답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)")
+K = Query(None, ge=1, le=20, description="안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). "
+          "답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다")
 
 NODE_DOCS = {
     "retrieve": ("하이브리드 검색", "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25를 RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다."),
@@ -128,12 +133,12 @@ NODE_DOCS = {
 
 @app.get("/nodes", tags=["nodes"], summary="켜진 노드 목록", response_model=NodeList)
 def list_nodes(rt: Runtime = Depends(get_runtime)) -> NodeList:
-    return NodeList(nodes=[name for name in rt.nodes(5) if name not in ("refuse", "guide")] + ["answer"])
+    return NodeList(nodes=[name for name in rt.nodes(rt.k(None)) if name not in ("refuse", "guide")] + ["answer"])
 
 
-async def _run_node(rt: Runtime, name: str, state: SearchState, k: int) -> SearchState:
+async def _run_node(rt: Runtime, name: str, state: SearchState, k: int | None) -> SearchState:
     """Ground the request's tables, run one node in the threadpool, return the state with its update applied."""
-    nodes = rt.nodes(k)
+    nodes = rt.nodes(rt.k(k))
     if name not in nodes:
         raise HTTPException(409, f"node {name!r} is off in this server's settings; on: {list(nodes)}")
     try:
@@ -146,12 +151,12 @@ async def _run_node(rt: Runtime, name: str, state: SearchState, k: int) -> Searc
 
 @app.post("/nodes/parse", tags=["nodes"], summary="질의 조건 파싱", response_model=SearchState,
           description="질문에서 연도·주기·지역·세는 대상 등 검색 조건을 규칙으로 읽어 `query`를 쓴다. LLM 호출 없음.")
-async def node_parse(req: ParseRequest, k: int = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
+async def node_parse(req: ParseRequest, k: int | None = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
     return await _run_node(rt, "parse", SearchState(question=req.question), k)
 
 
 def _node_route(name: str, summary: str, description: str) -> None:
-    async def endpoint(state: SearchState, k: int = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
+    async def endpoint(state: SearchState, k: int | None = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
         return await _run_node(rt, name, state, k)
 
     app.post(f"/nodes/{name}", tags=["nodes"], summary=summary, description=description, response_model=SearchState,
@@ -165,7 +170,7 @@ for _name, (_summary, _description) in NODE_DOCS.items():
 @app.post("/nodes/answer", tags=["nodes"], summary="답변 (거절 또는 안내)", response_model=SearchState,
           description="gate가 쓴 `route`로 refuse(코드 문장, LLM 없음) 또는 guide(LLM 안내 + 코드 검증·출처)를 실행해 "
                       "`result`를 쓴다. route가 없거나, guide인데 docs가 비면 422.")
-async def node_answer(state: SearchState, k: int = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
+async def node_answer(state: SearchState, k: int | None = K, rt: Runtime = Depends(get_runtime)) -> SearchState:
     if state.route is None:
         raise HTTPException(422, "route is not set: call /nodes/gate first")
     if state.route == "guide" and not state.docs:
@@ -177,9 +182,10 @@ async def node_answer(state: SearchState, k: int = K, rt: Runtime = Depends(get_
 
 @app.post("/search", tags=["search"], summary="검색 + 답변 (JSON)", response_model=SearchResult,
           openapi_extra={"requestBody": {"content": {"application/json": {"example": QUESTION}}}})
-async def search(args: SearchArgs, background: BackgroundTasks, rt: Runtime = Depends(get_runtime)) -> SearchResult:
-    """전체 그래프를 돌려 `SearchResult`(후보 표·답변·출처)를 돌려준다. 노드별 지연은 응답 뒤 기록한다."""
-    state = await run_in_threadpool(run_search, rt.graph(args.k), args.question)
+async def search(args: AskArgs, background: BackgroundTasks, rt: Runtime = Depends(get_runtime)) -> SearchResult:
+    """전체 그래프를 돌려 `SearchResult`를 돌려준다. `picked` = 답변이 고른 표(출처도 이것), `candidates` = LLM에 넘긴 후보.
+    노드별 지연은 응답 뒤 기록한다."""
+    state = await run_in_threadpool(run_search, rt.graph(rt.k(args.k)), args.question)
     background.add_task(_log, state)
     return state.result
 
@@ -187,7 +193,7 @@ async def search(args: SearchArgs, background: BackgroundTasks, rt: Runtime = De
 @app.post("/search/stream", tags=["search"], summary="검색 + 답변 (SSE 노드 이벤트)",
           response_class=EventSourceResponse,
           openapi_extra={"requestBody": {"content": {"application/json": {"example": QUESTION}}}})
-def search_stream(args: SearchArgs, background: BackgroundTasks,
+def search_stream(args: AskArgs, background: BackgroundTasks,
                   rt: Runtime = Depends(get_runtime)) -> Iterator[ServerSentEvent]:
     """노드가 끝날 때마다 `event: <노드 이름>` (data = 그 노드의 trace: seconds 등)을 보내고,
     guide가 안내 문장을 쓰는 동안 `event: token` (data = `{"delta": "..."}`)을 보낸다 — 검증(후보에 없는 표 ID·연도)을
@@ -197,7 +203,7 @@ def search_stream(args: SearchArgs, background: BackgroundTasks,
     예: `curl -N -X POST localhost:8000/search/stream -H 'content-type: application/json' -d '{"question": "..."}'`
     """
     try:
-        for name, payload in stream_search(rt.graph(args.k), args.question):
+        for name, payload in stream_search(rt.graph(rt.k(args.k)), args.question):
             if name == "result":
                 background.add_task(_log, payload)
                 yield ServerSentEvent(event="result", data=payload.result)
