@@ -44,7 +44,7 @@ SHORT = {"충청북도": "충북", "충청남도": "충남", "전라북도": "�
 
 def is_total(label: str) -> bool:
     core = label.replace(" ", "")
-    return core in TOTALS or core.endswith("-계") or core.endswith("(계)")
+    return core in TOTALS or core.endswith("계")  # 아시아주계, 가구_계, 주택-계: subtotals
 
 
 _BATCHIM_DIGITS = set("013678")
@@ -163,7 +163,8 @@ def make_items(key: str, sha: str, df, dims: list[str], rng: random.Random, refu
         codes = list(pool[f"{d}_code"])
         # siblings only: a mixed 특성별 dim codes its groups by prefix (A03xx 기업형태, A04xx 매출규모)
         pairs = [i for i in range(len(codes) - 1)
-                 if len(codes[i]) == len(codes[i + 1]) and codes[i][:-2] == codes[i + 1][:-2]]
+                 if len(codes[i]) == len(codes[i + 1]) and codes[i][:-2] == codes[i + 1][:-2]
+                 and not (codes[i].endswith("0") and codes[i][:-1] == codes[i + 1][:-1])]  # 수원시 41110 vs 장안구 41111
         if pairs:
             i = rng.choice(pairs)
             a, b = cell(pool.iloc[i].drop("_t")), cell(pool.iloc[i + 1].drop("_t"))

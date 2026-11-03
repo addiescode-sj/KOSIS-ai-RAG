@@ -63,12 +63,12 @@ def judged_keys(path: Path) -> dict[str, set[str]]:
 def run_l1(args) -> tuple[list[dict], dict, str]:
     from evals.runners import retrieval as runner  # LangChain loads only for L1
 
-    items = load_items(GOLDEN)
+    items = load_items(args.golden)
     rows = runner.run(runner.build(args.retriever, items, args.k), items, args.k)
     by_qid = {i.qid: i for i in items}
     tau = args.tau if args.tau is not None else retrieval.best_tau(
         [(r["top_score"], not r["answerable"]) for r in rows if r["split"] == "dev"])
-    judged = judged_keys(POOL)
+    judged = judged_keys(args.pool)
     shown = [r for r in rows if args.split == "all" or r["split"] == args.split]
     for r in shown:
         r["no_answer_pred"] = retrieval.predict_no_answer(r["top_score"], tau)
@@ -87,7 +87,7 @@ def run_l0(args) -> tuple[list[dict], dict, str]:
     from evals.runners import retrieval as runner
 
     records = {r.info.key: r for r in runner.load_records()}
-    gold = set().union(*(i.gold_keys for i in load_items(GOLDEN)))
+    gold = set().union(*(i.gold_keys for i in load_items(args.golden)))
     sample = ({json.loads(line)["key"]: json.loads(line) for line in METADATA_SAMPLE.read_text(encoding="utf-8").splitlines()
                if line.strip()} if METADATA_SAMPLE.exists() else None)
     loaded = None
@@ -121,7 +121,7 @@ def run_l2(args) -> tuple[list[dict], dict, str]:
 
     from evals.evaluators import query
 
-    items: list[QueryItem] = load_jsonl(QUERY_GOLDEN, QueryItem)
+    items: list[QueryItem] = load_jsonl(args.query_golden, QueryItem)
     rows = []
     for item in items:
         if args.split != "all" and item.split != args.split:
@@ -138,7 +138,7 @@ def run_l2(args) -> tuple[list[dict], dict, str]:
         lines.append(f"| {name} | {m['n']} | " + " | ".join(f"{fmt(m[c])} ({m['n_' + c]})" for c in cols) + " |")
     report = "\n".join([
         f"# L2 query understanding — {args.stage}", "",
-        f"- `parse_query` (규칙, LLM 0) vs `{QUERY_GOLDEN.relative_to(ROOT)}` · 괄호는 라벨이 있는 문항 수, — 는 라벨 없음", "",
+        f"- `parse_query` (규칙, LLM 0) vs `{os.path.relpath(args.query_golden.resolve(), ROOT)}` · 괄호는 라벨이 있는 문항 수, — 는 라벨 없음", "",
         *lines, "",
         "- 빈 슬롯도 채점: 정답이 빈 필드에 값을 내면 오답. measures는 정답 개념이 예측 검색어 안에 있으면 정답.",
     ]) + "\n"
@@ -152,10 +152,10 @@ def run_ablation(args) -> tuple[list[dict], dict, str]:
     from evals.runners import ablation
     from evals.runners import retrieval as runner
 
-    items = [i for i in load_items(GOLDEN) if args.split == "all" or i.split == args.split]
+    items = [i for i in load_items(args.golden) if args.split == "all" or i.split == args.split]
     records = {r.info.key: r for r in runner.load_records()}
     if args.slot_source == "gold":
-        slots = {q.qid: ablation.gold_parsed(q) for q in load_jsonl(QUERY_GOLDEN, QueryItem)}
+        slots = {q.qid: ablation.gold_parsed(q) for q in load_jsonl(args.query_golden, QueryItem)}
     else:
         slots = {i.qid: parse_query(i.question) for i in items}
     on = ablation.combos(args.slots.split(","))
@@ -361,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")
     parser.add_argument("--slot-source", choices=("gold", "pred"), default="pred", help="ablation: query_golden labels or parse_query")
     parser.add_argument("--slots", default="year,cycle,region,dimension,measure", help="ablation: slots to switch")
+    parser.add_argument("--golden", type=Path, default=GOLDEN, help="l0, l1, ablation, l012: retrieval golden (v2: retrieval_golden_v2.jsonl)")
+    parser.add_argument("--query-golden", type=Path, default=QUERY_GOLDEN, help="l2, ablation, l012: query golden (v2: query_golden_v2.jsonl)")
+    parser.add_argument("--pool", type=Path, default=POOL, help="l1: judged pool for unjudged@k (v2: retrieval_pool_v2.csv)")
     parser.add_argument("--calc-golden", type=Path, nargs="+", default=[CALC_GOLDEN],
                         help="l3, e2e: golden files, e.g. calculation_golden.jsonl calculation_golden_diverse.jsonl")
     parser.add_argument("--interval", type=float, default=0.0, help="l3, e2e: seconds between model calls")
@@ -387,12 +390,12 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True)
     with (out / "results.jsonl").open("w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False, default=str) + "\n" for r in rows)
-    ref = lambda path: {"path": str(path.relative_to(ROOT)), "sha256": sha256(path)}  # noqa: E731
-    golden = {"l2": QUERY_GOLDEN}.get(args.layer, GOLDEN)
+    ref = lambda path: {"path": os.path.relpath(path.resolve(), ROOT), "sha256": sha256(path)}  # noqa: E731
+    golden = {"l2": args.query_golden}.get(args.layer, args.golden)
     slotted = args.layer in ("ablation", "l012")
     manifest = {
         "run_id": run_id, "layer": args.layer, "stage": args.stage, "split": args.split,
-        "golden": {"l0·l1": ref(GOLDEN), "l2": ref(QUERY_GOLDEN)} if args.layer == "l012"
+        "golden": {"l0·l1": ref(args.golden), "l2": ref(args.query_golden)} if args.layer == "l012"
         else calc_ref(args.calc_golden) if args.layer in ("l3", "e2e") else ref(golden),
         "source_snapshot": {"tables.jsonl": sha256(TABLES)},
         "git": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")),

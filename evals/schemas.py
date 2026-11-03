@@ -46,7 +46,7 @@ class RetrievalItem(BaseModel):
     qid: str = Field(min_length=1)
     split: Literal["dev", "test"]
     qtype: QType
-    source: Literal["scenario", "mentor_poc", "phase1"]
+    source: Literal["scenario", "mentor_poc", "phase1", "v2"]  # v2: T2-32, one sampled table per question
     question: str = Field(min_length=1)
     answerable: bool = True
     required: list[list[str]] = Field(default_factory=list)  # slots; each slot = interchangeable keys
@@ -105,7 +105,7 @@ class CalcItem(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    qid: str = Field(min_length=1)  # Phase 1 id, e.g. "S-VAL-03"
+    qid: str = Field(min_length=1)  # Phase 1 id ("S-VAL-03"), T2-31 "D-<key>-VAL" or T2-32 "V2-<key>" (= the L1 qid)
     kind: QuestionKind
     type: QuestionType | None = None
     question: str = Field(min_length=1)
@@ -117,6 +117,7 @@ class CalcItem(BaseModel):
     default_applied: dict[str, str] = Field(default_factory=dict)
     clarify_options: list[str] = Field(default_factory=list)
     eda_traps: list[str] = Field(default_factory=list)
+    split: Literal["dev", "test"] | None = None  # v2: the split of the L1 item with the same qid
 
 
 class E2EItem(BaseModel):

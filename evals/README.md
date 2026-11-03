@@ -32,6 +32,24 @@ diverse 문항의 숫자는 빌더가 Parquet 셀에서 직접 뽑는다. 질문
 `check_question`이 연도·라벨·항목명이 남아 있고 다른 숫자가 없는지 확인한 뒤에만 반영한다. 통과하지 못하면 템플릿 문장을 그대로 쓴다.
 `calculation_diverse_review_sample.csv`(5문항마다 1개)의 `ok`·`note` 열은 사람이 검수할 때 채운다.
 
+### 골든셋 v2 (T2-32, 전 계층)
+
+표 하나에 질문 하나를 만들고, 같은 qid(`V2-<표 키>`)를 L1·L2·L3에 함께 쓴다. 14개 조사 전체에서 표를 뽑았다. 기본 경로는 v1 그대로이므로 v2를 쓰려면 플래그로 넘긴다.
+
+```bash
+uv run python -m evals.run_eval --layer l1 --retriever bm25-record --stage <이름> \
+  --golden evals/datasets/retrieval_golden_v2.jsonl --pool evals/datasets/retrieval_pool_v2.csv
+uv run python -m evals.run_eval --layer l2 --stage <이름> --split all --query-golden evals/datasets/query_golden_v2.jsonl
+uv run python -m evals.run_eval --layer l3 --stage <이름> --interval 5 --calc-golden evals/datasets/calculation_golden_v2.jsonl
+```
+
+다시 만드는 순서는 `python -m evals.builders.golden_v2 draft → pool → finish`다(`golden_v2_texts.jsonl`에 문장을 쓰고, `retrieval_pool_v2.csv`의 `slot`을 채운다).
+
+- 숫자, L2의 기간·연도·지역, 풀의 `rule:*` 행은 코드가 만든다.
+- 질문 문장, measures·dimensions, `auto=claude` 행의 판정은 Claude가 했다.
+- 그래서 v2의 `unjudged@10`은 "Claude도 규칙도 보지 않은 표"의 비율이다.
+- `golden_v2_review_sample.csv`(5문항마다 1개)는 사람이 검수할 표본이다.
+
 실패 단계 추적(`failure`, Jaeger 내보내기)은 `l3`·`e2e`에만 붙는다. `l0`·`l1`·`l2`·`ablation` 행에는 판정·span이 없다.
 
 결과는 `evals/reports/<시각>-<stage>/`에 저장된다. 이 폴더에는 질문 원문이 들어 있어 git에 올리지 않는다.
