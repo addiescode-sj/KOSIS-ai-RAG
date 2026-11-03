@@ -76,6 +76,8 @@ def run_l1(args) -> tuple[list[dict], dict, str]:
     agg = retrieval.aggregate(scored)
     no_answer = retrieval.prf([(r["no_answer_pred"], not r["answerable"]) for r in shown])
     summary = {"tau": tau, "metrics": agg, "no_answer": no_answer, "errors": sum(1 for r in shown if r["error"])}
+    if any(r.get("stage2_picked_n") is not None for r in shown):  # an LLM re-ranker ran: score its verdict too (T2-09)
+        summary["no_answer_rules"] = retrieval.no_answer_rules(shown)
     return shown, summary, l1_report(args, summary)
 
 
@@ -219,12 +221,22 @@ def l1_report(args, s: dict) -> str:
         m = s["metrics"][name]
         lines.append(f"| {name} | {m['n']} | " + " | ".join(f"{m.get(c, 0):.3f}" for c in cols) + " |")
     na = s["no_answer"]
+    rules = []
+    if "no_answer_rules" in s:  # T2-09: the LLM re-ranker's verdict next to tau
+        nr = s["no_answer_rules"]
+        rules = ["", "| 답 없음 규칙 | P | R | F1 | tp / fp / fn | 사유별 recall |", "| --- | --- | --- | --- | --- | --- |"]
+        rules += [f"| {name} | {m['precision']:.3f} | {m['recall']:.3f} | {m['f1']:.3f} | {m['tp']} / {m['fp']} / {m['fn']} | "
+                  + ", ".join(f"{g} {a}/{b}" for g, (a, b) in m["recall_by_reason"].items()) + " |"
+                  for name, m in nr.items() if name in ("tau", "llm", "either")]
+        rules += ["", f"- llm: 2차 LLM이 고른 표 0개(호출 오류 제외) · either: llm 또는 tau · LLM 사유 일치 "
+                      f"{nr['llm_reason_match'][0]}/{nr['llm_reason_match'][1]} · LLM 호출 오류 {nr['llm_errors']}건"]
     return "\n".join([
         f"# L1 retrieval — {args.stage}", "",
         f"- retriever `{args.retriever}`, k={args.k}, split `{args.split}`, 답 있는 문항 기준", "",
         *lines, "",
         f"- 답 없음 (tau={s['tau']:.4g}, dev에서 선택): P {na['precision']:.3f} · R {na['recall']:.3f} · F1 {na['f1']:.3f} "
         f"(tp {na['tp']}, fp {na['fp']}, fn {na['fn']})",
+        *rules,
         "- slot_recall@k: 정답 슬롯(표 자리) 중 상위 k에서 채운 비율. 단일 표 문항은 hit@k와 같고 복합 문항에서만 다르다.",
         "- unjudged@10: 상위 10개 중 사람이 판정하지 않은 표 비율. 높으면 정답 라벨 추가 판정이 필요하다 (plans/T2-02.md 동결 규칙).",
     ]) + "\n"
