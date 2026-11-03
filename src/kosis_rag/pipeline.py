@@ -16,7 +16,7 @@ doc_format, which TEXT_FORMAT (when set) must match; weights trained on another 
     RERANK_MODE=blend                                   # blend | score
     STAGE2=clova                                        # clova | hcx | none (HCX_THINKING=none | low for hcx)
     COND_FILTER=on                                      # on | off: T2-14 conditions before the hybrid
-    TEXT_FORMAT=n3-L60                                  # optional check: n3-L60 | n2-L60
+    TEXT_FORMAT=n2-L60                                  # optional check: n2-L60 (n3-L60 deprecated)
 """
 
 from __future__ import annotations
