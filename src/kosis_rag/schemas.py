@@ -37,6 +37,7 @@ class SearchResult(BaseModel):
     question: str
     candidates: list[TableCandidate] = Field(default_factory=list)
     no_answer: bool = False
+    no_answer_reason: str | None = None  # out_of_scope | no_item when the stage 2 LLM said why (T2-09)
     answer: str  # final text; citations are appended by code
     answer_origin: str  # "llm" | "template" (LLM failed or failed verification) | "refusal"
     llm_status: str | None = None  # Phase 1 LLMResult.status when the model was called
@@ -48,6 +49,8 @@ class TableClass(BaseModel):
     name: str  # e.g. "행정구역별"
     labels: list[str] = Field(default_factory=list)
     n_labels: int = 0  # len(labels), kept as a scalar for vector-store metadata
+    # region classes only: label count per level from the KOSIS codes, e.g. {"전국": 1, "시도": 17, "시군구": 250}
+    levels: dict[str, int] = Field(default_factory=dict)
 
 
 class TableRecord(BaseModel):

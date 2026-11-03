@@ -1,15 +1,12 @@
 """e2e (first part of L4): the retriever's top 1 table goes to summarize_stat, graded like L3; offline with stubs."""
 
-import sys
-import types
-
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from kosis_ai.schemas import Refusal, StatAnswer, StatResult
 
 from evals.runners import e2e
-from evals.schemas import CalcItem
+from evals.schemas import CalcItem, QueryItem, RetrievalItem
 
 
 class Fixed(BaseRetriever):
@@ -32,11 +29,11 @@ def refused(reason: str) -> StatAnswer:
 
 
 def stub_pipeline(monkeypatch, used: list[str]) -> None:
-    def summarize_stat(question, table_key, client=None, retry_interval=0.0):
+    def summarize(question, table_key, client, retry_interval=0.0):
         used.append(table_key)
-        return refused("no_period")
+        return refused("no_period"), [{"name": "judge", "start_ms": 0, "duration_ms": 1, "status": "ok", "attributes": {}}], None
 
-    monkeypatch.setitem(sys.modules, "kosis_chat.api", types.SimpleNamespace(summarize_stat=summarize_stat))
+    monkeypatch.setattr("evals.trace.summarize", summarize)
     monkeypatch.setattr("evals.ops.usage_client", lambda: Client())
 
 
@@ -50,13 +47,19 @@ def test_top1_table_is_used_and_located(monkeypatch):
     stub_pipeline(monkeypatch, used)
     [row] = e2e.run(Fixed(keys=["101_DT_OTHER", "101_DT_GOLD"]), [item()], k=10)
     assert used == ["101_DT_OTHER"] and row["used_table"] == "101_DT_OTHER" and not row["failed"]
-    assert row["input_tokens"] == 10 and row["model"] == "stub"
+    assert row["input_tokens"] == 10 and row["model"] == "stub" and row["spans"][0]["name"] == "judge"
     loc = e2e.locate(item(), row, "PASS")
     assert loc["gold_rank"] == 2 and not loc["right_table"] and loc["cause"] == "pass"
     assert e2e.locate(item(), row, "FAIL")["cause"] == "retrieval"
     right = e2e.run(Fixed(keys=["101_DT_GOLD"]), [item()], k=10)[0]
     assert e2e.locate(item(), right, "FAIL") | {"top_keys": None} == {
-        "used_table": "101_DT_GOLD", "right_table": True, "gold_rank": 1, "top_keys": None, "cause": "answer"}
+        "used_table": "101_DT_GOLD", "right_table": True, "right_alternate": False, "l1_linked": False, "gold_rank": 1,
+        "top_keys": None, "gold_keys": ["101_DT_GOLD"], "cause": "answer"}
+    # §6.3: with the L1 item of the same qid, an alternate key of its slot is the right table too
+    l1 = RetrievalItem(qid="c1", split="test", qtype="sibling", source="v2", question="q",
+                       required=[["101_DT_GOLD", "101_DT_OTHER"]])
+    alt = e2e.locate(item(), row, "FAIL", l1)
+    assert alt["right_table"] and alt["right_alternate"] and alt["l1_linked"] and alt["cause"] == "answer" and alt["gold_rank"] == 1
 
 
 def test_empty_retrieval_is_a_run_failure(monkeypatch):
@@ -86,7 +89,9 @@ def test_run_eval_e2e_writes_report(monkeypatch, tmp_path):
     [out] = (tmp_path / "reports").iterdir()
     report = (out / "report.md").read_text(encoding="utf-8")
     assert "검색 1위가 정답 표: 0/1" in report and "retrieval 0" in report  # refusal with an allowed reason passes
-    assert "L4 종단 간" in (out / "report.html").read_text(encoding="utf-8")
+    assert "## 실패 단계 (trace)" in report and "실패 없음" in report
+    html = (out / "report.html").read_text(encoding="utf-8")
+    assert "L4 종단 간" in html and "실패 단계 (trace)" in html
 
 
 def test_golden_sources_prefer_split_files(tmp_path):

@@ -1,13 +1,13 @@
-"""T2-05: the registry filter and how the Chroma retriever applies it (fake collection and embedder; no model, no server)."""
+"""T2-05, T2-29: the registry filter and how the Chroma retriever applies it (fake collection and embedder; no model, no server)."""
 
 import pytest
 
 from kosis_ai.schemas import TableInfo
 from kosis_rag.chain import search
-from kosis_rag.filters import TableFilter, filter_tables, why_excluded
+from kosis_rag.filters import TableFilter, filter_tables, filter_with_relaxation, why_excluded
 from kosis_rag.loader import to_document
 from kosis_rag.retriever import ChromaTableRetriever
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas import TableClass, TableRecord
 
 offline = pytest.mark.offline
 
@@ -108,3 +108,78 @@ def test_filter_without_records_is_an_error_and_no_filter_sends_no_condition():
     assert r.collection.calls == [None]
     with pytest.raises(ValueError):
         r.with_filter(TableFilter(years=[2023])).invoke("2023년 인구")
+
+
+# --- T2-29 ---
+
+@offline
+def test_reversed_period_range_is_ignored():  # 분석 #6, a defence: the parser puts ranges the right way round
+    assert why_excluded(RECORDS["101_DT_A"], TableFilter(period_from=2030, period_to=2010)) is None
+    assert why_excluded(RECORDS["101_DT_A"], TableFilter(period_from=2030, period_to=2040)) is not None
+
+
+@offline
+def test_yearly_request_keeps_five_year_data_only_as_a_soft_signal():  # B6
+    assert why_excluded(RECORDS["101_DT_C"], TableFilter(cycle="Y")) is None  # metadata F, values Y: met
+    only_f = _record("101_DT_F", ["2015", "2020"], cycle=("F",), prd_se=("F",))
+    assert why_excluded(only_f, TableFilter(cycle="Y")) is None  # kept, ranked lower
+    assert why_excluded(only_f, TableFilter(cycle="M")).startswith("주기")
+
+
+def _classed(key, name, classes, items=()):
+    record = _record(key, ["2020"])
+    record.info = record.info.model_copy(update={"table_name": name})
+    record.items = list(items)
+    record.classes = [TableClass(name=c, labels=["계"], n_labels=1) for c in classes]
+    return record
+
+
+@offline
+def test_breakdown_filter_compares_standard_keys():  # 분석 #26, C5
+    tables = {
+        "101_DT_SIZE": _classed("101_DT_SIZE", "가구의 크기별 가구", ["가구의 크기별"]),
+        "101_DT_SPOUSE": _classed("101_DT_SPOUSE", "배우관계별 인구", ["배우관계별"]),
+        "101_DT_DO": _classed("101_DT_DO", "도별 인구", ["도별"]),
+        "101_DT_AGE": _classed("101_DT_AGE", "연령별 인구", ["연령별"]),
+    }
+    for dim, key in (("가구원수", "101_DT_SIZE"), ("혼인상태", "101_DT_SPOUSE"), ("시도", "101_DT_DO")):
+        keys, _ = filter_tables(tables, TableFilter(dimensions=[dim]))
+        assert keys == {key}, dim
+
+
+@offline
+def test_sex_split_items_count_as_a_breakdown_but_a_fixed_sex_does_not():  # C6
+    tables = {
+        "101_DT_ITEMS": _classed("101_DT_ITEMS", "연령별 인구", ["연령별"], items=["남자 (명)", "여자 (명)"]),
+        "101_DT_WOMEN": _classed("101_DT_WOMEN", "연령별 기혼여성인구", ["연령별"], items=["계"]),
+        "101_DT_NONE": _classed("101_DT_NONE", "연령별 인구", ["연령별"], items=["계"]),
+    }
+    keys, removed = filter_tables(tables, TableFilter(dimensions=["성"]))
+    assert keys == {"101_DT_ITEMS"}
+    assert removed["101_DT_WOMEN"].startswith("분류 성 없음") and removed["101_DT_NONE"].startswith("분류 성 없음")
+
+
+@offline
+def test_relaxation_order_and_what_is_never_dropped():  # D1~D3
+    keys, relaxed, removed = filter_with_relaxation(RECORDS, TableFilter(years=[2023], cycle="Q"))
+    assert relaxed == ["cycle"] and keys == {"101_DT_A", "101_DT_M"} and set(removed) == {"101_DT_C", "101_DT_E"}
+    keys, relaxed, removed = filter_with_relaxation(RECORDS, TableFilter(years=[1990]))
+    assert keys == set() and relaxed == [] and len(removed) == 4  # nothing to relax, years stay
+    keys, relaxed, removed = filter_with_relaxation(RECORDS, TableFilter(years=[1990], cycle="Q"))
+    assert keys == set() and relaxed == [] and len(removed) == 4  # dropping the cycle helps nothing: not recorded
+    f = TableFilter(cycle="Q", measures=["사망"], dimensions=["성"], regions=["제주특별자치도"])
+    keys, relaxed, _ = filter_with_relaxation(RECORDS, f)
+    assert relaxed == ["measures", "dimensions", "regions", "cycle"] and keys == set(RECORDS)
+    keys, relaxed, _ = filter_with_relaxation(RECORDS, TableFilter())
+    assert keys == set(RECORDS) and relaxed == []
+
+
+@offline
+def test_chroma_retriever_relaxes_before_querying_and_records_it():
+    r = _retriever({"101_DT_C": 0.1, "101_DT_A": 0.2}).with_filter(TableFilter(years=[2023], cycle="Q"))
+    docs = r.invoke("2023년 분기 인구")
+    assert [d.metadata["key"] for d in docs] == ["101_DT_A"]
+    assert r.collection.calls == [{"key": {"$in": ["101_DT_A", "101_DT_M"]}}]
+    assert r.last_relaxed == ["cycle"] and set(r.last_removed) == {"101_DT_C", "101_DT_E"}
+    r = _retriever({"101_DT_A": 0.1}).with_filter(TableFilter(years=[1990], cycle="Q"))
+    assert r.invoke("1990년 인구") == [] and r.last_relaxed == [] and r.collection.calls == []
