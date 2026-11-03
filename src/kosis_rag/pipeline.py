@@ -51,6 +51,7 @@ class SearchSettings(BaseModel):
     rerank_n: int = 50
     stage2: str = "none"
     stage2_k: int = 20
+    answer_k: int = 5  # candidate tables handed to gate / guide by the answer API when a request gives no k (T2-39)
     device: str | None = None
 
     @classmethod
@@ -67,6 +68,7 @@ class SearchSettings(BaseModel):
             "rerank_ckpt": env("RERANK_CKPT") or None,
             "rerank_mode": env("RERANK_MODE") or "blend",
             "stage2": (env("STAGE2") or "none").strip().lower(),
+            "answer_k": int(env("ANSWER_K") or 5),
         }
         return cls(**{**values, **overrides})
 
