@@ -47,7 +47,7 @@ def test_hcx_pick_maps_numbers_to_input_keys_and_keeps_stage1_top_score():
     assert [d.metadata["key"] for d in docs] == ["c", "a", "b"]
     meta = docs[0].metadata
     assert meta["stage2_picked_n"] == 1 and meta["stage2_input_top_score"] == pytest.approx(0.9)  # a's score, not c's
-    assert "[3]\n표 c" in client.calls[0][1] and "질문" in client.calls[0][1]
+    assert client.calls[0][1] == "질문: 질문\n\n후보 통계표:\n[1] 표 a\n\n[2] 표 b\n\n[3] 표 c"
 
 
 def test_hcx_empty_pick_is_no_answer_with_reason_and_failure_is_not():

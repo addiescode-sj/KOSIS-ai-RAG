@@ -194,7 +194,14 @@ def hcx(text_of: dict[str, str], options: dict) -> Select:
     return HcxSelector(text_of=text_of, **options)
 
 
+def gpt(text_of: dict[str, str], options: dict) -> Select:
+    from kosis_rag.hcx import HcxSelector, OpenAIClient
+
+    return HcxSelector(text_of=text_of, client=OpenAIClient(**options))
+
+
 LLM_RERANKERS: dict[str, Callable[[dict[str, str], dict], Select]] = {
     "clova": clova,
     "hcx": hcx,
+    "gpt": gpt,
 }

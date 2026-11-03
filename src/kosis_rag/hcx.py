@@ -29,23 +29,64 @@ MAX_TOKENS = {"none": 512, "low": 5120, "medium": 5120, "high": 8192}
 
 # v2 (T2-09 dev): v1 asked for tables "that directly hold the number" and refused even rank-1 gold tables
 # (lab/T2-09-hcx-no-answer/prompt_v1.txt); v2 asks for the measure only and leaves years and region detail to code.
-PROMPT_VERSION = "v2"
+# v3 clarifies the selector contract and examples while preserving v2's measure-only decision boundary.
+PROMPT_VERSION = "v3"
 SYSTEM = (
-    "당신은 KOSIS 통계표 검색 도우미입니다. 후보 통계표 목록에서 질문에 답하는 데 쓸 수 있는 표를 고르세요.\n"
-    "규칙:\n"
-    "- 질문이 묻는 통계 지표(세는 대상·항목, 예: 인구, 출생아 수, 전입자 수, 합계출산율)를 담은 표면 고르세요.\n"
-    "- 연도·기간, 월·분기 같은 주기, 시도·시군구 같은 세부 지역 단위가 표에 맞는지는 판단하지 마세요. 코드가 따로 확인합니다.\n"
-    f"- 맞는 표가 여러 개면 질문에 더 가까운 표부터, 최대 {MAX_PICK}개.\n"
-    "- 질문이 묻는 지표를 담은 표가 하나도 없을 때만 picked를 빈 목록으로 두고 reason을 쓰세요: 질문이 인구·가구·출생·사망·"
-    '혼인·이동 같은 인구 통계가 아닌 다른 분야면 "out_of_scope", 인구 통계지만 묻는 지표를 담은 표가 없으면 "no_item". '
-    "표를 골랐으면 reason은 null.\n"
-    '- 다른 말 없이 JSON 한 줄만 출력하세요: {"picked": [번호, ...], "reason": null}'
+    "당신은 KOSIS 인구통계 통계표 검색의 2차 선택기입니다. 사용자의 질문에 답하는 데 쓸 수 있는 후보 통계표를 고르세요. "
+    "질문에 직접 답하거나 질문을 다시 쓰지 마세요.\n\n"
+    "# 입력 형식\n"
+    "질문: 사용자의 원래 질문\n"
+    "후보 통계표:\n"
+    "[1] 첫 번째 통계표 설명\n"
+    "[2] 두 번째 통계표 설명\n"
+    "...\n\n"
+    "# 판단 단계\n"
+    "1. 질문에서 찾으려는 통계 지표와 세는 대상·항목을 파악하세요.\n"
+    "2. 각 후보 통계표 설명에 그 지표가 담겨 있는지 확인하세요. 주제만 비슷하고 지표가 다르면 고르지 마세요. "
+    "설명에 없는 지표가 있다고 추측하지 마세요.\n"
+    f"3. 지표가 맞는 표를 질문과 가까운 순서로 최대 {MAX_PICK}개 고르세요. "
+    "출력에는 입력에 나온 후보 번호만 사용하고 같은 번호를 반복하지 마세요.\n"
+    "4. 맞는 표가 없으면 사유를 정하세요. 질문이 인구·가구·출생·사망·혼인·이동 등 인구통계 범위 밖이면 "
+    "out_of_scope, 인구통계 질문이지만 후보에 필요한 지표가 없으면 no_item입니다.\n"
+    "5. 출력 형식을 확인하세요. 표를 하나라도 골랐으면 reason은 null, 고른 표가 없으면 picked는 []이고 "
+    "reason은 두 사유 중 하나입니다.\n\n"
+    "# 판단 범위\n"
+    "연도·기간, 월·분기·연 주기, 시도·시군구 등 세부 지역 단위가 맞는지는 판단하지 마세요. "
+    "이 조건은 별도 코드가 확인합니다. 지표가 맞으면 해당 조건이 달라도 표를 고르세요.\n\n"
+    "# 출력 형식\n"
+    "설명이나 Markdown 없이 JSON 객체 한 줄만 출력하세요.\n"
+    '{"picked": [후보 번호, ...], "reason": null}\n'
+    "또는\n"
+    '{"picked": [], "reason": "out_of_scope"}\n'
+    "또는\n"
+    '{"picked": [], "reason": "no_item"}\n\n'
+    "# 예시\n"
+    "입력:\n"
+    "질문: 2025년 출생아 수는?\n"
+    "후보 통계표:\n"
+    "[1] 출생아 수, 2020~2024년\n"
+    "[2] 합계출산율, 2020~2024년\n"
+    "출력:\n"
+    '{"picked": [1], "reason": null}\n\n'
+    "입력:\n"
+    "질문: 전입자 수는?\n"
+    "후보 통계표:\n"
+    "[1] 출생아 수\n"
+    "[2] 사망자 수\n"
+    "출력:\n"
+    '{"picked": [], "reason": "no_item"}\n\n'
+    "입력:\n"
+    "질문: 자동차 등록 대수는?\n"
+    "후보 통계표:\n"
+    "[1] 주민등록인구\n"
+    "출력:\n"
+    '{"picked": [], "reason": "out_of_scope"}'
 )
 
 
 def user_message(question: str, passages: list[str]) -> str:
-    tables = "\n\n".join(f"[{n}]\n{p}" for n, p in enumerate(passages, 1))
-    return f"후보 통계표:\n{tables}\n\n질문: {question}"
+    tables = "\n\n".join(f"[{n}] {p}" for n, p in enumerate(passages, 1))
+    return f"질문: {question}\n\n후보 통계표:\n{tables}"
 
 
 def parse(text: str, n: int) -> tuple[list[int], str | None]:
@@ -94,7 +135,28 @@ class HcxSelector:
         self.client = self.client or self._client()
         result = self.client.generate(SYSTEM, user_message(question, [self.text_of[k] for k in keys]))
         if result.status != STATUS_OK:
-            raise RuntimeError(f"HCX-007 call failed ({result.status}): {result.error}")
+            raise RuntimeError(f"{getattr(self.client, 'model', MODEL)} call failed ({result.status}): {result.error}")
         picked, reason = parse(result.text, len(keys))
         return HcxResult(keys=[keys[i - 1] for i in picked], calls=result.attempts, usage=dict(result.usage or {}),
                          reason=reason)
+
+
+@dataclass
+class OpenAIClient:
+    """Same generate() contract as HCXClient, over OpenAI chat completions: the same prompt and parser with another
+    model (T2-09 lab: HCX-007 vs gpt-4o-mini). OPENAI_API_KEY comes from this repo's .env; the SDK retries 429/5xx."""
+
+    model: str = "gpt-4o-mini"
+
+    def generate(self, system: str, user: str) -> Any:
+        from types import SimpleNamespace
+
+        from dotenv import load_dotenv
+        from openai import OpenAI
+
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+        r = OpenAI(max_retries=5).chat.completions.create(
+            model=self.model, temperature=0.0, max_tokens=MAX_TOKENS["none"], response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+        return SimpleNamespace(status=STATUS_OK, text=r.choices[0].message.content or "", attempts=1, error=None,
+                               usage={"input_tokens": r.usage.prompt_tokens, "output_tokens": r.usage.completion_tokens})

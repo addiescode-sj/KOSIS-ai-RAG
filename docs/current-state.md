@@ -9,7 +9,26 @@ KOSIS statistics AI chatbot, **Phase 2 (실전 2): table-guide RAG chatbot**, du
 Phase 1 repo is the `vendor/phase1` submodule (pinned commit); its `kosis_ai.schemas`,
 `normalize`, `eval/` harness are imported, not copied.
 
-## Current phase (2026-10-27)
+## T2-09 prompt update (2026-11-03)
+
+- Result branch: `T2-09-hcx-prompt-v3`, based on `T2-09-hcx-no-answer`; worktree: `/private/tmp/KOSIS-ai-RAG-T2-09-hcx-prompt`.
+- The user requested a separate branch and commit. The branch exists; T-04 commit preparation is in progress, with no commit result recorded yet. Continue from `docs/plans/t2-09-hcx-prompt/TASKS.md`.
+- `src/kosis_rag/hcx.py` uses prompt v3: a structured Korean selector role, ordered decisions, exact JSON contract, and positive/no-item/out-of-scope examples. Input now places `질문:` before `후보 통계표:` and numbered candidates.
+- Selection remains measure-based; year, frequency, and detailed geography are checked separately by code. Parser, reason categories, model, and thinking settings are unchanged.
+- Independent verifier PASS: focused checks (7 tests), `bash scripts/verify.sh` (exit 0, 185 tests, `verify: OK`), and `git diff --check` (exit 0). No separate verifier log artifact exists.
+- Live HCX evaluation was not run. V3 performance is unmeasured; historical v2 metrics must not be attributed to v3. A future comparison needs the T2-09 dev/test evaluation and available credentials, data, and services.
+- Preserve the unrelated user changes in the separate T2-32 checkout. This handoff does not imply integration into that checkout.
+
+### Context Index
+
+- `docs/plans/t2-09-hcx-prompt/PLAN.md` — contains: approved contract and scope — use_for: implementation review.
+- `docs/plans/t2-09-hcx-prompt/TASKS.md` — contains: execution checklist — use_for: final task status.
+- `docs/reports/t2-09-hcx-prompt-REPORT.md` — contains: changes, verification, limitations — use_for: completed-work evidence.
+- `src/kosis_rag/hcx.py` — contains: v3 prompt, input builder, parser — use_for: implementation review.
+- `tests/test_no_answer.py` — contains: exact input-format assertion — use_for: focused verification.
+- `lab/T2-09-hcx-no-answer/REPORT.md` — contains: historical v1/v2 evaluation — use_for: future live comparison.
+
+## Earlier phase snapshot (2026-10-27)
 
 - **T2-00 done**: repo bootstrapped.
   - Harness copied from Phase 1 unchanged: `.claude/` (agents, hooks, skills, settings.json), `AGENTS.md`, `.mcp.json`, `scripts/*.ts`, `docs/templates/`.
@@ -26,9 +45,9 @@ Phase 1 repo is the `vendor/phase1` submodule (pinned commit); its `kosis_ai.sch
 
 ## How to verify
 
-`bash scripts/verify.sh` → `verify: OK` (pytest 2 pass, frontend tsc).
+`bash scripts/verify.sh` → `verify: OK` (185 tests passed on the active T2-09 branch, 2026-11-03).
 
-## Known gaps
+## Earlier known gaps (2026-10-27; not reassessed in this prompt-only update)
 
 - `docker compose build` not yet run (needs `uv.lock` committed, Docker daemon). Covered by T2-17.
 - Backend has no CORS / frontend→backend wiring yet (T2-11).

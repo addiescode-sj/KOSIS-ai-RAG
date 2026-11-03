@@ -55,6 +55,7 @@ STAGED = {
     "staged-clova": {"cond_filter": True, "stage2": "clova"},  # stage 1 + CLOVA
     "hybrid+cond-hcx": {"cond_filter": True, "rerank_ckpt": "", "stage2": "hcx"},  # T2-09, HCX_THINKING=none | low
     "staged-hcx": {"cond_filter": True, "stage2": "hcx"},
+    "hybrid+cond-gpt": {"cond_filter": True, "rerank_ckpt": "", "stage2": "gpt"},  # same prompt, gpt-4o-mini
 }
 
 
