@@ -138,3 +138,14 @@ def test_summary_line_names_what_the_table_counts():
     record = _record()
     record.info = record.info.model_copy(update={"table_name": "시도/연령/출생아수별 부인"})
     assert to_document(record).splitlines()[0].startswith("시도/연령/출생아수별 부인 | 세는 대상: 부인 | Y 2015~2020")
+
+
+@offline
+def test_exported_build_reads_back_the_same_without_pickle(tmp_path):  # T2-11: Colab GPU export -> local import
+    path = tmp_path / "build.npz"
+    metas = [to_metadata(_record())]
+    index.write_build(path, name="kosis_kure__x__1", ids=["101_DT_T"], docs=["문서"], metas=metas,
+                      vectors=[[0.25, -0.5]], record={"doc_format": "x"})
+    build = index.read_build(path)
+    assert build == {"name": "kosis_kure__x__1", "ids": ["101_DT_T"], "docs": ["문서"], "metas": metas,
+                     "record": {"doc_format": "x"}, "vectors": [[0.25, -0.5]]}

@@ -55,7 +55,8 @@ Linear 마일스톤 M4~M7, 하위 이슈는 괄호 안 KOS 번호. 11/02에 데�
 - [x] **T2-09** 답 없음 판정 — HCX-007 LLM 리랭커(2차, T2-07 `LLM_RERANKERS`)가 고른 표가 없으면 답 없음, 점수 임계값과 골든셋으로 비교·보정, 범위 밖(지역통계 등) 안내 문구. 완료 기준: 리랭커 전/후 · thinking_effort none/low의 답 없음 P/R/F1(사유별)·Hit@1·MRR·지연·호출 수 비교 리포트(`lab/`) → 결과(test, KURE hybrid+cond 위): 답 없음 F1 τ 0.474 → HCX-007 none 0.692 · low 0.882, 답 있음 오거절 40/60 → 1/60(low), Hit@1 19 → 33, MRR 0.399 → 0.608, 지연 p50 0.09 → 10.9초(low)·1.6초(none). 사유 라벨은 부정확해 범위 밖만 전용 문구 (`lab/T2-09-hcx-no-answer/REPORT.md`, `plans/T2-09.md`)
 - [ ] **T2-10** 검색 API 고정 (산출물①) — `search_tables(question, k) -> list[TableCandidate]` (후보 + 점수)
 - [x] **T2-37** 노드 단위 FastAPI — LangGraph 검색 노드(parse·retrieve·rerank1·rerank2·gate·answer)를 기능별 endpoint로 노출하고, StreamingResponse·BackgroundTasks·SSE로 비동기 처리, Swagger(OpenAPI) 문서. 완료 기준: 노드별 endpoint, SSE 노드 이벤트 스트림, 노드 체인 결과 = `run_search` 결과(pytest), `docs/openapi.json` → 결과: 검색 endpoint 0 → 9(노드 6·목록·JSON·SSE, OpenAPI paths 1 → 10), 노드 체인 = `/search` 결과 8/8, 첫 응답 바이트 p50 118.5 ms → SSE 첫 이벤트 26.6 ms(로컬 Chroma, 리랭커 꺼짐, mock LLM), 가짜 표 422·위조 출처 덮어쓰기, pytest 364 → 371 (`plans/T2-37.md`)
-- [ ] **T2-11** 안내 챗봇 데모 (산출물③) — 추천에 기관·수록기간·링크, 답 없으면 없다고 말함
+- [x] **T2-11** 안내 챗봇 데모 (산출물③) — 추천에 기관·수록기간·링크, 답 없으면 없다고 말함 → 결과: 채팅 UI 0 → 1 (Next.js + shadcn + AI SDK `useChat`, `/search/stream` 프록시로 노드 진행·답변·출처 카드·거절 카드), compose 기동 backend 검색 불가 → 3/3 healthy, 브라우저 종단 간 1/1(실제 HCX, 노드 5개 표시 → LLM 안내 + 출처 + 후보 5개). 버그 2개 수정(standalone `HOSTNAME`, Chrome `scrollIntoView` Promise). 1차 리랭커가 컨테이너 CPU에서 25~39초로 지연 대부분, 이미지 backend 9.96 GB. Colab 색인 노트북 (`plans/T2-11.md`)
+- [~] **T2-38** 안내 답변 토큰 스트리밍 — guide 노드의 LLM 답변을 검증된 앞부분만 `/search/stream`에 `event: token`으로 흘리고 채팅 화면이 그린다. 완료 기준: 최종 `SearchResult` = `run_search`(pytest), 흘린 글자에 검증 실패 0·NO_MATCH 0, 첫 토큰 시간 vs 결과 시간 (진행: 검증된 앞부분만 `event: token`, 최종 결과 = `run_search` 3/3, 누출 0, 한글 뒤 ID 검출 보강, pytest 372 → 389. 실제 HCX 첫 토큰 시간 측정 대기, `plans/T2-38.md`)
 - [ ] **T2-12** 검색 전략 문서 (산출물②) — BM25·임베딩·하이브리드·리랭커 비교표, "Hit@5 몇 → 몇" → `docs/search_strategy.md`
 - [ ] **T2-13** ⭐ 실패 분석 (산출물④) — 유형별 정확도 + 실패 유형표 → `docs/phase2_failures.md`
 - [ ] **T2-17** Docker Compose 배포 — 단일 서버에 `docker compose up -d`로 backend·frontend 기동, `data/` 읽기 전용 마운트, `/health`·데모 질의 스모크 확인
@@ -101,3 +102,4 @@ Linear에서 마감·우선순위·담당을 바꾸면 이 표도 같이 고친�
 | T2-34 | — | 11/03 | P1 | T2-28, T2-33 | 이선주 |
 | T2-36 | KOS-87 (선행 일부) | 11/14 | P2 | T2-10, T2-15 | 이선주 |
 | T2-37 | — | 11/05 | P2 | T2-10, T2-36 | — |
+| T2-38 | — | 11/05 | P2 | T2-37, T2-11 | — |

@@ -190,7 +190,9 @@ async def search(args: SearchArgs, background: BackgroundTasks, rt: Runtime = De
 def search_stream(args: SearchArgs, background: BackgroundTasks,
                   rt: Runtime = Depends(get_runtime)) -> Iterator[ServerSentEvent]:
     """노드가 끝날 때마다 `event: <노드 이름>` (data = 그 노드의 trace: seconds 등)을 보내고,
-    마지막에 `event: result` (data = `SearchResult`, `/search`와 같은 값)를 보낸다.
+    guide가 안내 문장을 쓰는 동안 `event: token` (data = `{"delta": "..."}`)을 보낸다 — 검증(후보에 없는 표 ID·연도)을
+    통과한 앞부분만 단어 단위로 흐르고, `NO_MATCH`는 흐르지 않는다. 마지막에 `event: result`
+    (data = `SearchResult`, `/search`와 같은 값, 출처 포함 최종 문장)를 보낸다.
 
     예: `curl -N -X POST localhost:8000/search/stream -H 'content-type: application/json' -d '{"question": "..."}'`
     """
