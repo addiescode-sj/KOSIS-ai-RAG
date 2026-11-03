@@ -38,3 +38,37 @@ def test_absent_ok_lists_tables_holding_all_terms():
     assert absent_ok({"absent": ["자동차"]}, metas) == ["a"]
     assert absent_ok({"absent": ["혼인건수"], "year": "2030"}, metas) == []
     assert absent_ok({"absent": []}, metas)  # no terms is a problem, not a pass
+
+
+META = {"info": {"table_name": "시도/인구동태건수", "survey_name": "인구동향조사", "menu_path": "인구 > 인구동향조사"},
+        "items": ["출생건수 (명)", "조출생률 (천명당)", "사망건수 (명)"],
+        "classes": [{"name": "행정구역별", "labels": ["전국", "서울특별시", "부산광역시"]}]}
+
+
+def births() -> CalcItem:
+    return item(facts=[cell_fact("f1", "2025", {"행정구역별": "서울특별시", "항목": "출생건수 (명)"})])
+
+
+def test_user_phrase_must_pin_the_cell_against_sibling_labels():
+    from evals.builders.golden_v2 import check_user_question
+
+    t = "2025년 서울특별시 출생건수 (명)은?"
+    assert check_user_question(births(), t, "2025년 서울에서 출생건수는?", {}, "출생건수 (명)", META) == []
+    # '아이' fits 출생건수 and 조출생률 alike (USER_WORDS 출생): it does not pin the item
+    assert check_user_question(births(), t, "2025년 서울 아이 얼마나 돼?", {"출생건수 (명)": "아이"}, "출생건수 (명)", META)
+    assert check_user_question(births(), t, "2025년 서울에서 태어난 아이 건수는?", {"출생건수 (명)": "태어난 아이 건수"},
+                               "출생건수 (명)", META) == []  # 건수 bigram tips it to 출생건수
+    assert check_user_question(births(), t, "2025년 서울과 부산광역시 출생건수는?", {}, "출생건수 (명)", META)  # another cell
+    assert check_user_question(births(), t, "2025년 서울 출생건수, 열두 살 기준", {}, "출생건수 (명)", META)  # Korean count
+
+
+def test_carry_keeps_judgements_and_slotted_rows_that_left_the_top10():
+    from evals.builders.golden_v2 import carry
+
+    prev = [{"qid": "q", "key": "a", "slot": "1", "auto": "claude"}, {"qid": "q", "key": "b", "slot": "", "auto": "claude"},
+            {"qid": "q", "key": "c", "slot": "1", "auto": "claude"}]
+    new = [{"qid": "q", "key": "a", "slot": "", "auto": ""}, {"qid": "q", "key": "b", "slot": "", "auto": ""},
+           {"qid": "q", "key": "d", "slot": "", "auto": ""}]
+    out = {r["key"]: r for r in carry(prev, new)}
+    assert (out["a"]["slot"], out["a"]["auto"]) == ("1", "claude") and out["b"]["auto"] == "claude"
+    assert out["d"]["auto"] == "" and out["c"]["found_by"] == "carried" and out["c"]["slot"] == "1"

@@ -1,7 +1,8 @@
 """Golden set v2 for L1-L4 (T2-32): one question per sampled table, the same qid in every layer.
 
     python -m evals.builders.golden_v2 draft                    # tables, facts, template questions -> golden_v2_draft.csv
-    (write golden_v2_texts.jsonl: one line per qid with the question and L2 measures/dimensions, plus extra items)
+    (write golden_v2_texts.jsonl: one line per qid with the question, `terms` {label or item: phrase in the question},
+L2 measures/dimensions, plus extra items)
     python -m evals.builders.golden_v2 pool                     # check texts, export retrieval_pool_v2.csv to judge
     (fill `slot` in retrieval_pool_v2.csv for every other table that answers the question, `auto`=claude on judged rows)
     python -m evals.builders.golden_v2 finish                   # -> retrieval/query/calculation_golden_v2.jsonl
@@ -31,7 +32,7 @@ from kosis_rag.query import SIDO, SIDO_ORDER
 from evals.builders import diverse
 from evals.builders.phase1 import sha256
 from evals.builders.pool import COLUMNS, POOL_K, apply_labels, assign_splits, pool_rows
-from evals.schemas import DATASETS, ROOT, TABLES, CalcItem, QueryItem, RetrievalItem, check_items
+from evals.schemas import DATASETS, GOLDEN, ROOT, TABLES, CalcItem, QueryItem, RetrievalItem, check_items, load_jsonl
 
 WORK = DATASETS / "golden_v2_work.jsonl"
 DRAFT = DATASETS / "golden_v2_draft.csv"
@@ -88,6 +89,11 @@ def draft(args) -> int:
                 diverse.make_items(info["key"], sha256(path), df, dims, random.Random(f"{args.seed}-{info['key']}"), n)}
         if "VAL" not in made:
             continue
+        if r["unit"]:  # the cell has no unit column: take the table's own unit (registry), never a guess
+            for it in made.values():
+                for f in it.required_facts + it.aux_facts:
+                    if f.source_ref and not f.unit:
+                        f.unit = r["unit"]
         qtype, want = ROTATION[n % len(ROTATION)]
         rep = made.get(want, made["VAL"])
         single = df.item_name.iloc[0] if df.item_id.nunique() == 1 else None
@@ -153,11 +159,185 @@ def absent_ok(item: dict, metas: dict) -> list[str]:
     return [k for k, m in metas.items() if all(t in m["search_text"] for t in terms) and (not year or year in m["periods"])]
 
 
+# Everyday words for official terms (T2-33): a question may say the user word instead of the label, when no other
+# label of the same dimension fits the phrase as well. Reviewed as a fixed list, never written per question.
+USER_WORDS = {
+    "출생": ("태어난", "태어나", "아이", "아기", "신생아"), "출산": ("아이", "낳"), "혼인": ("결혼",), "이혼": ("헤어진", "갈라선"),
+    "사망": ("돌아가신", "숨진", "죽은"), "가구": ("집", "세대"), "인구": ("사람", "주민"), "남자": ("남성",), "여자": ("여성",),
+    "외국인": ("외국 사람", "외국에서 온"), "전입": ("이사 온", "이사와", "옮겨 온"), "전출": ("이사 간", "떠난", "빠져나간"),
+    "이동": ("이사", "옮긴"), "입국": ("들어온", "들어오"), "출국": ("나간", "떠난"), "유학생": ("유학",),
+    "근로자": ("일하는", "노동자"), "통근": ("출퇴근", "출근", "일하러"), "통학": ("학교 다니", "등교", "학교에 다니"),
+    "취업": ("일하는", "일을 하는", "직장"), "유업자": ("일하는", "직업이 있는", "직장"), "실업": ("일자리가 없", "실직"),
+    "미혼": ("결혼 안 한", "결혼하지 않은", "결혼을 안 한"), "유배우": ("배우자가 있는", "배우자 있는"),
+    "사별": ("배우자를 잃은", "먼저 떠나보낸"), "주택": ("집",), "귀화": ("국적을 취득", "국적을 얻은", "국적 취득"),
+    "자녀": ("아이", "아들딸", "자식"), "고령자": ("노인", "어르신"), "고령": ("노인", "어르신"), "매출": ("팔아", "판매"),
+    "수출": ("해외에 판", "수출"), "비율": ("비중", "몇 퍼센트", "몇 %"), "이수": ("마친", "수료"), "추계": ("전망", "예상"),
+    "체류": ("머무는", "머물"), "종사자": ("일하는 사람", "직원"), "부인": ("기혼 여성", "아내"), "아내": ("부인", "신부"), "남": ("남성", "남자"), "여": ("여성", "여자"),
+}
+_KOREAN_COUNT = re.compile(r"(?<![가-힣])(?:한|두|세|네|다섯|여섯|일곱|여덟|아홉|열|스물|서른|마흔|쉰|예순|일흔|여든|아흔)+\s?(?:살|명|개|번|건|가구|사람)")
+
+
+REGION_DIM = re.compile(r"행정구역|시도|시군구|읍면동|동읍면|지역")
+
+
+def level(label: str) -> int:
+    """Administrative level of a region label: 0 시도, 1 시·군, 2 구, 3 읍·면·동, 9 not a region. A question may name the
+    region a cell sits in (영광군 for 백수면), not another region of the cell's own level (부산 for 서울)."""
+    if label in OFFICIAL:
+        return 0
+    for n, ends in ((1, ("시", "군", "도")), (2, ("구",)), (3, ("읍", "면", "동", "리", "부"))):
+        if label.endswith(ends):
+            return n
+    return 9
+
+
+def core(name: str) -> str:
+    return diverse.squash(re.sub(r"\(.*?\)", "", name)) or diverse.squash(name)
+
+
+def bigrams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def fit(name: str, phrase: str) -> int:
+    """How well a phrase names a label: shared character bigrams, +2 for each USER_WORDS key that links them."""
+    c, p = core(name), diverse.squash(phrase)
+    synonyms = sum(1 for k, words in USER_WORDS.items() if k in c and any(diverse.squash(u) in p for u in words))
+    return len(bigrams(c) & bigrams(p)) + 2 * synonyms
+
+
+def siblings(dim: str, name: str, meta: dict) -> list[str]:
+    """Other labels of the same dimension (the item list for the item), which a phrase must not fit as well."""
+    pool_ = meta["items"] if dim == "항목" else next((c["labels"] for c in meta["classes"] if c["name"] == dim), [])
+    return [o for o in pool_ if core(o) != core(name) and not diverse.is_total(o)]
+
+
+def check_user_question(calc: CalcItem, template: str, question: str, terms: dict, item: str | None, meta: dict) -> list[str]:
+    """T2-33 rule: years kept, no other digits or Korean counts, and every non-total label and the item named either
+    as written or by a declared term that fits it better than any sibling label (so the cell stays pinned)."""
+    problems = []
+    years = set(re.findall(r"(\d{4})년", template))
+    problems += [f"year {y} missing" for y in sorted(years) if y not in question]
+    allowed = diverse.allowed_text_numbers(calc.required_facts + calc.aux_facts) | years | set(diverse._NUMBER.findall(template))
+    if stray := [n for n in diverse._NUMBER.findall(question) if n not in allowed and n.replace(",", "") not in allowed]:
+        problems.append(f"stray numbers {stray}")
+    if m := _KOREAN_COUNT.search(question):
+        problems.append(f"Korean count {m.group(0)!r}")
+    words = [(dim, label) for f in calc.required_facts + calc.aux_facts if f.source_ref
+             for dim, label in (f.dims or {}).items() if dim != "항목" and not diverse.is_total(label)]
+    words = list(dict.fromkeys(words)) + ([("항목", item)] if item else [])
+    named = {core(n) for _, n in words}
+    # context words that are not a claim on another cell: the table's own name, survey and menu path, the cell's
+    # labels as written (with parentheses, '내국인인구(15세이상)'), and the 시도/시군 a sub-region sits in
+    context = diverse.squash(" ".join([meta["info"]["table_name"], meta["info"]["survey_name"], meta["info"]["menu_path"],
+                                       *(n for _, n in words)]))
+    fact_dims = {dim for f in calc.required_facts + calc.aux_facts if f.source_ref for dim in (f.dims or {})}
+    for dim in fact_dims:  # a label of the same dimension that is not the cell's points the reader at another cell
+        clash = [o for o in siblings(dim, "", meta) if len(core(o)) >= 3 and core(o) in diverse.squash(question)
+                 and core(o) not in context and not any(core(o) in n or n in core(o) for n in named)
+                 and not (REGION_DIM.search(dim) and level(o) < min((level(n) for d, n in words if d == dim), default=0))]
+        if clash:
+            problems.append(f"names another {dim} label {clash[:3]}")
+    for dim, name in words:
+        if diverse.label_ok(name, question) if dim != "항목" else core(name) in diverse.squash(question):
+            continue
+        phrase = terms.get(name)
+        if not phrase or diverse.squash(phrase) not in diverse.squash(question):
+            problems.append(f"{name!r} not named (term {phrase!r})")
+            continue
+        gold = fit(name, phrase)
+        # a sub-category ('부엌_재래식_공동사용' under '부엌_재래식') is not a rival: the phrase names the whole group
+        rivals = [o for o in siblings(dim, name, meta) if fit(o, phrase) >= gold and core(name) not in core(o)]
+        if gold == 0 or rivals:
+            problems.append(f"term {phrase!r} for {name!r} does not pin it" + (f" (also fits {rivals[:3]})" if rivals else ""))
+    return problems
+
+
+def quoted_labels(question: str, meta: dict) -> int:
+    """Labels and items of the table written in the question as they are: the lexical cue BM25 gets (T2-33)."""
+    q = diverse.squash(question)
+    vocab = {core(v) for v in [*meta["items"], *(lab for c in meta["classes"] for lab in c["labels"])]}
+    hits = {v for v in vocab if len(v) >= 2 and v not in ("계", "전체", "합계") and v in q}
+    return sum(1 for v in hits if not any(v != w and v in w for w in hits))  # '67세' once, not also '7세' and '6세'
+
+
+def name_overlap(question: str, meta: dict) -> float:
+    q = bigrams(re.sub(r"[\d\s\W_]+", "", question))
+    name = bigrams(re.sub(r"[\d\s\W_]+", "", meta["info"]["table_name"] + meta["info"]["menu_path"].split(" > ")[-1]))
+    return len(q & name) / len(q) if q else 0.0
+
+
+def difficulty(items: list[RetrievalItem], metas: dict) -> dict:
+    """Per qtype: mean quoted labels and median table-name overlap of the primary tables (answerable items)."""
+    from statistics import mean, median
+
+    by: dict[str, list[tuple[int, float]]] = {}
+    for i in items:
+        if i.answerable:
+            v = max(((quoted_labels(i.question, metas[s[0]]), name_overlap(i.question, metas[s[0]])) for s in i.required))
+            by.setdefault(i.qtype, []).append(v)
+            by.setdefault("all", []).append(v)
+    return {q: {"n": len(v), "quoted": round(mean(x for x, _ in v), 2), "name_overlap": round(median(y for _, y in v), 3)}
+            for q, v in sorted(by.items())}
+
+
+def same_cell(fact, df) -> list[float]:
+    """Values another table holds for the fact's cell: same period, every non-total label (item name included) among
+    the row's labels, all other labels totals. Empty when the table has no such cell (structure differs)."""
+    wanted = {core(v) for v in (fact.dims or {}).values() if not diverse.is_total(v)}
+    sub = df[(df.period == fact.period) & (df.value_kind == "ok")]
+    out = []
+    for row in sub.itertuples(index=False):
+        labels = [getattr(row, f"dim{i}_label") for i in range(1, 9) if isinstance(getattr(row, f"dim{i}_label"), str)]
+        have = {core(x) for x in [*labels, row.item_name]}
+        if wanted <= have and all(diverse.is_total(x) or core(x) in wanted for x in labels):
+            out.append(row.value)
+    return out
+
+
+def audit_alternates(l1: list[RetrievalItem], calc_by_qid: dict, values: Path, metas: dict) -> dict[str, list[str]]:
+    """Drop an alternate key whose own cell for the question holds a different value (T2-33 review 14/21); keys whose
+    tables lack a matching cell stay (another breakdown of the same count) and are listed as unverified."""
+    import pyarrow.parquet as pq
+
+    report = {"dropped": [], "unverified": [], "agreed": []}
+    for item in l1:
+        calc = calc_by_qid.get(item.qid)
+        if not calc or len(item.required) != 1:
+            continue
+        facts = [f for f in calc.required_facts if f.source_ref and f.value is not None]
+        keep = [item.required[0][0]]
+        for key in item.required[0][1:]:
+            df = pq.read_table(values / metas[key]["info"]["parquet"]).to_pandas()
+            got = [same_cell(f, df) for f in facts]
+            if any(g and all(abs(v - f.value) > 1e-6 * max(1, abs(f.value)) for v in g) for g, f in zip(got, facts)):
+                report["dropped"].append(f"{item.qid} {key}")
+                continue
+            report["agreed" if all(got) else "unverified"].append(f"{item.qid} {key}")
+            keep.append(key)
+        item.required[0] = keep
+    return report
+
+
+def carry(prev: list[dict], rows: list[dict]) -> list[dict]:
+    """Keep earlier Claude judgements by (qid, key) when the question was rewritten: a row judged before is not judged
+    again, and a slotted table that dropped out of the new top 10 stays as a row so its slot is not lost."""
+    judged = {(r["qid"], r["key"]): r for r in prev if r.get("auto") == "claude"}
+    seen = set()
+    for r in rows:
+        seen.add((r["qid"], r["key"]))
+        if not r["auto"] and (old := judged.get((r["qid"], r["key"]))):
+            r |= {"slot": old["slot"], "auto": "claude"}
+    qids = {r["qid"] for r in rows}
+    kept = [{**r, "found_by": "carried", "rank": ""} for k, r in judged.items() if k not in seen and r["slot"].strip() and r["qid"] in qids]
+    return rows + kept
+
+
 def texts_by_qid() -> dict[str, dict]:
     return {t["qid"]: t for t in read_jsonl(TEXTS)}
 
 
-def final_items(texts: dict, work: list[dict]) -> tuple[list[tuple[dict, CalcItem]], list[str]]:
+def final_items(texts: dict, work: list[dict], metas: dict) -> tuple[list[tuple[dict, CalcItem]], list[str]]:
     out, problems = [], []
     for x in work:
         calc = CalcItem.model_validate(x["calc"])
@@ -167,7 +347,7 @@ def final_items(texts: dict, work: list[dict]) -> tuple[list[tuple[dict, CalcIte
             continue
         # digits of the table name ('만 13세~만 15세이하') may be named too; they come from the registry, not the writer
         template = " ".join([calc.question, *re.findall(r"\d+", x["table_name"])])
-        issues = diverse.check_question(calc, template, t["question"], t.get("item_term"), item_name(calc, x))
+        issues = check_user_question(calc, template, t["question"], t.get("terms", {}), item_name(calc, x), metas[calc.table_key])
         if issues:
             problems.append(f"{x['qid']}: {'; '.join(issues)}")
             continue
@@ -192,7 +372,7 @@ def pool(args) -> int:
 
     texts, work = texts_by_qid(), read_jsonl(WORK)
     metas = {r["info"]["key"]: r for r in read_jsonl(args.tables)}
-    items, problems = final_items(texts, work)
+    items, problems = final_items(texts, work, metas)
     for t in texts.values():
         if t.get("extra") and t["qtype"] == "no_answer" and (hits := absent_ok(t, metas)):
             problems.append(f"{t['qid']}: no_answer terms {t.get('absent')} found in {hits[:3]}")
@@ -221,6 +401,9 @@ def pool(args) -> int:
             else:
                 r["auto"] = ""
         rows += found
+    if POOL.exists():  # a rewrite keeps the judgements already made (T2-33)
+        with POOL.open(encoding="utf-8-sig", newline="") as f:
+            rows = carry(list(csv.DictReader(f)), rows)
     with POOL.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=[*COLUMNS, "auto"])
         w.writeheader()
@@ -232,13 +415,15 @@ def pool(args) -> int:
 
 def finish(args) -> int:
     texts, work = texts_by_qid(), read_jsonl(WORK)
-    items, problems = final_items(texts, work)
+    full = {r["info"]["key"]: r for r in read_jsonl(args.tables)}
+    items, problems = final_items(texts, work, full)
     if problems:
         print("\n".join(problems))
         return 1
     with POOL.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     l1 = apply_labels(drafts_for(texts, items), rows)
+    alternates = audit_alternates(l1, {c.qid: c for _, c in items}, args.values, full)
     assign_splits(l1)
     check_items(l1, set(json.loads(line)["info"]["key"] for line in args.tables.read_text(encoding="utf-8").splitlines() if line.strip()))
     split = {i.qid: i.split for i in l1}
@@ -267,6 +452,9 @@ def finish(args) -> int:
                "qtypes": dict(Counter(i.qtype for i in l1)), "splits": dict(Counter(i.split for i in l1))},
         "l3": {"items": len(l3), "tables": len({c.table_key for c in l3}), "kinds": dict(Counter(f"{c.kind}/{c.type}" for c in l3)),
                "splits": dict(Counter(c.split for c in l3))},
+        "alternates": {k: len(v) for k, v in alternates.items()}, "alternates_dropped": alternates["dropped"],
+        "difficulty": difficulty(l1, full),
+        "difficulty_v1": difficulty([i for i in load_jsonl(GOLDEN, RetrievalItem) if i.source != "phase1"], full) if GOLDEN.exists() else None,
         "pool_rows": dict(judged), "labels": "questions, measures/dimensions and pool judgements by Claude (T2-32); facts, "
                                              "period/years/regions and rule:* pool rows by code",
         "tables.jsonl": sha256(args.tables),
@@ -279,7 +467,7 @@ def finish(args) -> int:
         for i in l1[::5]:
             w.writerow([i.qid, i.split, i.qtype, i.question, json.dumps(i.required, ensure_ascii=False),
                         texts[i.qid]["measures"], texts[i.qid]["dimensions"], "", ""])
-    print(json.dumps({k: v for k, v in info.items() if k in ("l1", "l3", "pool_rows")}, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in info.items() if k in ("l1", "l3", "pool_rows", "difficulty", "difficulty_v1")}, ensure_ascii=False))
     return 0
 
 
