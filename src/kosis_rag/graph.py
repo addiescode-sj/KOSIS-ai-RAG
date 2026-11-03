@@ -24,6 +24,7 @@ from kosis_chat.llm.model import LLMClient
 
 from kosis_rag import chain
 from kosis_rag import query as query_rules  # module access, so a test can patch query.parse_query
+from kosis_rag.filters import filter_with_relaxation, relax
 from kosis_rag.pipeline import SearchResources
 from kosis_rag.query import ParsedQuery
 from kosis_rag.rerank import rerank_stage1, rerank_stage2
@@ -37,6 +38,7 @@ class SearchState(BaseModel):
     question: str
     query: ParsedQuery | None = None  # set by parse
     removed: dict[str, str] = Field(default_factory=dict)  # set by retrieve: key -> why filtered out
+    relaxed: list[str] = Field(default_factory=list)  # set by retrieve: conditions dropped so a table could pass (T2-29)
     docs: list[Document] = Field(default_factory=list)  # overwritten by retrieve, rerank1, rerank2
     route: Literal["refuse", "guide"] | None = None  # set by gate
     refusal_reason: str | None = None  # set by gate
@@ -78,16 +80,21 @@ def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *
         """Search dense + BM25 under the question's conditions and fuse them by RRF.
 
         In: state.question, state.query (its filter is used only when COND_FILTER is on).
-        Out: {"docs": the fused pool (at most `pool`), "removed": key -> why filtered out, "trace"}.
+        Out: {"docs": the fused pool (at most `pool`), "removed": key -> why filtered out, "relaxed": conditions
+            dropped because no table met them (filters.RELAX_ORDER; years are never dropped), "trace" (with relaxed)}.
         Side effects: Chroma query and BM25 scoring; ValueError from hybrid_search as in the old path. Node: retrieve.
         """
         started = time.perf_counter()
         table_filter = state.query.to_filter() if s.cond_filter and state.query is not None else None
+        relaxed: list[str] = []
+        if table_filter is not None and not table_filter.is_empty():
+            _, relaxed, _ = filter_with_relaxation(resources.records, table_filter)
+            table_filter = relax(table_filter, relaxed)
         docs, removed = hybrid_search(
             state.question, [resources.dense, resources.bm25], names=["dense", "bm25"], table_filter=table_filter,
             records=resources.records, k=s.pool, k_each=s.pool, score_from=0)
-        return {"docs": docs, "removed": removed,
-                "trace": timed("retrieve", state, started, n_docs=len(docs), n_removed=len(removed))}
+        return {"docs": docs, "removed": removed, "relaxed": relaxed,
+                "trace": timed("retrieve", state, started, n_docs=len(docs), n_removed=len(removed), relaxed=relaxed)}
 
     def rerank1(state: SearchState) -> dict:
         """Re-order the top rerank_n by the stage 1 cross-encoder.

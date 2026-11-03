@@ -18,7 +18,7 @@ import time
 from collections.abc import Iterable
 
 from kosis_rag.filters import TableFilter, filter_tables
-from kosis_rag.query import MAX_RESULTS, MEASURES, ParsedQuery
+from kosis_rag.query import MAX_RESULTS, ParsedQuery
 from kosis_rag.schemas import TableRecord
 
 from evals.evaluators import retrieval
@@ -32,9 +32,9 @@ SLOT_FIELDS = {
     "measure": ("measures",),
 }
 SLOTS = tuple(SLOT_FIELDS)
-# A gold measure concept (출생) filters with the parser's search words for it (출생, 출산, 생아), so a gold run and a
-# pred run that read the same concept build the same filter.
-MEASURE_WORDS = {words[0]: words for _, words in MEASURES}
+# A gold measure concept (출생) is what ParsedQuery.measures holds too (T2-29, C7); to_filter turns a concept into
+# the search words (출생, 출산, 생아) or a rank-only hint, so a gold run and a pred run that read the same concept
+# build the same filter.
 HELP_MIN = 2  # net Hit@5 gain on dev that counts as help; 2 questions out of 29, see §4.4 for why it is read with the flips
 
 
@@ -67,8 +67,7 @@ def gold_parsed(item: QueryItem) -> ParsedQuery:
         start, end = (p[:4] if p else None for p in (item.period_start, item.period_end))
         years = [int(start)] if start and start == end else []
     return ParsedQuery(years=years, period_start=item.period_start, period_end=item.period_end, cycle=item.cycle,
-                       regions=item.regions, dimensions=item.dimensions or [],
-                       measures=[w for c in item.measures or [] for w in MEASURE_WORDS.get(c, [c])])
+                       regions=item.regions, dimensions=item.dimensions or [], measures=item.measures or [])
 
 
 def has_slot(parsed: ParsedQuery, slot: str) -> bool:

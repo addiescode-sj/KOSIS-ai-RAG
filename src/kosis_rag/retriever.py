@@ -14,7 +14,7 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 from rank_bm25 import BM25Okapi
 
-from kosis_rag.filters import TableFilter, filter_tables, soft_rank, why_excluded
+from kosis_rag.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
 from kosis_rag.schemas import TableRecord
 
 _WORD = re.compile(r"[0-9A-Za-z가-힣]+")
@@ -61,6 +61,8 @@ class ChromaTableRetriever(BaseRetriever):
     The collection holds vectors we computed ourselves (embedding_function=None), so the query must be embedded
     with the same model; `connect` refuses a collection built with another model.
     A `TableFilter` (T2-05, via `with_filter`) is decided on `records` (tables.jsonl) and sent as one `key $in` condition.
+    When no table meets it, the conditions are relaxed one at a time (filters.filter_with_relaxation, T2-29); the
+    dropped ones are in `last_relaxed`. Only a year no table holds still gives no result.
     """
 
     collection: Any
@@ -70,6 +72,7 @@ class ChromaTableRetriever(BaseRetriever):
     doc_format: str | None = None  # collection metadata doc_format (kosis_rag.text format for fine-tuned collections)
     table_filter: TableFilter = Field(default_factory=TableFilter)
     last_removed: dict[str, str] = Field(default_factory=dict)  # why each table was filtered out on the last query
+    last_relaxed: list[str] = Field(default_factory=list)  # conditions dropped on the last query (filters.RELAX_ORDER)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @classmethod
@@ -111,18 +114,21 @@ class ChromaTableRetriever(BaseRetriever):
 
     def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> ChromaTableRetriever:
         """A copy that applies `f`; the tools keep their search_tables(question, k) signature."""
-        return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {}})
+        return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {},
+                                       "last_relaxed": []})
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
         # TODO(T2-09): Chroma always returns k hits, so the chain's "no candidates" refusal never fires here;
         # refusal relies on the LLM's NO_MATCH until a cosine threshold is calibrated on the L1 dev split.
         extra, n = {}, self.k
-        self.last_removed = {}
-        if not self.table_filter.is_empty():
+        self.last_removed, self.last_relaxed = {}, []
+        f = self.table_filter
+        if not f.is_empty():
             if not self.records:
                 raise ValueError("a table filter needs records (tables.jsonl) to decide on")
-            keys, self.last_removed = filter_tables(self.records, self.table_filter)
-            if not keys:  # no table meets the filter; the reasons are in last_removed
+            keys, self.last_relaxed, self.last_removed = filter_with_relaxation(self.records, f)
+            f = relax(f, self.last_relaxed)
+            if not keys:  # no table holds the requested years (the one condition never relaxed); reasons in last_removed
                 return []
             extra, n = {"where": {"key": {"$in": sorted(keys)}}}, min(self.k, len(keys))
         res = self.collection.query(query_embeddings=[self.embed_query(query)], n_results=n,
@@ -131,7 +137,7 @@ class ChromaTableRetriever(BaseRetriever):
             Document(page_content=doc, metadata={**meta, "score": 1.0 - dist}, id=key)
             for key, doc, meta, dist in zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0])
         ]
-        return soft_rank(docs, self.records, self.table_filter)
+        return soft_rank(docs, self.records, f)
 
 
 def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[str] | None = None,
@@ -150,7 +156,9 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
          found), score_from (its name or "other"), rrf_score and rank_<name> per list it appeared in.
          removed = table key -> why the filter dropped it.
     Side effects: calls each retriever (Chroma query / BM25 scoring); raises ValueError when a non-empty filter has
-        no records to decide on.
+        no records to decide on. A filter no table meets is relaxed once here for both lists
+        (filters.filter_with_relaxation, T2-29); a caller that wants the dropped conditions computes them first and
+        passes the relaxed filter (the graph's retrieve node, HybridRetriever).
     Node: retrieve.
     """
     # 1. one list per retriever: a retriever with with_filter (Chroma) filters before its search, the others after
@@ -158,9 +166,13 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
     removed: dict[str, str] = {}
     if table_filter is None or table_filter.is_empty():
         lists = [r.invoke(query)[:k_each] for r in retrievers]
+        if table_filter is not None and records and table_filter.is_soft():
+            lists = [soft_rank(docs, records, table_filter) for docs in lists]  # soft signals only re-rank
     else:
         if not records:
             raise ValueError("a condition needs records (tables.jsonl) to decide on")
+        _, dropped, _ = filter_with_relaxation(records, table_filter)
+        table_filter = relax(table_filter, dropped)
         for r in retrievers:
             if hasattr(r, "with_filter"):
                 filtered: Any = r.with_filter(table_filter, records)
@@ -217,7 +229,8 @@ class HybridRetriever(BaseRetriever):
     A table only the other lists found gets the lowest score of that list, marked `score_from="other"`.
 
     The work is done by `hybrid_search`; this class is the retriever-shaped wrapper the old path (build_search,
-    chain.answer, the eval runners) uses. Side effects: sets `self.last_removed` on every query (tests read it).
+    chain.answer, the eval runners) uses. Side effects: sets `self.last_removed` and `self.last_relaxed` on every
+    query (tests read them).
     Node: not used by the graph (the retrieve node calls hybrid_search with the parse node's filter).
     """
 
@@ -230,16 +243,21 @@ class HybridRetriever(BaseRetriever):
     condition: Callable[[str], TableFilter] | None = None
     records: dict[str, TableRecord] = Field(default_factory=dict)  # registry the condition is decided on
     last_removed: dict[str, str] = Field(default_factory=dict)  # why each table was filtered out on the last query
+    last_relaxed: list[str] = Field(default_factory=list)  # conditions dropped on the last query (T2-29, D3)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
         """Fused tables for the question: the condition (if any) is read here, then hybrid_search does the work.
 
         In: query = the user question. Out: hybrid_search's documents. Side effects: calls `self.condition`
-        (parse_query in the pipeline) and the retrievers; replaces `self.last_removed`. Node: not used by the graph.
+        (parse_query in the pipeline) and the retrievers; replaces `self.last_removed` and `self.last_relaxed`.
+        Node: not used by the graph.
         """
         f = self.condition(query) if self.condition else None
-        self.last_removed = {}
+        self.last_removed, self.last_relaxed = {}, []
+        if f is not None and not f.is_empty() and self.records:
+            _, self.last_relaxed, _ = filter_with_relaxation(self.records, f)
+            f = relax(f, self.last_relaxed)
         docs, self.last_removed = hybrid_search(
             query, self.retrievers, names=self.names, table_filter=f, records=self.records,
             k=self.k, k_each=self.k_each, c=self.c, score_from=self.score_from)

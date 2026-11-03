@@ -1,11 +1,14 @@
-"""Shared vocabulary (T2-30, KOS-97): region, breakdown and unit names, one place for tables and questions.
+"""Shared vocabulary (T2-30, KOS-97; T2-29): region, breakdown and unit names, one place for tables and questions.
 
-Region words stay where the filters and the parser defined them (filters.SIDO, query.REGION_WORDS) and are
-re-exported here as the same objects, so existing imports keep working. New here:
+This module owns the dictionaries (T2-29, C5); `filters` and `query` import them, so nothing here imports those two
+(it used to be the other way round, which stopped the parser from using the table-side keys).
+- 시도 names (SIDO, SIDO_LABELS) and question region words (REGION_WORDS: a wide name such as 수도권 or 영남 stands
+  for several 시도).
 - 시군구 -> 시도, read from the KOSIS region codes of one 읍면동 table (code[:2] is the 시도); built with
   `python -m kosis_rag.vocab --data-dir <provided data>` into data/sigungu.json (gitignored like all data/).
-- breakdown names -> standard keys: KOSIS writes one breakdown many ways (현거주지 / 현 거주지 / 현거주지별,
-  종사상지위 / 종사상의 지위). Keys reuse the question side's names (query.DIMENSION_WORDS) where they exist.
+- breakdown names -> standard keys (DIMENSION_KEYS, table side): KOSIS writes one breakdown many ways (현거주지 /
+  현 거주지 / 현거주지별, 종사상지위 / 종사상의 지위). DIMENSION_WORDS is the question side: the same names plus
+  question-only aliases (연령대 -> 연령, 지역별 -> 시도), to the same keys.
 - unit spellings: labels only, never a scale (천명 stays 천명; 천명당 is a rate, not 1,000 people).
 - question words for one breakdown label, e.g. "1인 가구" is the 가구원수 label "1인".
 """
@@ -17,16 +20,36 @@ import json
 import re
 from pathlib import Path
 
-from kosis_rag.filters import SIDO, SIDO_LABELS
-from kosis_rag.query import DIMENSION_WORDS, REGION_WORDS
-
-__all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "dimension_keys", "unit_key", "LABEL_ALIASES",
-           "measure_keys", "normalize_dimension",
-           "build_sigungu", "load_sigungu"]
+__all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "DIMENSION_WORDS", "dimension_keys", "unit_key",
+           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "load_sigungu"]
 
 REPO = Path(__file__).resolve().parents[2]
 SIGUNGU = REPO / "data" / "sigungu.json"
 SIGUNGU_SOURCE = "values/101_DT_1IN1502.parquet"  # 인구, 가구 및 주택 - 읍면동: every 시도 and 시군구 with codes
+
+# 시도 label -> its current official name; old names (직할시, 강원도, 전라북도, 제주도) and bare short labels map to it
+SIDO = {
+    "서울특별시": ["서울"], "부산광역시": ["부산직할시", "부산"], "대구광역시": ["대구직할시", "대구"],
+    "인천광역시": ["인천직할시", "인천"], "광주광역시": ["광주직할시", "광주"], "대전광역시": ["대전직할시", "대전"],
+    "울산광역시": ["울산"], "세종특별자치시": ["세종"], "경기도": ["경기"], "강원특별자치도": ["강원도", "강원"],
+    "충청북도": ["충북"], "충청남도": ["충남"], "전북특별자치도": ["전라북도", "전북"], "전라남도": ["전남"],
+    "경상북도": ["경북"], "경상남도": ["경남"], "제주특별자치도": ["제주도", "제주"],
+}
+SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
+_CAPITAL = ["서울특별시", "인천광역시", "경기도"]
+# Question wording -> official 시도 names; a wide name stands for several (C2: 영남·호남·충청권·비수도권 unfold too)
+REGION_WORDS: dict[str, list[str]] = {
+    "수도권": _CAPITAL, "비수도권": [name for name in SIDO if name not in _CAPITAL],
+    "충청도": ["충청북도", "충청남도"], "전라도": ["전북특별자치도", "전라남도"], "경상도": ["경상북도", "경상남도"],
+    "영남": ["부산광역시", "대구광역시", "울산광역시", "경상북도", "경상남도"],
+    "호남": ["광주광역시", "전북특별자치도", "전라남도"],
+    "충청권": ["대전광역시", "세종특별자치시", "충청북도", "충청남도"],
+    "강원권": ["강원특별자치도"], "제주권": ["제주특별자치도"],
+}
+REGION_WORDS["영남권"], REGION_WORDS["호남권"] = REGION_WORDS["영남"], REGION_WORDS["호남"]
+for _name, _olds in SIDO.items():
+    for _word in [_name, *_olds]:  # the short form also covers "서울시", "부산시" ...
+        REGION_WORDS.setdefault(_word, [_name])
 
 # normalized breakdown name -> key. Normalized = no spaces, no trailing 별 or bracket note, no leading 장래.
 _KEY_GROUPS: dict[str, list[str]] = {
@@ -96,7 +119,22 @@ _KEY_GROUPS: dict[str, list[str]] = {
     "사망자녀수": ["사망자녀수"],
     "월": ["월"],
 }
-DIMENSION_KEYS: dict[str, str] = {name: key for key, names in _KEY_GROUPS.items() for name in names}
+# every key is also its own name, so dimension_keys(key) == [key] (the question side names keys directly)
+DIMENSION_KEYS: dict[str, str] = {key: key for key in _KEY_GROUPS} | {
+    name: key for key, names in _KEY_GROUPS.items() for name in names}
+# Question side (T2-29, C4·C5): "X별" in a question -> key. Table spellings, minus 월 (월별 is a cycle) and the
+# "가구주의 X"·"모의 연령" compounds (a question's "가구주 연령별" means 연령; the filter matches 가구주의 연령 by name),
+# plus question-only aliases. Keys are written without spaces; the parser allows spaces between the characters.
+_QUESTION_SKIP = {"월"}
+_QUESTION_ALIASES = {
+    "연령층": "연령", "나이대": "연령", "가구규모": "가구원수", "결혼여부": "혼인상태", "혼인여부": "혼인상태",
+    "결혼상태": "혼인상태", "태어난곳": "출생지", "지역": "시도", "행정구역": "시도",  # C4: 지역별·행정구역별 -> 시도
+}
+DIMENSION_WORDS: dict[str, str] = {
+    name: key for key, names in _KEY_GROUPS.items()
+    if key not in _QUESTION_SKIP and not key.startswith("가구주") and key != "모연령"
+    for name in names if name not in _QUESTION_ALIASES
+} | _QUESTION_ALIASES
 assert set(DIMENSION_WORDS.values()) <= set(_KEY_GROUPS), "question breakdown names need a key"
 _NOTE = re.compile(r"\s*[(（][^()（）]*[)）]\s*$")  # "직업(대분류)", "연령(5세)"
 _BYEOL = re.compile(r"별$")
@@ -186,6 +224,7 @@ def build_sigungu(parquet: Path) -> dict[str, list[str]]:
 
 
 def load_sigungu(path: Path = SIGUNGU) -> dict[str, list[str]]:
+    """{시군구 label: [시도, ...]} from data/sigungu.json; {} when the file is not there (the caller logs that once)."""
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
