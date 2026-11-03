@@ -32,7 +32,7 @@ from kosis_rag.query import SIDO, SIDO_ORDER
 from evals.builders import diverse
 from evals.builders.phase1 import sha256
 from evals.builders.pool import COLUMNS, POOL_K, apply_labels, assign_splits, pool_rows
-from evals.schemas import DATASETS, GOLDEN, ROOT, TABLES, CalcItem, QueryItem, RetrievalItem, check_items, load_jsonl
+from evals.schemas import DATASETS, ROOT, TABLES, CalcItem, QueryItem, RetrievalItem, check_items
 
 WORK = DATASETS / "golden_v2_work.jsonl"
 DRAFT = DATASETS / "golden_v2_draft.csv"
@@ -253,34 +253,6 @@ def check_user_question(calc: CalcItem, template: str, question: str, terms: dic
     return problems
 
 
-def quoted_labels(question: str, meta: dict) -> int:
-    """Labels and items of the table written in the question as they are: the lexical cue BM25 gets (T2-33)."""
-    q = diverse.squash(question)
-    vocab = {core(v) for v in [*meta["items"], *(lab for c in meta["classes"] for lab in c["labels"])]}
-    hits = {v for v in vocab if len(v) >= 2 and v not in ("계", "전체", "합계") and v in q}
-    return sum(1 for v in hits if not any(v != w and v in w for w in hits))  # '67세' once, not also '7세' and '6세'
-
-
-def name_overlap(question: str, meta: dict) -> float:
-    q = bigrams(re.sub(r"[\d\s\W_]+", "", question))
-    name = bigrams(re.sub(r"[\d\s\W_]+", "", meta["info"]["table_name"] + meta["info"]["menu_path"].split(" > ")[-1]))
-    return len(q & name) / len(q) if q else 0.0
-
-
-def difficulty(items: list[RetrievalItem], metas: dict) -> dict:
-    """Per qtype: mean quoted labels and median table-name overlap of the primary tables (answerable items)."""
-    from statistics import mean, median
-
-    by: dict[str, list[tuple[int, float]]] = {}
-    for i in items:
-        if i.answerable:
-            v = max(((quoted_labels(i.question, metas[s[0]]), name_overlap(i.question, metas[s[0]])) for s in i.required))
-            by.setdefault(i.qtype, []).append(v)
-            by.setdefault("all", []).append(v)
-    return {q: {"n": len(v), "quoted": round(mean(x for x, _ in v), 2), "name_overlap": round(median(y for _, y in v), 3)}
-            for q, v in sorted(by.items())}
-
-
 def same_cell(fact, df) -> list[float]:
     """Values another table holds for the fact's cell: same period, every non-total label (item name included) among
     the row's labels, all other labels totals. Empty when the table has no such cell (structure differs)."""
@@ -453,8 +425,6 @@ def finish(args) -> int:
         "l3": {"items": len(l3), "tables": len({c.table_key for c in l3}), "kinds": dict(Counter(f"{c.kind}/{c.type}" for c in l3)),
                "splits": dict(Counter(c.split for c in l3))},
         "alternates": {k: len(v) for k, v in alternates.items()}, "alternates_dropped": alternates["dropped"],
-        "difficulty": difficulty(l1, full),
-        "difficulty_v1": difficulty([i for i in load_jsonl(GOLDEN, RetrievalItem) if i.source != "phase1"], full) if GOLDEN.exists() else None,
         "pool_rows": dict(judged), "labels": "questions, measures/dimensions and pool judgements by Claude (T2-32); facts, "
                                              "period/years/regions and rule:* pool rows by code",
         "tables.jsonl": sha256(args.tables),
@@ -467,7 +437,7 @@ def finish(args) -> int:
         for i in l1[::5]:
             w.writerow([i.qid, i.split, i.qtype, i.question, json.dumps(i.required, ensure_ascii=False),
                         texts[i.qid]["measures"], texts[i.qid]["dimensions"], "", ""])
-    print(json.dumps({k: v for k, v in info.items() if k in ("l1", "l3", "pool_rows", "difficulty", "difficulty_v1")}, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in info.items() if k in ("l1", "l3", "pool_rows", "alternates")}, ensure_ascii=False))
     return 0
 
 
