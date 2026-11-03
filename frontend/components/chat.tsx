@@ -130,7 +130,7 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
         <Card>
           <CardContent className="flex flex-col gap-2">
             <Pending label="안내 문장 작성 중 (검증된 부분만 표시)" />
-            <p className="text-sm leading-6 whitespace-pre-wrap text-muted-foreground">{draft}</p>
+            <p className="text-sm leading-6 whitespace-pre-wrap wrap-anywhere text-muted-foreground">{draft}</p>
           </CardContent>
         </Card>
       )}
@@ -145,7 +145,7 @@ function AssistantMessage({ message, running }: { message: ChatMessage; running:
                 <Badge variant="outline">LLM 문장이 검증을 통과하지 못해 코드 안내로 대체</Badge>
               )}
             </div>
-            <p className="text-sm leading-6 whitespace-pre-wrap">{answer}</p>
+            <p className="text-sm leading-6 whitespace-pre-wrap wrap-anywhere">{answer}</p>
           </CardContent>
         </Card>
       )}
