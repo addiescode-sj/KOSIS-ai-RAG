@@ -13,7 +13,7 @@ LangGraph is imported only here: the old path works without it.
 from __future__ import annotations
 
 import time
-from typing import Any, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -25,11 +25,12 @@ from kosis_chat.llm.model import LLMClient
 from kosis_rag import chain
 from kosis_rag import query as query_rules  # module access, so a test can patch query.parse_query
 from kosis_rag.filters import filter_with_relaxation, relax
+from kosis_rag.loader import to_document
 from kosis_rag.pipeline import SearchResources
 from kosis_rag.query import ParsedQuery
 from kosis_rag.rerank import rerank_stage1, rerank_stage2
 from kosis_rag.retriever import hybrid_search
-from kosis_rag.schemas import SearchResult
+from kosis_rag.schemas import SearchResult, TableRecord
 
 
 class SearchState(BaseModel):
@@ -46,16 +47,15 @@ class SearchState(BaseModel):
     trace: dict[str, dict[str, Any]] = Field(default_factory=dict)  # node name -> {"seconds": float, ...}
 
 
-def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5):
-    """Compile the search graph for these resources. Returns the compiled graph (call .invoke({"question": q})).
+Node = Callable[[SearchState], dict]  # one graph node: current state -> the fields it writes
 
-    In: resources = load_resources(...) (records, dense, BM25, stage 1 scorer, stage 2 selector, settings);
-        client = the guide LLM (ChatClovaX, or a Phase 1 client such as MockClient); k = tables shown to the answer
-        (gate / refuse / guide see docs[:k]; the search stages see the whole pool), same default as chain.answer.
-    Out: a compiled LangGraph graph over SearchState. rerank1 is added only when resources.stage1_score is set,
-        rerank2 only when resources.select is set.
-    Side effects: none when built; running it calls the retrievers, the models and the LLMs the resources hold.
-    Node: none (it builds them).
+
+def make_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5) -> dict[str, Node]:
+    """The node functions over these resources, in run order; shared by build_graph and the node API (T2-37).
+
+    In: as build_graph. Out: name -> fn(SearchState) -> state update. rerank1 is present only when
+        resources.stage1_score is set, rerank2 only when resources.select is set; gate, refuse, guide always.
+    Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
     """
     s = resources.settings
 
@@ -148,21 +148,36 @@ def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *
         result = chain.guide_answer(state.question, state.docs[:k], client)
         return {"result": result, "trace": timed("guide", state, started, origin=result.answer_origin)}
 
-    # Nodes: the search stages that are on, then the answer
-    g = StateGraph(SearchState)
-    stages = [("parse", parse), ("retrieve", retrieve)]
+    nodes: dict[str, Node] = {"parse": parse, "retrieve": retrieve}
     if resources.stage1_score is not None:
-        stages.append(("rerank1", rerank1))
+        nodes["rerank1"] = rerank1
     if resources.select is not None:
-        stages.append(("rerank2", rerank2))
-    for name, fn in [*stages, ("gate", gate), ("refuse", refuse), ("guide", guide)]:
+        nodes["rerank2"] = rerank2
+    return {**nodes, "gate": gate, "refuse": refuse, "guide": guide}
+
+
+def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5):
+    """Compile the search graph for these resources. Returns the compiled graph (call .invoke({"question": q})).
+
+    In: resources = load_resources(...) (records, dense, BM25, stage 1 scorer, stage 2 selector, settings);
+        client = the guide LLM (ChatClovaX, or a Phase 1 client such as MockClient); k = tables shown to the answer
+        (gate / refuse / guide see docs[:k]; the search stages see the whole pool), same default as chain.answer.
+    Out: a compiled LangGraph graph over SearchState. rerank1 is added only when resources.stage1_score is set,
+        rerank2 only when resources.select is set.
+    Side effects: none when built; running it calls the retrievers, the models and the LLMs the resources hold.
+    Node: none (it builds them).
+    """
+    nodes = make_nodes(resources, client, k=k)
+    g = StateGraph(SearchState)
+    for name, fn in nodes.items():
         g.add_node(name, fn)
 
     # Edges: a straight line through the search stages, one branch at the gate
+    stages = [name for name in nodes if name not in ("gate", "refuse", "guide")]
     g.add_edge(START, "parse")
-    for (a, _), (b, _) in zip(stages, stages[1:]):
+    for a, b in zip(stages, stages[1:]):
         g.add_edge(a, b)
-    g.add_edge(stages[-1][0], "gate")
+    g.add_edge(stages[-1], "gate")
     g.add_conditional_edges("gate", lambda state: state.route, {"refuse": "refuse", "guide": "guide"})
     g.add_edge("refuse", END)
     g.add_edge("guide", END)
@@ -179,3 +194,42 @@ def run_search(graph, question: str, config: dict | None = None) -> SearchState:
     Node: none (it runs them).
     """
     return SearchState.model_validate(graph.invoke({"question": question}, config=config))
+
+
+def stream_search(graph, question: str, config: dict | None = None) -> Iterator[tuple[str, Any]]:
+    """Run the graph and yield each node as it finishes, then the final state (T2-37, the SSE search).
+
+    In: as run_search.
+    Out: ("<node>", that node's own trace entry) per finished node in run order (trace is cumulative, so only the
+        node's key is sent), then ("result", the final SearchState) — the same state run_search returns.
+    Side effects: as run_search. Node: none (it runs them).
+    """
+    final: dict = {}
+    for mode, chunk in graph.stream({"question": question}, config=config, stream_mode=["updates", "values"]):
+        if mode == "updates":
+            for name, update in chunk.items():
+                yield name, update["trace"][name]
+        else:
+            final = chunk
+    yield "result", SearchState.model_validate(final)
+
+
+def ground_docs(docs: list[Document], records: dict[str, TableRecord]) -> list[Document]:
+    """Re-attach the catalog fields of docs sent from outside (the node API) from the server's records (T2-37).
+
+    In: docs = documents from a request; records = key -> TableRecord (resources.records).
+    Out: the same docs in the same order with id and the catalog metadata (to_document's: key, ids, names, period,
+        url) taken from the record; search metadata (score, ranks, stage*) and page_content are kept, since
+        the nodes read text and scores by key and pass page_content through. So a client may reorder or re-score
+        tables but cannot invent a table or its citation.
+    Side effects: raises KeyError listing the keys that are not in records. Node: none (the API calls it).
+    """
+    keys = [d.metadata.get("key") or d.id for d in docs]
+    unknown = [key for key in keys if key not in records]
+    if unknown:
+        raise KeyError(f"unknown table keys: {unknown}")
+    out = []
+    for d, key in zip(docs, keys):
+        catalog = to_document(records[key].info).metadata  # the catalog fields only
+        out.append(Document(page_content=d.page_content, id=key, metadata={**d.metadata, **catalog}))
+    return out

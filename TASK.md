@@ -54,6 +54,7 @@ Linear 마일스톤 M4~M7, 하위 이슈는 괄호 안 KOS 번호. 11/02에 데�
 - [ ] **T2-08** 쿼리 재작성 — 모호·개념어 질의 대상, 측정
 - [x] **T2-09** 답 없음 판정 — HCX-007 LLM 리랭커(2차, T2-07 `LLM_RERANKERS`)가 고른 표가 없으면 답 없음, 점수 임계값과 골든셋으로 비교·보정, 범위 밖(지역통계 등) 안내 문구. 완료 기준: 리랭커 전/후 · thinking_effort none/low의 답 없음 P/R/F1(사유별)·Hit@1·MRR·지연·호출 수 비교 리포트(`lab/`) → 결과(test, KURE hybrid+cond 위): 답 없음 F1 τ 0.474 → HCX-007 none 0.692 · low 0.882, 답 있음 오거절 40/60 → 1/60(low), Hit@1 19 → 33, MRR 0.399 → 0.608, 지연 p50 0.09 → 10.9초(low)·1.6초(none). 사유 라벨은 부정확해 범위 밖만 전용 문구 (`lab/T2-09-hcx-no-answer/REPORT.md`, `plans/T2-09.md`)
 - [ ] **T2-10** 검색 API 고정 (산출물①) — `search_tables(question, k) -> list[TableCandidate]` (후보 + 점수)
+- [x] **T2-37** 노드 단위 FastAPI — LangGraph 검색 노드(parse·retrieve·rerank1·rerank2·gate·answer)를 기능별 endpoint로 노출하고, StreamingResponse·BackgroundTasks·SSE로 비동기 처리, Swagger(OpenAPI) 문서. 완료 기준: 노드별 endpoint, SSE 노드 이벤트 스트림, 노드 체인 결과 = `run_search` 결과(pytest), `docs/openapi.json` → 결과: 검색 endpoint 0 → 9(노드 6·목록·JSON·SSE, OpenAPI paths 1 → 10), 노드 체인 = `/search` 결과 8/8, 첫 응답 바이트 p50 118.5 ms → SSE 첫 이벤트 26.6 ms(로컬 Chroma, 리랭커 꺼짐, mock LLM), 가짜 표 422·위조 출처 덮어쓰기, pytest 364 → 371 (`plans/T2-37.md`)
 - [ ] **T2-11** 안내 챗봇 데모 (산출물③) — 추천에 기관·수록기간·링크, 답 없으면 없다고 말함
 - [ ] **T2-12** 검색 전략 문서 (산출물②) — BM25·임베딩·하이브리드·리랭커 비교표, "Hit@5 몇 → 몇" → `docs/search_strategy.md`
 - [ ] **T2-13** ⭐ 실패 분석 (산출물④) — 유형별 정확도 + 실패 유형표 → `docs/phase2_failures.md`
@@ -99,3 +100,4 @@ Linear에서 마감·우선순위·담당을 바꾸면 이 표도 같이 고친�
 | T2-33 | — | 11/03 | P1 | T2-32 | 이선주 |
 | T2-34 | — | 11/03 | P1 | T2-28, T2-33 | 이선주 |
 | T2-36 | KOS-87 (선행 일부) | 11/14 | P2 | T2-10, T2-15 | 이선주 |
+| T2-37 | — | 11/05 | P2 | T2-10, T2-36 | — |
