@@ -16,6 +16,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from kosis_ai.normalize import _meta_unit
@@ -74,21 +75,37 @@ def _year(period: str) -> int | None:
     return int(period[:4]) if period[:4].isdigit() else None
 
 
-def _distinct(table, column: str) -> list[str]:
-    return sorted(v for v in table[column].unique().to_pylist() if v not in (None, ""))
+def _distinct(values: set) -> list[str]:
+    return sorted(v for v in values if v not in (None, ""))
+
+
+BATCH_ROWS = 500_000  # rows per Parquet batch; bounds memory to a few hundred MB whatever the table size
 
 
 def _values(path: Path) -> dict:
-    """Distinct period codes, periods, items and (class name -> labels) from one Parquet file."""
-    names = pq.read_schema(path).names
+    """Distinct period codes, periods, items and (class name -> labels) from one Parquet file.
+
+    Read in row batches, not whole columns: the distinct values and (name, code, label) pairs are small, the
+    columns are not (the largest table has 111 million rows; its string columns loaded whole need over 16GB,
+    which froze a 16GB PC). Same result as the whole-column read; only labels that share one code (a missing
+    code) now come out in label order, where that read left their order to the group-by.
+    """
+    pf = pq.ParquetFile(path)
+    names = pf.schema_arrow.names
     dims = [i for i in range(1, MAX_DIMS + 1) if f"dim{i}_name" in names]
     columns = ["prd_se", "period", "item_name", *(f"dim{i}_{part}" for i in dims for part in ("name", "code", "label"))]
-    table = pq.read_table(path, columns=columns)
+    distinct: dict[str, set] = {c: set() for c in ("prd_se", "period", "item_name")}
+    seen: dict[int, set[tuple]] = {i: set() for i in dims}  # dim index -> {(name, code, label)}
+    for batch in pf.iter_batches(batch_size=BATCH_ROWS, columns=columns):
+        for column in distinct:
+            distinct[column].update(batch[column].unique().to_pylist())
+        for i in dims:
+            cols = [f"dim{i}_name", f"dim{i}_code", f"dim{i}_label"]
+            pairs = pa.Table.from_batches([batch]).select(cols).group_by(cols).aggregate([])
+            seen[i].update(zip(*(pairs[c].to_pylist() for c in cols)))
     coded: dict[str, list[tuple[str, str]]] = {}
     for i in dims:
-        cols = [f"dim{i}_name", f"dim{i}_code", f"dim{i}_label"]
-        pairs = table.group_by(cols).aggregate([])
-        for name, code, label in zip(*(pairs[c].to_pylist() for c in cols)):
+        for name, code, label in sorted(seen[i], key=lambda t: tuple(x or "" for x in t)):
             if name and label:
                 coded.setdefault(name, []).append((code or "", label))
     classes = []
@@ -102,9 +119,9 @@ def _values(path: Path) -> dict:
             labels = [x for x in labels if x in TOP_REGIONS] + [x for x in labels if x not in TOP_REGIONS]
         classes.append(TableClass(name=name, labels=labels, n_labels=len(labels), levels=_region_levels(name, pairs)))
     return {
-        "prd_se": _distinct(table, "prd_se"),
-        "periods": _distinct(table, "period"),
-        "items": _distinct(table, "item_name"),
+        "prd_se": _distinct(distinct["prd_se"]),
+        "periods": _distinct(distinct["period"]),
+        "items": _distinct(distinct["item_name"]),
         "classes": classes,
     }
 

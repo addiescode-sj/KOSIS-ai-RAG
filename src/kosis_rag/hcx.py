@@ -144,19 +144,37 @@ class HcxSelector:
 @dataclass
 class OpenAIClient:
     """Same generate() contract as HCXClient, over OpenAI chat completions: the same prompt and parser with another
-    model (T2-09 lab: HCX-007 vs gpt-4o-mini). OPENAI_API_KEY comes from this repo's .env; the SDK retries 429/5xx."""
+    model (T2-09 lab: HCX-007 vs gpt-4o-mini). OPENAI_API_KEY comes from this repo's .env; the SDK retries 429/5xx.
+
+    The defaults are the stage 2 re-ranker's (temperature 0, 512 tokens, no seed). The question generator of T2-39
+    (kosis_rag.hq) sets temperature, max_tokens and seed, and passes earlier turns as `history` to ask once more.
+    """
 
     model: str = "gpt-4o-mini"
+    temperature: float = 0.0
+    max_tokens: int = MAX_TOKENS["none"]
+    seed: int | None = None
 
-    def generate(self, system: str, user: str) -> Any:
+    def generate(self, system: str, user: str, history: list[dict[str, str]] | None = None) -> Any:
+        """One chat completion in JSON mode.
+
+        In: system = system prompt; user = the last user message; history = earlier turns ({"role", "content"})
+            placed between the system prompt and `user` (None: a single turn, as before).
+        Out: SimpleNamespace(status, text, attempts, error, usage={"input_tokens", "output_tokens"}).
+        Side effects: one OpenAI API call (the SDK retries 429/5xx); its errors are raised.
+        Node: rerank2 (through HcxSelector) and the hq build's generate / validate.
+        """
         from types import SimpleNamespace
 
         from dotenv import load_dotenv
         from openai import OpenAI
 
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+        extra = {"seed": self.seed} if self.seed is not None else {}
         r = OpenAI(max_retries=5).chat.completions.create(
-            model=self.model, temperature=0.0, max_tokens=MAX_TOKENS["none"], response_format={"type": "json_object"},
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
+            model=self.model, temperature=self.temperature, max_tokens=self.max_tokens,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": system}, *(history or []), {"role": "user", "content": user}],
+            **extra)
         return SimpleNamespace(status=STATUS_OK, text=r.choices[0].message.content or "", attempts=1, error=None,
                                usage={"input_tokens": r.usage.prompt_tokens, "output_tokens": r.usage.completion_tokens})

@@ -140,6 +140,104 @@ class ChromaTableRetriever(BaseRetriever):
         return soft_rank(docs, self.records, f)
 
 
+def condition_filter(table_filter: TableFilter | None, records: dict[str, TableRecord] | None) -> TableFilter | None:
+    """The filter every list is searched under: hybrid_search's relaxation step, shared by the graph's lists (T2-39).
+
+    In: table_filter = conditions from the question (None or empty: no filtering); records = the registry the filter
+        is decided on. Out: the filter as given when it is None or empty; else the filter with the conditions no table
+        meets dropped (filters.filter_with_relaxation, T2-29). A filter the caller relaxed already comes back the same.
+    Side effects: raises ValueError when a non-empty filter has no records to decide on.
+    Node: condition (and hybrid_search for the old path).
+    """
+    if table_filter is None or table_filter.is_empty():
+        return table_filter
+    if not records:
+        raise ValueError("a condition needs records (tables.jsonl) to decide on")
+    _, dropped, _ = filter_with_relaxation(records, table_filter)
+    return relax(table_filter, dropped)
+
+
+def search_list(query: str, retriever: BaseRetriever, *, table_filter: TableFilter | None = None,
+                records: dict[str, TableRecord] | None = None, k_each: int = 50, filtered: bool | None = None
+                ) -> tuple[list[Document], dict[str, str]]:
+    """One retriever's ranked list under the question's conditions (one list of hybrid_search, T2-39).
+
+    In: query = the user question; retriever = one list's retriever; table_filter = the filter from condition_filter
+        (None or empty: no filtering; soft signals only re-rank); records = the registry; k_each = top kept;
+        filtered = take the filtering path (default: when table_filter is non-empty). hybrid_search decides it on the
+        filter before relaxation, as it always did, so a filter relaxed to empty still takes the filtering path there.
+    Out: (docs, removed). A retriever with with_filter (Chroma, HqRetriever) filters before its search, the others
+        (BM25) are filtered after and soft-ranked; then the top k_each. removed = table key -> why the filter dropped it.
+    Side effects: calls the retriever (Chroma query / BM25 scoring); ValueError for a non-empty filter without records.
+    Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25 (and hybrid_search).
+    """
+    if filtered is None:
+        filtered = table_filter is not None and not table_filter.is_empty()
+    if not filtered:
+        docs = retriever.invoke(query)[:k_each]
+        if table_filter is not None and records and table_filter.is_soft():
+            docs = soft_rank(docs, records, table_filter)  # soft signals only re-rank
+        return docs, {}
+    if not records:
+        raise ValueError("a condition needs records (tables.jsonl) to decide on")
+    removed: dict[str, str] = {}
+    if hasattr(retriever, "with_filter"):
+        scoped: Any = retriever.with_filter(table_filter, records)
+        docs = scoped.invoke(query)
+        removed.update(scoped.last_removed)
+    else:
+        docs = []
+        for d in retriever.invoke(query):
+            record = records.get(d.metadata["key"])
+            reason = why_excluded(record, table_filter) if record is not None else None
+            if reason is None:
+                docs.append(d)
+            else:
+                removed[d.metadata["key"]] = reason
+        docs = soft_rank(docs, records, table_filter)
+    return docs[:k_each], removed
+
+
+def rrf_fuse(lists: list[list[Document]], names: list[str] | None = None, *, k: int = 50, c: int = 60,
+             score_from: int = 0, weights: list[float] | None = None) -> list[Document]:
+    """Fuse ranked lists by weighted reciprocal rank over table keys (T2-06; weights T2-39).
+
+    In: lists = ranked lists (dense first); names = one label per list for rank_<name> (default r0, r1, ...);
+        k = tables returned; c = RRF constant; score_from = index of the list whose score stays in metadata["score"];
+        weights = one weight per list (default 1.0 each: RRF = sum of 1 / (c + rank)).
+    Out: at most k tables in fused order (ties keep first-seen order); each carries metadata score (the score_from
+        list's score, or that list's lowest score for a table only other lists found), score_from (its name or
+        "other"), rrf_score and rank_<name> per list it appeared in. The first list a table appears in gives its text.
+    Side effects: none.
+    Node: fuse (and hybrid_search).
+    """
+    names = names or [f"r{i}" for i in range(len(lists))]
+    weights = weights or [1.0] * len(lists)
+    rrf: dict[str, float] = {}
+    ranks: dict[str, dict[str, int]] = {}
+    first: dict[str, Document] = {}
+    for name, w, docs in zip(names, weights, lists):
+        for rank, d in enumerate(docs, 1):
+            key = d.metadata["key"]
+            rrf[key] = rrf.get(key, 0.0) + w / (c + rank)
+            ranks.setdefault(key, {})[name] = rank
+            first.setdefault(key, d)
+
+    # keep the score_from list's score (the no-answer threshold is calibrated on it, T2-09)
+    anchor = lists[score_from] if score_from < len(lists) else []
+    own = {d.metadata["key"]: d.metadata.get("score") for d in anchor}
+    floor = min((v for v in own.values() if v is not None), default=None)
+    order = sorted(rrf, key=lambda key: -rrf[key])  # stable: ties keep first-seen order
+    out = []
+    for key in order[:k]:
+        d = first[key]
+        score, source = (own[key], names[score_from]) if key in own else (floor, "other")
+        out.append(Document(page_content=d.page_content, id=d.id, metadata={
+            **d.metadata, "score": score, "score_from": source, "rrf_score": rrf[key],
+            **{f"rank_{n}": r for n, r in ranks[key].items()}}))
+    return out
+
+
 def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[str] | None = None,
                   table_filter: TableFilter | None = None, records: dict[str, TableRecord] | None = None,
                   k: int = 50, k_each: int = 50, c: int = 60, score_from: int = 0
@@ -158,63 +256,23 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
     Side effects: calls each retriever (Chroma query / BM25 scoring); raises ValueError when a non-empty filter has
         no records to decide on. A filter no table meets is relaxed once here for both lists
         (filters.filter_with_relaxation, T2-29); a caller that wants the dropped conditions computes them first and
-        passes the relaxed filter (the graph's retrieve node, HybridRetriever).
-    Node: retrieve.
+        passes the relaxed filter (HybridRetriever).
+    Node: not a node itself since T2-39: the graph runs its three parts as nodes (condition_filter in condition,
+        search_list in retrieve_*, rrf_fuse in fuse); the old path (HybridRetriever) calls it.
     """
     # 1. one list per retriever: a retriever with with_filter (Chroma) filters before its search, the others after
+    filtered = table_filter is not None and not table_filter.is_empty()
+    table_filter = condition_filter(table_filter, records)
     lists: list[list[Document]] = []
     removed: dict[str, str] = {}
-    if table_filter is None or table_filter.is_empty():
-        lists = [r.invoke(query)[:k_each] for r in retrievers]
-        if table_filter is not None and records and table_filter.is_soft():
-            lists = [soft_rank(docs, records, table_filter) for docs in lists]  # soft signals only re-rank
-    else:
-        if not records:
-            raise ValueError("a condition needs records (tables.jsonl) to decide on")
-        _, dropped, _ = filter_with_relaxation(records, table_filter)
-        table_filter = relax(table_filter, dropped)
-        for r in retrievers:
-            if hasattr(r, "with_filter"):
-                filtered: Any = r.with_filter(table_filter, records)
-                docs = filtered.invoke(query)
-                removed.update(filtered.last_removed)
-            else:
-                docs = []
-                for d in r.invoke(query):
-                    record = records.get(d.metadata["key"])
-                    reason = why_excluded(record, table_filter) if record is not None else None
-                    if reason is None:
-                        docs.append(d)
-                    else:
-                        removed[d.metadata["key"]] = reason
-                docs = soft_rank(docs, records, table_filter)
-            lists.append(docs[:k_each])
+    for r in retrievers:
+        docs, dropped = search_list(query, r, table_filter=table_filter, records=records, k_each=k_each,
+                                    filtered=filtered)
+        lists.append(docs)
+        removed.update(dropped)
 
-    # 2. fuse by RRF over table keys
-    names = names or [f"r{i}" for i in range(len(lists))]
-    rrf: dict[str, float] = {}
-    ranks: dict[str, dict[str, int]] = {}
-    first: dict[str, Document] = {}
-    for name, docs in zip(names, lists):
-        for rank, d in enumerate(docs, 1):
-            key = d.metadata["key"]
-            rrf[key] = rrf.get(key, 0.0) + 1.0 / (c + rank)
-            ranks.setdefault(key, {})[name] = rank
-            first.setdefault(key, d)
-
-    # 3. keep the score_from list's score (the no-answer threshold is calibrated on it, T2-09)
-    anchor = lists[score_from] if score_from < len(lists) else []
-    own = {d.metadata["key"]: d.metadata.get("score") for d in anchor}
-    floor = min((v for v in own.values() if v is not None), default=None)
-    order = sorted(rrf, key=lambda key: -rrf[key])  # stable: ties keep first-seen order
-    out = []
-    for key in order[:k]:
-        d = first[key]
-        score, source = (own[key], names[score_from]) if key in own else (floor, "other")
-        out.append(Document(page_content=d.page_content, id=d.id, metadata={
-            **d.metadata, "score": score, "score_from": source, "rrf_score": rrf[key],
-            **{f"rank_{n}": r for n, r in ranks[key].items()}}))
-    return out, removed
+    # 2. fuse by RRF over table keys, keeping the score_from list's score
+    return rrf_fuse(lists, names, k=k, c=c, score_from=score_from), removed
 
 
 class HybridRetriever(BaseRetriever):
@@ -231,7 +289,7 @@ class HybridRetriever(BaseRetriever):
     The work is done by `hybrid_search`; this class is the retriever-shaped wrapper the old path (build_search,
     chain.answer, the eval runners) uses. Side effects: sets `self.last_removed` and `self.last_relaxed` on every
     query (tests read them).
-    Node: not used by the graph (the retrieve node calls hybrid_search with the parse node's filter).
+    Node: not used by the graph (its condition, retrieve_* and fuse nodes run the parts of hybrid_search).
     """
 
     retrievers: list[BaseRetriever]

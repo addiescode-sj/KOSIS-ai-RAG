@@ -32,6 +32,14 @@ export type ChatMessage = UIMessage<never, { node: NodeStep; draft: { text: stri
 export const NODE_LABELS: Record<string, string> = {
   parse: "질의 조건 파싱",
   retrieve: "하이브리드 검색 (dense + BM25)",
+  // the graph's split of retrieve (T2-39): what /search/stream sends
+  condition: "검색 조건 결정",
+  embed: "질문 임베딩",
+  retrieve_dense: "dense 검색",
+  retrieve_bm25: "BM25 검색",
+  retrieve_hq: "가상 질문 색인 검색",
+  retrieve_hq_bm25: "가상 질문 BM25 검색",
+  fuse: "목록 합치기 (RRF)",
   rerank1: "1차 리랭커",
   rerank2: "2차 리랭커 (LLM)",
   gate: "답 없음 판정",

@@ -331,7 +331,7 @@ def search_failure_section(rows: list[dict], exported: bool) -> str:
     failed = [r for r in rows if r.get("failure")]
     counts = Counter(r["failure"]["span"] or "-" for r in failed)
     lines = ["", "## 실패 노드 (LangGraph trace)", "",
-             "- 판정: Hit@k 놓침 → 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 retrieve), 답 없음 오판 → gate (plans/T2-36.md)",
+             "- 판정: Hit@k 놓침 → 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 후보 풀을 만든 노드: 그래프는 fuse, T2-39), 답 없음 오판 → gate (plans/T2-36.md)",
              "- 노드별: " + (", ".join(f"{k} {v}" for k, v in counts.most_common()) or "실패 없음") + f" (합 {len(failed)})",
              f"- Jaeger: {'trace 전송함 (' + trace.JAEGER_UI + ')' if exported else 'OTEL_EXPORTER_OTLP_ENDPOINT 미설정, 전송 안 함'}"]
     if failed:

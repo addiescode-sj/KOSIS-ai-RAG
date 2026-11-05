@@ -17,6 +17,12 @@ doc_format, which TEXT_FORMAT (when set) must match; weights trained on another 
     STAGE2=clova                                        # clova | hcx | none (HCX_THINKING=none | low for hcx)
     COND_FILTER=on                                      # on | off: T2-14 conditions before the hybrid
     TEXT_FORMAT=n2-L60                                  # optional check: n2-L60 (n3-L60 deprecated)
+    HQ_BUILD=hq-<prompt8>-<tables8>-<model>-f30-k2      # T2-39 question index (kosis_rag.hq); empty = off
+    HQ_WEIGHT=1.0                                       # RRF weight of the question lists
+    HQ_BM25=off                                         # on: also BM25 over each table's questions
+
+The question index (T2-39) is read by the graph only (graph.build_graph adds retrieve_hq / retrieve_hq_bm25);
+build_search, the nested-retriever path, ignores it so its behaviour stays as it was.
 """
 
 from __future__ import annotations
@@ -52,6 +58,9 @@ class SearchSettings(BaseModel):
     stage2: str = "none"
     stage2_k: int = 20
     device: str | None = None
+    hq_build: str | None = None  # T2-39: question index build id (HQ_BUILD); None = off
+    hq_weight: float = 1.0  # RRF weight of the question lists (HQ_WEIGHT)
+    hq_bm25: bool = False  # also BM25 over each table's questions (HQ_BM25)
 
     @classmethod
     def from_env(cls, **overrides) -> SearchSettings:
@@ -67,11 +76,17 @@ class SearchSettings(BaseModel):
             "rerank_ckpt": env("RERANK_CKPT") or None,
             "rerank_mode": env("RERANK_MODE") or "blend",
             "stage2": (env("STAGE2") or "none").strip().lower(),
+            "hq_build": (env("HQ_BUILD") or "").strip() or None,
+            "hq_weight": float(env("HQ_WEIGHT") or 1.0),
+            "hq_bm25": (env("HQ_BM25") or "off").strip().lower() not in OFF,
         }
         return cls(**{**values, **overrides})
 
     def label(self) -> str:
-        parts = ["hybrid" + ("+cond" if self.cond_filter else "")]
+        hq = ""
+        if self.hq_build:
+            hq = "+hq" + ("+hqbm25" if self.hq_bm25 else "") + (f"(w{self.hq_weight:g})" if self.hq_weight != 1.0 else "")
+        parts = ["hybrid" + ("+cond" if self.cond_filter else "") + hq]
         if self.rerank_ckpt:
             parts.append(f"stage1-{self.rerank_mode}")
         if self.stage2 not in OFF:
@@ -136,19 +151,25 @@ class SearchResources:
     stage1_score: Score | None  # None = stage 1 off
     select: Select | None  # None = stage 2 off
     stage2_name: str
+    hq: BaseRetriever | None = None  # T2-39 question index, dense (kosis_rag.hq.index.HqRetriever); None = off
+    hq_bm25: BaseRetriever | None = None  # T2-39 question index, BM25 over each table's questions; None = off
 
 
 def load_resources(settings: SearchSettings | None = None, *, records: list[TableRecord] | None = None,
                    dense: BaseRetriever | None = None, stage1_score: Score | None = None,
-                   select: Select | None = None) -> SearchResources:
+                   select: Select | None = None, hq: BaseRetriever | None = None,
+                   hq_bm25: BaseRetriever | None = None) -> SearchResources:
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
-    In: settings = search settings (default: .env); records, dense, stage1_score, select = parts that replace the
-        loaded ones (tests pass fakes here so nothing real is touched).
+    In: settings = search settings (default: .env); records, dense, stage1_score, select, hq, hq_bm25 = parts that
+        replace the loaded ones (tests pass fakes here so nothing real is touched).
     Out: SearchResources. stage1_score is set when RERANK_CKPT is set or a scorer is given; select when STAGE2 names
         a known re-ranker or a selector is given. stage2_name = STAGE2, or "custom" for a given selector with STAGE2
         off. BM25 returns every table when the condition filter is on (it is filtered after the search), else `pool`.
-    Side effects: reads tables.jsonl, connects to Chroma and loads the query embedder, loads the cross-encoder, unless
+        hq / hq_bm25 (T2-39) are set only when HQ_BUILD is set (hq_bm25 also needs HQ_BM25 on); otherwise None, even
+        when given. The question BM25 follows the BM25 `k` rule above.
+    Side effects: reads tables.jsonl, connects to Chroma and loads the query embedder, loads the cross-encoder, opens
+        the question collection (reusing the dense retriever's query embedder) and reads its questions.jsonl, unless
         the matching part is given. Raises ValueError for a TEXT_FORMAT that disagrees with the collection or an
         unknown STAGE2, as build_search always did.
     Node: none (called once before build_search / build_graph).
@@ -176,9 +197,26 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
             raise ValueError(f"unknown STAGE2 {s.stage2!r}; known: none, {', '.join(LLM_RERANKERS)}")
         text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
         select = LLM_RERANKERS[s.stage2](text_of, {})
-    return SearchResources(settings=s, records={r.info.key: r for r in records}, dense=dense, bm25=bm25,
+
+    # 4. question index (T2-39): the tables' hypothetical questions, searched as their own lists
+    by_key = {r.info.key: r for r in records}
+    if not s.hq_build:
+        hq, hq_bm25 = None, None
+    else:
+        from kosis_rag.hq import index as hq_index
+
+        if hq is None or (s.hq_bm25 and hq_bm25 is None):
+            text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
+        if hq is None:
+            hq = hq_index.HqRetriever.connect(s.hq_build, dense, records=by_key, text_of=text_of, k=s.pool)
+        if not s.hq_bm25:
+            hq_bm25 = None
+        elif hq_bm25 is None:
+            hq_bm25 = hq_index.hq_bm25(hq_index.read_questions(s.hq_build), by_key, text_of,
+                                       k=len(records) if s.cond_filter else s.pool)
+    return SearchResources(settings=s, records=by_key, dense=dense, bm25=bm25,
                            text_format=fmt, stage1_score=stage1_score, select=select,
-                           stage2_name=s.stage2 if s.stage2 not in OFF else "custom")
+                           stage2_name=s.stage2 if s.stage2 not in OFF else "custom", hq=hq, hq_bm25=hq_bm25)
 
 
 def build_search(settings: SearchSettings | None = None, *, records: list[TableRecord] | None = None,
@@ -188,10 +226,13 @@ def build_search(settings: SearchSettings | None = None, *, records: list[TableR
 
     In: as load_resources. Out: HybridRetriever (with the T2-14 condition when COND_FILTER is on), wrapped by
     CrossEncoderReranker when stage 1 is on and by LLMReranker when stage 2 is on.
+    The question index (HQ_BUILD, T2-39) is graph-only: it is switched off here, so nothing of it is loaded and this
+    path searches as it did before T2-39.
     Side effects: those of load_resources. Node: not used by the graph (build_graph uses load_resources directly).
     """
     from kosis_rag.query import parse_query
 
+    settings = (settings or SearchSettings.from_env()).model_copy(update={"hq_build": None, "hq_bm25": False})
     r = load_resources(settings, records=records, dense=dense, stage1_score=stage1_score, select=select)
     s = r.settings
     retriever: BaseRetriever = HybridRetriever(

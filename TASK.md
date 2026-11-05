@@ -45,6 +45,7 @@ Linear 마일스톤 M4~M7, 하위 이슈는 괄호 안 KOS 번호. 11/02에 데�
 - [x] **T2-33** ⭐ v2 골든 질문을 사용자 말투로 (검색 난도 맞추기) — v2 질문은 정답 표의 분류 라벨·항목명을 평균 1.8개 그대로 인용한다(v1 사용자 질문 0.6). 그래서 bm25-record Hit@1이 0.667로 v1(0.250)보다 높다. 질문을 사용자 말투로 다시 써서 라벨 인용 수와 표 이름 겹침을 qtype별로 v1 수준에 맞추고, L1 판정·L3 사실은 유지한다 → 결과: 라벨 인용 1.8 → 1.37(v1 0.57), bm25-record Hit@1 0.667 → 0.493(v1 0.250, 목표 ~0.31 미달: exact_name·multi_condition 격차), L4 검색 1위 49.6% → 37.8%. 검수 29문항 반영(20·21 정답 수정, 대체 표 값 검사로 16개 제외), oracle L1 1.0·L3 119/119 (`plans/T2-33.md`)
 - [x] **T2-34** ⭐ 평가 코드를 합의 기준(L0~L4 문서)에 맞추기 — 기준 문서에 있는데 코드가 재지 않는 항목(L4 템플릿 채점의 정답 표·연도·지역, no_period 거절률 L1·L4, L2·L0 목록 필드 P/R, L0 regions 정확도·적재 값 일치)을 채운다. 리포트마다 "어느 담당이 고칠 것인가"(L0·L2 → 데이터, L1·L3 → AI 파이프라인)를 낸다. 기준에 없는 골든 난도 조정 코드(T2-33)는 걷어 낸다 → 결과: 기준 문서 대비 빠진 채점 5종 추가(L4 정답 표=L1 슬롯, L4 연도·지역, no_period 거절률 L1·L4, L2 목록 P/R, 담당 요약). 첫 측정: L1 no_period 판정 v1 20%·v2 0%, L2 dimensions R 0.267/0.098(놓침), L0 정답 표 dimension 미매핑 55.8%. 난도 지표 코드 제거, pytest 190 (`plans/T2-34.md`)
 - [x] **T2-36** ⭐ LangGraph 노드 단위 tracing (KOS-87 선행) — T2-10에서 검색이 LangGraph 노드(parse·retrieve·rerank1·rerank2·gate·refuse|guide)로 바뀌었는데 `evals/trace.py`는 검색을 `retrieve` span 하나로만 본다. 노드마다 span을 남기고, 검색 실패를 정답 표가 빠진 노드로 판정하고, Jaeger·report에 노드 타임라인을 낸다. 완료 기준: `graph:<preset>` 실행에서 노드 span 수집, 검색 실패의 노드 판정 비율, pytest → 결과: (B 콜백 수집) `graph:hybrid+cond` L1 test 78문항에서 노드 span 0 → 4/문항, L1 Jaeger trace 0 → 78, 검색 실패 노드별 분포 없음 → retrieve 31 · gate 19(합 50). 그래프 gate는 78/78 guide인데 평가기 tau는 59건 거절 → 답 없음 F1은 tau의 숫자. bm25-record 회귀 0. rerank1·2 판정은 pytest만(실행 환경에 리랭커·HCX 키 없음), pytest 220 → 232 (`plans/T2-36.md`)
+- [~] **T2-40** 역HyDE: 표마다 가상 질문 색인 (Doc2Query−−, 노드화) — 표 2,364개마다 사람이 그 표를 찾을 때 던질 질문 6개(개념2·조건2·구별1·키워드1)를 gpt-4o-mini로 오프라인 생성하고, 규칙(표에 없는 연도·시도, 수치, 표 이름 복사, 중복) + 1차 리랭커 점수 하위 30% 제거로 거른 뒤 별도 질문 색인(Chroma + BM25)에 둔다. 질의 그래프의 retrieve를 retrieve_dense·retrieve_bm25·retrieve_hq 병렬 노드 + fuse(RRF)로 나눈다(HQ 끔 = 지금과 같은 결과). 완료 기준: 검색 골든 89 S0(.438/.685) 대비 Hit@1·Hit@5 짝 bootstrap, 오염 점검, pytest (`plans/T2-39.md`)
 
 ### 10/31~11/3 검색 개선과 산출물
 
@@ -103,3 +104,4 @@ Linear에서 마감·우선순위·담당을 바꾸면 이 표도 같이 고친�
 | T2-36 | KOS-87 (선행 일부) | 11/14 | P2 | T2-10, T2-15 | 이선주 |
 | T2-37 | — | 11/05 | P2 | T2-10, T2-36 | — |
 | T2-38 | — | 11/05 | P2 | T2-37, T2-11 | — |
+| T2-40 | TBD | TBD | P1 | T2-10, T2-06 | 전민기 |

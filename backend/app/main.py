@@ -34,6 +34,9 @@ app = FastAPI(
     description=(
         "국가데이터처(KOSIS) 통계표 안내 검색 API.\n\n"
         "검색은 LangGraph 노드 `parse → retrieve → [rerank1] → [rerank2] → gate → refuse | guide` 로 돈다.\n"
+        "그래프 안에서 retrieve는 `condition → [embed] → retrieve_dense ∥ retrieve_bm25 ∥ [retrieve_hq] ∥ "
+        "[retrieve_hq_bm25] → fuse` 병렬 노드로 나뉘고(T2-39), `/nodes/retrieve`는 이 단계를 한 번에 돈다. "
+        "`/search/stream`의 노드 이벤트는 그래프 노드 이름으로 온다.\n"
         "- **nodes**: 노드 하나씩 부른다. 요청·응답 모두 `SearchState`라 앞 노드의 응답을 다음 노드에 그대로 보낸다.\n"
         "- **search**: 전체 그래프를 한 번에 (`/search` JSON, `/search/stream` SSE 노드 이벤트).\n\n"
         "표 ID·출처는 서버의 통계표 레지스트리에서만 나온다. 맞는 표가 없으면 거절 답(`no_answer=true`)을 준다."
@@ -119,7 +122,10 @@ class NodeList(BaseModel):
 K = Query(5, ge=1, le=20, description="답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)")
 
 NODE_DOCS = {
-    "retrieve": ("하이브리드 검색", "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25를 RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다."),
+    "retrieve": ("하이브리드 검색", "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25(+ 켜져 있으면 가상 질문 색인 HQ, T2-39)를 "
+                                "RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다. 그래프의 condition → [embed] → "
+                                "retrieve_* → fuse를 한 번에 돌리며, 목록별 결과 `runs`·`run_removed`와 `table_filter`도 "
+                                "쓴다. 요청의 이 필드들과 `query_vecs`는 무시한다."),
     "rerank1": ("1차 리랭커 (cross-encoder)", "상위 rerank_n을 cross-encoder 점수로 다시 정렬한다. 꺼져 있으면 409."),
     "rerank2": ("2차 리랭커 (LLM)", "LLM이 상위 stage2_k 중에서 고른다. 아무것도 안 고르면 gate가 거절한다. 꺼져 있으면 409."),
     "gate": ("거절 판정", "상위 k로 `refuse` / `guide`를 정해 `route`·`refusal_reason`을 쓴다."),

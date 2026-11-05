@@ -44,6 +44,7 @@ RECORDS = [_record("101_DT_A", "출생아수", ("2020", "2023")), _record("101_D
            _record("101_DT_C", "혼인건수", ("2010",)), _record("101_DT_D", "이혼건수", ("2023",))]
 BY_KEY = {r.info.key: r for r in RECORDS}
 KEYS = list(BY_KEY)
+SEARCH_LISTS = ("retrieve_dense", "retrieve_bm25")  # T2-39: the old retrieve node, split into parallel list nodes
 
 
 class CatalogRetriever(BaseRetriever):
@@ -187,7 +188,7 @@ def test_graph_relaxes_a_condition_no_table_meets_and_records_it():  # T2-29 D1�
     old, _, state, _ = _both("2023년 성별 인구", "[1] DT_A 표입니다.", settings=_settings(cond_filter=True))
     assert state.result == old and not old.no_answer
     assert state.query.dimensions == ["성"] and state.relaxed == ["dimensions"]
-    assert state.trace["retrieve"]["relaxed"] == ["dimensions"] and set(state.removed) == {"101_DT_C"}
+    assert state.trace["condition"]["relaxed"] == ["dimensions"] and set(state.removed) == {"101_DT_C"}
 
 
 def test_graph_still_refuses_a_year_no_table_holds():  # T2-29 D2
@@ -199,7 +200,7 @@ def test_graph_still_refuses_a_year_no_table_holds():  # T2-29 D2
 def test_graph_keeps_the_whole_pool_and_records_each_node():
     _, _, state, _ = _both("출생아 수", "[1] DT_A 표입니다.")
     assert len(state.docs) == len(KEYS)  # only the answer sees docs[:k]
-    assert set(state.trace) == {"parse", "retrieve", "rerank1", "rerank2", "gate", "guide"}
+    assert set(state.trace) == {"parse", "condition", *SEARCH_LISTS, "fuse", "rerank1", "rerank2", "gate", "guide"}
     assert state.trace["rerank2"]["stage2_picked_n"] == 1
 
 
@@ -211,8 +212,9 @@ def _nodes(**kw):
 
 
 def test_graph_has_only_the_stages_that_are_on():
-    assert _nodes(stage1_score=_stage1, select=_pick()) == {"parse", "retrieve", "rerank1", "rerank2", "gate", "refuse", "guide"}
-    assert _nodes() == {"parse", "retrieve", "gate", "refuse", "guide"}
+    base = {"parse", "condition", *SEARCH_LISTS, "fuse", "gate", "refuse", "guide"}
+    assert _nodes(stage1_score=_stage1, select=_pick()) == base | {"rerank1", "rerank2"}
+    assert _nodes() == base  # T2-39: no question index loaded -> no retrieve_hq
 
 
 # --- evals L1 runner: graph:<preset> gives the rows the old preset gives ---
@@ -235,7 +237,7 @@ def test_eval_runner_graph_preset_matches_the_old_preset(monkeypatch):
     assert [{k: v for k, v in r.items() if k not in drop} for r in new] == [{k: v for k, v in r.items() if k not in drop} for r in old]
     assert new[0]["keys"] and new[0]["stage2_picked_n"] == 0 and new[0]["stage2_reason"] == "no_item"
     # T2-36: only the graph run records node spans
-    assert old[0]["search_spans"] == [] and [s["name"] for s in new[0]["search_spans"]][:2] == ["parse", "retrieve"]
+    assert old[0]["search_spans"] == [] and [s["name"] for s in new[0]["search_spans"]][:2] == ["parse", "condition"]
 
 
 # --- evals tracing (T2-36): one span per node from the LangGraph callbacks ---
@@ -248,14 +250,18 @@ def test_node_spans_record_each_node_once_with_its_output():
     nodes = NodeSpans()
     state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수", {"callbacks": [nodes]})
     spans = {s["name"]: s for s in nodes.spans}
-    # inner runs (channel writes, the gate branch, the guide chain and its LLM) carry the node name too: not spans
-    assert [s["name"] for s in nodes.spans] == ["parse", "retrieve", "rerank1", "rerank2", "gate", "guide"]
+    # inner runs (channel writes, the gate branch, the guide chain and its LLM) carry the node name too: not spans.
+    # T2-39: the list nodes run in parallel (any order between them) and carry no pool; fuse forms it
+    names = [s["name"] for s in nodes.spans]
+    assert names[:2] == ["parse", "condition"] and set(names[2:4]) == set(SEARCH_LISTS)
+    assert names[4:] == ["fuse", "rerank1", "rerank2", "gate", "guide"]
+    assert all("keys" not in spans[n] for n in SEARCH_LISTS) and spans["retrieve_dense"]["attributes"]["n_docs"] == 4
     assert spans["rerank2"]["keys"] == [d.metadata["key"] for d in state.docs]  # the last search node = the result
     assert spans["rerank2"]["keys"][0] == "101_DT_B" and spans["rerank2"]["attributes"]["stage2_picked_n"] == 1
     assert spans["rerank1"]["keys"][0] == "101_DT_C"  # the stage 1 fake puts DT_C first
     assert spans["gate"]["attributes"]["route"] == "guide" and "keys" not in spans["gate"]
     assert all(s["status"] == "ok" and s["duration_ms"] >= 0 for s in nodes.spans)
-    starts = [s["start_ms"] for s in nodes.spans]
+    starts = [s["start_ms"] for s in nodes.spans if s["name"] not in SEARCH_LISTS]
     assert starts == sorted(starts)
 
 
@@ -266,7 +272,8 @@ def test_node_spans_mark_a_failing_node():
     nodes = NodeSpans()
     with pytest.raises(TimeoutError):
         run_search(build_graph(resources, MockClient()), "출생아 수", {"callbacks": [nodes]})
-    assert [(s["name"], s["status"]) for s in nodes.spans] == [("parse", "ok"), ("retrieve", "ok"), ("rerank1", "error")]
+    assert [(s["name"], s["status"]) for s in nodes.spans if s["name"] not in SEARCH_LISTS] == [
+        ("parse", "ok"), ("condition", "ok"), ("fuse", "ok"), ("rerank1", "error")]
     assert "TimeoutError" in nodes.spans[-1]["attributes"]["error"]
 
 

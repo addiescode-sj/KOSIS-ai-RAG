@@ -239,6 +239,7 @@ def test_pipeline_assembles_hybrid_stage1_stage2(tmp_path):
 
 @offline
 def test_settings_from_env(monkeypatch):
+    monkeypatch.delenv("HQ_BUILD", raising=False)
     monkeypatch.setenv("COND_FILTER", "off")
     monkeypatch.setenv("STAGE2", "CLOVA")
     monkeypatch.setenv("RERANK_CKPT", "")
