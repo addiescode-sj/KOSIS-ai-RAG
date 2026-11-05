@@ -57,6 +57,7 @@ class SearchSettings(BaseModel):
     rerank_n: int = 50
     stage2: str = "none"
     stage2_k: int = 20
+    answer_k: int = 5  # candidate tables handed to gate / guide by the answer API when a request gives no k (T2-39)
     device: str | None = None
     hq_build: str | None = None  # T2-39: question index build id (HQ_BUILD); None = off
     hq_weight: float = 1.0  # RRF weight of the question lists (HQ_WEIGHT)
@@ -76,6 +77,7 @@ class SearchSettings(BaseModel):
             "rerank_ckpt": env("RERANK_CKPT") or None,
             "rerank_mode": env("RERANK_MODE") or "blend",
             "stage2": (env("STAGE2") or "none").strip().lower(),
+            "answer_k": int(env("ANSWER_K") or 5),
             "hq_build": (env("HQ_BUILD") or "").strip() or None,
             "hq_weight": float(env("HQ_WEIGHT") or 1.0),
             "hq_bm25": (env("HQ_BM25") or "off").strip().lower() not in OFF,

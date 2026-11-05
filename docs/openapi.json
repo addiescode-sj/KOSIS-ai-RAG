@@ -66,14 +66,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -124,14 +130,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -182,14 +194,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -240,14 +258,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -298,14 +322,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -356,14 +386,20 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 20,
-              "minimum": 1,
-              "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)",
-              "default": 5,
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 20,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다",
               "title": "K"
             },
-            "description": "답변에 보여 줄 표 수 (gate·answer가 docs[:k]를 본다)"
+            "description": "안내 LLM(gate·answer)에 넘길 후보 표 수 docs[:k]. 생략하면 서버 설정 ANSWER_K(기본 5). 답변에 보여 줄 표는 이 수가 아니라 LLM이 고른 표(result.picked)다"
           }
         ],
         "requestBody": {
@@ -406,13 +442,13 @@
           "search"
         ],
         "summary": "검색 + 답변 (JSON)",
-        "description": "전체 그래프를 돌려 `SearchResult`(후보 표·답변·출처)를 돌려준다. 노드별 지연은 응답 뒤 기록한다.",
+        "description": "전체 그래프를 돌려 `SearchResult`를 돌려준다. `picked` = 답변이 고른 표(출처도 이것), `candidates` = LLM에 넘긴 후보.\n노드별 지연은 응답 뒤 기록한다.",
         "operationId": "search_search_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SearchArgs"
+                "$ref": "#/components/schemas/AskArgs"
               },
               "example": {
                 "question": "2023년 시도별 출생아 수",
@@ -458,7 +494,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SearchArgs"
+                "$ref": "#/components/schemas/AskArgs"
               },
               "example": {
                 "question": "2023년 시도별 출생아 수",
@@ -510,6 +546,36 @@
   },
   "components": {
     "schemas": {
+      "AskArgs": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Question",
+            "description": "사용자 질문 (한국어)"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K",
+            "description": "안내 LLM에 넘길 후보 표 수. 생략하면 서버 설정(ANSWER_K, 기본 5). 답변에 보여 줄 표는 LLM이 고른 표(picked)다"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "AskArgs",
+        "description": "Input of the answer API (/search, /search/stream): k is the guide LLM's candidate budget, a server setting."
+      },
       "Document": {
         "properties": {
           "id": {
@@ -673,30 +739,6 @@
         "title": "ParsedQuery",
         "description": "What the rules found in the question; empty fields mean the question did not say."
       },
-      "SearchArgs": {
-        "properties": {
-          "question": {
-            "type": "string",
-            "minLength": 1,
-            "title": "Question",
-            "description": "User question in Korean"
-          },
-          "k": {
-            "type": "integer",
-            "maximum": 20.0,
-            "minimum": 1.0,
-            "title": "K",
-            "description": "Number of candidate tables",
-            "default": 5
-          }
-        },
-        "type": "object",
-        "required": [
-          "question"
-        ],
-        "title": "SearchArgs",
-        "description": "Tool input for search_tables / answer_table_question."
-      },
       "SearchResult": {
         "properties": {
           "question": {
@@ -709,6 +751,13 @@
             },
             "type": "array",
             "title": "Candidates"
+          },
+          "picked": {
+            "items": {
+              "$ref": "#/components/schemas/TableCandidate"
+            },
+            "type": "array",
+            "title": "Picked"
           },
           "no_answer": {
             "type": "boolean",

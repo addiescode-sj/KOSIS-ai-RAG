@@ -31,11 +31,21 @@ class SearchArgs(BaseModel):
     k: int = Field(default=5, ge=1, le=20, description="Number of candidate tables")
 
 
+class AskArgs(BaseModel):
+    """Input of the answer API (/search, /search/stream): k is the guide LLM's candidate budget, a server setting."""
+
+    question: str = Field(min_length=1, description="사용자 질문 (한국어)")
+    k: int | None = Field(default=None, ge=1, le=20,
+                          description="안내 LLM에 넘길 후보 표 수. 생략하면 서버 설정(ANSWER_K, 기본 5). "
+                                      "답변에 보여 줄 표는 LLM이 고른 표(picked)다")
+
+
 class SearchResult(BaseModel):
     """Return value of answer_table_question: candidates, the sentence, and how the sentence was made."""
 
     question: str
-    candidates: list[TableCandidate] = Field(default_factory=list)
+    candidates: list[TableCandidate] = Field(default_factory=list)  # the tables shown to the guide LLM (top k)
+    picked: list[TableCandidate] = Field(default_factory=list)  # the ones the answer recommends and cites (T2-39); [] on refusal
     no_answer: bool = False
     no_answer_reason: str | None = None  # out_of_scope | no_item when the stage 2 LLM said why (T2-09)
     answer: str  # final text; citations are appended by code
