@@ -4,17 +4,21 @@ Listed facts (names, links, survey cycle) come from tables.csv, the catalog and 
 Periods, items and classification labels come from the distinct values in the Parquet file, because the
 metadata lists only part of the labels and writes some 5-year surveys with period code Y in the values.
 Where the sources disagree the record keeps both and says so in `issues`; nothing is dropped.
+
+T2-41 S6a (was metadata.py of the search package): the graph is graph/index_build.build_tables_graph over the nodes below
+(read_parquet -> build_records -> write_jsonl); `python -m kosis_rag_build.cli tables` runs it. build_records(data_dir)
+gives the same records one by one (read_table + to_record per tables.csv row).
 """
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import re
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -23,8 +27,9 @@ from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import MAX_DIMS, TableInfo
 from kosis_rag.shared.units import meta_unit
 from kosis_rag.shared.vocab import REGION_LEVELS
+from kosis_rag_build.schemas import TablesBuildState
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
+DATA_DIR = Path(__file__).resolve().parents[2] / "data"  # the repo's data/ (src/kosis_rag_build -> repo)
 CATALOG = Path("reference") / "population_table_catalog.jsonl"
 # Region classes only (not e.g. 성씨·본관, where 동부 is a clan seat): their totals and 시도 go first in the label list
 REGION_CLASS = re.compile(r"행정구역|시도|시군구|구시군|읍면동|지역")
@@ -154,52 +159,95 @@ def _search_text(record: TableRecord) -> str:
     return " ".join(dict.fromkeys(p for p in parts if p))
 
 
+def read_catalog(data_dir: Path) -> dict[str, dict]:
+    """The population table catalog by table key (reference/population_table_catalog.jsonl)."""
+    with (data_dir / CATALOG).open(encoding="utf-8") as f:
+        return {f"{c['org_id']}_{c['tbl_id']}": c for c in map(json.loads, f)}
+
+
+def read_rows(data_dir: Path) -> list[dict[str, str]]:
+    """The rows of tables.csv, in file order."""
+    with (data_dir / "tables.csv").open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def read_table(data_dir: Path, row: dict[str, str], catalog: dict[str, dict]) -> dict[str, Any]:
+    """What one table's record is made from: {info, meta (KOSIS metadata or None), cat (catalog entry or None),
+    values (distinct values of its Parquet file, {} when there is none), unit}.
+
+    Side effects: reads the table's metadata JSON and Parquet file. Node: read_parquet.
+    """
+    info = TableInfo(**row)
+    meta_path = data_dir / "table_metadata" / f"{info.key}.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None
+    parquet = data_dir / info.parquet
+    return {"info": info, "meta": meta, "cat": catalog.get(info.key),
+            "values": _values(parquet) if parquet.exists() else {}, "unit": meta_unit(info.key, data_dir)}
+
+
+def to_record(source: dict[str, Any]) -> TableRecord:
+    """The TableRecord of one read_table result (issues and search_text filled). Side effects: none.
+    Node: build_records."""
+    info, meta, cat, values = source["info"], source["meta"], source["cat"], source["values"]
+    periods = values.get("periods", [])
+    years = [y for y in map(_year, periods) if y is not None]
+    record = TableRecord(
+        info=info,
+        table_name_en=(meta or {}).get("tblEngNm") or None,
+        topic=(cat or {}).get("topic"),
+        menu_paths=list(dict.fromkeys([info.menu_path, *(p["path"] for p in (cat or {}).get("paths", []))])),
+        unit=source["unit"],
+        cycle=[c for c in ((meta or {}).get("periodStr") or "").split("#") if c],
+        contain_period=((meta or {}).get("containPeriod") or "").strip(),
+        start=min(years, default=None),
+        end=max(years, default=None),
+        **values,
+    )
+    record.issues = _issues(record, cat, meta)
+    record.search_text = _search_text(record)
+    return record
+
+
 def build_records(data_dir: Path = DATA_DIR) -> Iterator[TableRecord]:
     """One record per tables.csv row, in file order."""
-    with (data_dir / CATALOG).open(encoding="utf-8") as f:
-        catalog = {f"{c['org_id']}_{c['tbl_id']}": c for c in map(json.loads, f)}
-    with (data_dir / "tables.csv").open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    for row in rows:
-        info = TableInfo(**row)
-        meta_path = data_dir / "table_metadata" / f"{info.key}.json"
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else None
-        cat = catalog.get(info.key)
-        parquet = data_dir / info.parquet
-        values = _values(parquet) if parquet.exists() else {}
-        periods = values.get("periods", [])
-        years = [y for y in map(_year, periods) if y is not None]
-        record = TableRecord(
-            info=info,
-            table_name_en=(meta or {}).get("tblEngNm") or None,
-            topic=(cat or {}).get("topic"),
-            menu_paths=list(dict.fromkeys([info.menu_path, *(p["path"] for p in (cat or {}).get("paths", []))])),
-            unit=meta_unit(info.key, data_dir),
-            cycle=[c for c in ((meta or {}).get("periodStr") or "").split("#") if c],
-            contain_period=((meta or {}).get("containPeriod") or "").strip(),
-            start=min(years, default=None),
-            end=max(years, default=None),
-            **values,
-        )
-        record.issues = _issues(record, cat, meta)
-        record.search_text = _search_text(record)
-        yield record
+    catalog = read_catalog(data_dir)
+    for row in read_rows(data_dir):
+        yield to_record(read_table(data_dir, row, catalog))
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build data/tables.jsonl from the provided data (T2-01).")
-    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
-    parser.add_argument("--out", type=Path, default=DATA_DIR / "tables.jsonl")
-    args = parser.parse_args(argv)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    started, count = time.perf_counter(), 0
-    with args.out.open("w", encoding="utf-8") as f:
-        for record in build_records(args.data_dir):
+# --- nodes (graph/index_build.build_tables_graph) ---
+
+def _timed(name: str, trace: dict, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
+    return {**trace, name: {"seconds": time.perf_counter() - started, **extra}}
+
+
+def read_parquet(state: TablesBuildState) -> dict:
+    """Every table's sources (read_table per tables.csv row).
+
+    In: state.data_dir. Out: {"sources", "trace"}. Side effects: reads the provided data. Node: read_parquet.
+    """
+    started = time.perf_counter()
+    catalog = read_catalog(state.data_dir)
+    sources = [read_table(state.data_dir, row, catalog) for row in read_rows(state.data_dir)]
+    return {"sources": sources, "trace": _timed("read_parquet", state.trace, started, tables=len(sources))}
+
+
+def build_records_node(state: TablesBuildState) -> dict:
+    """In: state.sources. Out: {"records" (to_record of each, in order), "trace"}. Side effects: none.
+    Node: build_records."""
+    started = time.perf_counter()
+    return {"records": [to_record(s) for s in state.sources],
+            "trace": _timed("build_records", state.trace, started)}
+
+
+def write_jsonl(state: TablesBuildState) -> dict:
+    """Write one record per line (model_dump_json) to state.out, creating its folder.
+
+    Out: {"count", "trace"}. Side effects: writes the file. Node: write_jsonl.
+    """
+    started = time.perf_counter()
+    state.out.parent.mkdir(parents=True, exist_ok=True)
+    with state.out.open("w", encoding="utf-8") as f:
+        for record in state.records:
             f.write(record.model_dump_json() + "\n")
-            count += 1
-    print(f"{count} tables -> {args.out} ({time.perf_counter() - started:.0f}s)")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return {"count": len(state.records), "trace": _timed("write_jsonl", state.trace, started)}

@@ -15,7 +15,8 @@ from kosis_rag.legacy.retrievers import BM25TableRetriever, HqRetriever
 from kosis_rag.adapters.loader import load_resources
 from kosis_rag.schemas.resources import IndexSpec, SearchOptions
 from kosis_rag.retrieve.bm25 import Bm25Index
-from kosis_rag.retrieve.hq import ckpt8, collection_name, hq_bm25, max_pool
+from kosis_rag.retrieve.hq import hq_bm25, max_pool
+from kosis_rag.shared.hqnames import ckpt8, collection_name
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared.constants import COLLECTION_NAME

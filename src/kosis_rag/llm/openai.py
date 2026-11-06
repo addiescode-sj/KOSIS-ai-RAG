@@ -21,7 +21,7 @@ class OpenAIClient:
     """generate(system, user, history=None) over OpenAI chat completions in JSON mode.
 
     The defaults (config fields left None) are the stage 2 re-ranker's (temperature 0, 512 tokens, no seed). The
-    question generator of T2-39 (kosis_rag.hq) sets temperature, max_tokens and seed, and passes earlier turns as
+    question generator of T2-39 (the offline build package) sets temperature, max_tokens and seed, and passes earlier turns as
     `history` to ask once more.
     """
 

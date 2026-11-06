@@ -3,8 +3,8 @@
 Questions are embedded with the same fine-tuned embedder as the service's table collection (the query side reuses
 the dense side's query embedder, so both live in one space) after the same surface rules (tabletext.norm_query).
 Collection `kosis_hq__<build_id>__<ckpt8>`; its metadata records embed_model, embed_ckpt, doc_format "hq" and hq_build.
-This module only reads a question collection and questions.jsonl that were built already (`python -m
-kosis_rag.hq.index` loads them; plans/T2-41.md 미결 12).
+This module only reads a question collection and questions.jsonl that were built already (the offline build
+package generates and loads them, its `hq-build` / `hq-index` CLI commands; plans/T2-41.md 미결 12).
 
 HqIndex: the top `n_questions` questions -> max-pool per table (a table's score is its best question) -> top k
 tables as Documents whose text is the table's n2 passage, so rerank1 / rerank2 see what they were trained on.
@@ -13,9 +13,7 @@ hq_bm25: BM25 with one document per table = its kept questions joined (the S2 li
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,39 +22,14 @@ from langchain_core.documents import Document
 from rank_bm25 import BM25Okapi
 
 from kosis_rag.retrieve.bm25 import Bm25Index
-from kosis_rag.retrieve.constants import HQ_COLLECTION_PREFIX, HQ_K, HQ_N_QUESTIONS
+from kosis_rag.retrieve.constants import HQ_K, HQ_N_QUESTIONS
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.catalog import to_document
-from kosis_rag.shared.constants import COLLECTION_NAME
 from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank
 from kosis_rag.shared.tokenize import tokenize
 
-_INVALID = re.compile(r"[^a-z0-9_-]+")
 log = logging.getLogger(__name__)
-
-
-def ckpt8(ckpt_id: str | None) -> str:
-    """8 characters naming the embedder weights: the sha part of model.ckpt_id ('<file>@<sha12>'), else a hash.
-
-    Side effects: none. Node: none (names the collection).
-    """
-    if not ckpt_id:
-        return "none"
-    if "@" in ckpt_id and re.fullmatch(r"[0-9a-f]{8,}", ckpt_id.rsplit("@", 1)[1]):
-        return ckpt_id.rsplit("@", 1)[1][:8]
-    return "base" if ckpt_id == "base" else hashlib.sha256(ckpt_id.encode()).hexdigest()[:8]
-
-
-def collection_name(build_id: str, ckpt_id: str | None) -> str:
-    """kosis_hq__<build_id>__<ckpt8>, lower-cased with characters Chroma refuses replaced by '-' (3-512 chars,
-    alphanumeric at both ends, no '..').
-    Side effects: ValueError for a name Chroma refuses. Node: none (index CLI, load_resources).
-    """
-    name = _INVALID.sub("-", f"{HQ_COLLECTION_PREFIX}{build_id}__{ckpt8(ckpt_id)}".lower())[:512].strip("-_")
-    if not COLLECTION_NAME.match(name) or ".." in name:
-        raise ValueError(f"{name!r} is not a valid Chroma collection name")
-    return name
 
 
 def max_pool(hits: list[tuple[str, str, str, float]]) -> list[dict]:

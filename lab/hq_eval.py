@@ -11,7 +11,7 @@ EMBED_CKPT and RERANK_CKPT):
     S2           S0 + hq dense + hq BM25                       HQ_BUILD=<build>, HQ_BM25=on
     S1-w.5       S1 with HQ_WEIGHT 0.5
     S1-nofilter  S1 over a build without the score filter     (--nofilter-build, e.g. ...-f0)
-    S1-desc      S1 over the description index                 (--desc; index built with kosis_rag.hq.index --desc)
+    S1-desc      S1 over the description index                 (--desc; index built with kosis_rag_build.cli hq-index --desc)
 
 Protocol: answerable questions only. Every configuration runs on dev; S1 / S2 / S1-w.5 are chosen among on dev
 (Hit@1 + Hit@5, ties -> the earlier, smaller change); test is run once, for S0 and the chosen one only. The verdict
@@ -291,7 +291,7 @@ def main() -> None:
     p.add_argument("--build", required=True,
                    help="the question build (HQ_BUILD), e.g. hq-xxxxxxxx-yyyyyyyy-gpt-4o-mini-f30-k2")
     p.add_argument("--nofilter-build", default=None, help="a build without the score filter (S1-nofilter)")
-    p.add_argument("--desc", action="store_true", help="also S1-desc (index built with kosis_rag.hq.index --desc)")
+    p.add_argument("--desc", action="store_true", help="also S1-desc (index built with kosis_rag_build.cli hq-index --desc)")
     p.add_argument("--golden", type=Path, default=GOLDEN)
     p.add_argument("--rerank-ckpt", default=None, help="stage 1 weights (default: RERANK_CKPT in .env)")
     p.add_argument("--boot", type=int, default=10_000)

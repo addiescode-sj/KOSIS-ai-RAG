@@ -116,7 +116,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
         if not sigungu and not _SIGUNGU_WARNED:
             _SIGUNGU_WARNED.append(True)  # once per process, as the old import-time read did
             log.warning("data/sigungu.json not found: 시군구 names in questions are not read as 시도 "
-                        "(build it with `python -m kosis_rag.shared.vocab --data-dir <provided data>`)")
+                        "(build it with the offline build CLI: `sigungu --data-dir <provided data>`)")
     return SearchResources(options=o, spec=spec, records=by_key, dense=dense, bm25=bm25,
                            text_format=fmt, stage1_score=stage1_score, select=select,
                            stage2_name=o.stage2 if o.stage2 not in OFF else "custom", stage2_llm=stage2_llm,

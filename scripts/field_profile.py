@@ -11,11 +11,11 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-from kosis_rag.adapters.files import load_sigungu
-from kosis_rag.index import REPO, read_records
+from kosis_rag.adapters.files import load_sigungu, read_records
 from kosis_rag.shared.fields import ITEM_UNITS, LAST_BRACKET, TableFields, item_unit, table_fields
 from kosis_rag.shared.vocab import SIDO_LABELS, dimension_keys, unit_key
 
+REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "docs" / "reports" / "t2-30-fields.md"
 EXAMPLE = "101_DT_1PB1607"  # mentor example: 이동자유형별 인구, list A11_2015_1_10
 WORDS = ("출생", "혼인")  # KOS-92: words used both as the counted thing and as a breakdown
@@ -86,7 +86,7 @@ def _a2_section(records, fields: list[TableFields]) -> list[str]:
     n = len(fields)
     lines = ["## 5. 정규화 사전과 미매핑 비율 (KOS-97)", "",
              "사전은 `src/kosis_rag/shared/vocab.py` 한 곳에 둔다. 시도 이름(`filters.SIDO`)·질문 지역어(`query.REGION_WORDS`)는 "
-             "제자리에 두고 같은 객체를 다시 내보낸다. 시군구 → 시도는 `python -m kosis_rag.shared.vocab --data-dir <제공 데이터>`로 "
+             "제자리에 두고 같은 객체를 다시 내보낸다. 시군구 → 시도는 `python -m kosis_rag_build.cli sigungu --data-dir <제공 데이터>`로 "
              "만든 `data/sigungu.json`(git 제외)을 쓴다.", "",
              "| 사전 | 대상 | 미매핑 | 비고 |", "| --- | --- | ---: | --- |",
              f"| 분류 표준 이름 | 분류 이름 등장 {len(names):,}회 | {len(unmapped) / len(names):.1%} ({len(unmapped):,}회) | "

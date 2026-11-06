@@ -1,4 +1,4 @@
-"""T2-39: the question generation graph (kosis_rag.hq): cache (keyed by prompt, model and table content), one re-ask,
+"""T2-39: the question generation graph (kosis_rag_build.hq, graph/hq_build.py): cache (keyed by prompt, model and table content), one re-ask,
 global rules, the Doc2Query−− filter, the build id (model and filter settings in it) and the files a build writes.
 
 No model, no API: the LLM is a fake with scripted replies, the scorer a fake function, every path under tmp_path.
@@ -13,11 +13,11 @@ import pytest
 pytest.importorskip("langgraph")
 
 from kosis_chat.llm.model import STATUS_OK  # noqa: E402
-from kosis_rag.hq import prompt as hq_prompt  # noqa: E402
-from kosis_rag.hq.graph import (build_id, build_table_graph, cache_path, filter_scores, model_slug,  # noqa: E402
-                                run_build, user_sha)
-from kosis_rag.hq.rules import check_questions  # noqa: E402
-from kosis_rag.hq.schemas import HqQuestion, HqState  # noqa: E402
+from kosis_rag_build.graph.hq_build import build_table_graph, run_build  # noqa: E402
+from kosis_rag_build.hq import prompt as hq_prompt  # noqa: E402
+from kosis_rag_build.hq.nodes import build_id, cache_path, filter_scores, model_slug, user_sha  # noqa: E402
+from kosis_rag_build.hq.rules import check_questions  # noqa: E402
+from kosis_rag_build.schemas import HqQuestion, HqState  # noqa: E402
 from kosis_rag.schemas.catalog import TableClass, TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.shared.fields import table_fields  # noqa: E402

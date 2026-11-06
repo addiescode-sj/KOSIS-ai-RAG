@@ -21,10 +21,11 @@ from kosis_rag.parse.constants import MAX_RESULTS
 from kosis_rag.parse.node import parse_query
 from kosis_rag.parse.schemas import ParsedQuery
 from kosis_rag.retrieve.bm25 import Bm25Index, bm25_index, bm25_search
-from kosis_rag.retrieve.constants import HQ_DOC_FORMAT, HQ_N_QUESTIONS
+from kosis_rag.retrieve.constants import HQ_N_QUESTIONS
 from kosis_rag.retrieve.dense import DenseIndex
 from kosis_rag.retrieve.fuse import rrf_fuse
-from kosis_rag.retrieve.hq import HqIndex, collection_name
+from kosis_rag.retrieve.hq import HqIndex
+from kosis_rag.shared.hqnames import HQ_DOC_FORMAT, collection_name
 from kosis_rag.retrieve.lists import condition_filter, search_list
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.resources import ChromaConfig
@@ -96,7 +97,7 @@ class ChromaTableRetriever(BaseRetriever):
         name = name or chroma.collection
         if not name:
             raise ValueError("no collection: pass ChromaConfig(collection=...) (backend: CHROMA_COLLECTION in the shell "
-                             "environment) naming the collection built by `python -m kosis_rag.index`")
+                             "environment) naming a table collection built by the offline build CLI (`chroma` command)")
         client = chroma_client(chroma)
         collection = client.get_collection(name, embedding_function=None)
         meta = collection.metadata or {}

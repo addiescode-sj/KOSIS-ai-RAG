@@ -1,7 +1,7 @@
 """What the parse stage reads and writes (T2-41 S2; ParsedQuery from query.py, T2-14 / T2-29).
 
 `ParsedQuery` is what the parser understood; `to_filter` turns it into the registry filter (shared.filters.TableFilter).
-Its period and region fields follow evals.schemas.QueryItem (L2), so the evaluation layer can grade them as they are.
+Its period and region fields follow the evals QueryItem schema (L2), so the evaluation layer can grade them as they are.
 ParsedQuery stays a plain BaseModel (it is a SearchState field, and its JSON schema is part of docs/openapi.json); the
 node In/Out models are BoundaryModel (strict, extra fields refused).
 """

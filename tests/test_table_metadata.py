@@ -6,7 +6,8 @@ import json
 import pandas as pd
 import pytest
 
-from kosis_rag.metadata import build_records, main
+from kosis_rag_build.cli import main as cli_main
+from kosis_rag_build.tables import build_records
 from kosis_rag.schemas.catalog import TableRecord
 
 offline = pytest.mark.offline
@@ -128,6 +129,6 @@ def test_missing_sources_are_flagged_not_dropped(tmp_path):
 def test_cli_writes_one_valid_record_per_table(tmp_path):
     data = _data_dir(tmp_path)
     out = tmp_path / "tables.jsonl"
-    assert main(["--data-dir", str(data), "--out", str(out)]) == 0
+    assert cli_main(["tables", "--data-dir", str(data), "--out", str(out)]) == 0
     lines = out.read_text(encoding="utf-8").splitlines()
     assert [TableRecord.model_validate_json(line).info.key for line in lines] == ["101_DT_T"]

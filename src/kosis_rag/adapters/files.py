@@ -2,7 +2,7 @@
 from S2, the rows of a question index build (from hq/index.py).
 
 Only what the online search reads; build outputs (tables.jsonl, sigungu.json, Chroma builds, hq caches) are written
-by the build code (kosis_rag_build from S6a).
+by the offline build package (T2-41 S6a).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from kosis_rag.shared.constants import DESC_SUFFIX
 from kosis_rag.shared.vocab import REPO, SIGUNGU
 
 TABLES = REPO / "data" / "tables.jsonl"  # the table registry (IndexSpec.tables None; was SearchSettings.tables)
-HQ_DIR = REPO / "data" / "hq"  # question index builds (kosis_rag.hq.build writes them; the search only reads them)
+HQ_DIR = REPO / "data" / "hq"  # question index builds (the offline build writes them; the search only reads them)
 
 
 def read_records(path: Path) -> list[TableRecord]:
@@ -37,7 +37,7 @@ def load_sigungu(path: Path = SIGUNGU) -> dict[str, list[str]]:
 def read_questions(build_id: str, root: Path = HQ_DIR) -> list[dict]:
     """The rows to index for a build: {"id", "key", "type", "text"} (T2-41 S2: from hq/index.py).
 
-    In: build_id = a kosis_rag.hq.build id, or '<id>-desc' for its descriptions (one row per table, type
+    In: build_id = an hq build id (hq-<prompt8>-<tables8>-...), or '<id>-desc' for its descriptions (one row per table, type
         'description'); root = data/hq. Out: rows in file order. Side effects: reads the build folder;
         FileNotFoundError when the build is missing.
     Node: none directly (load_resources and the index CLI call it; retrieve_hq_bm25 searches what it gives).

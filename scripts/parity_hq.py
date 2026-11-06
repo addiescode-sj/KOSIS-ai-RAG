@@ -34,7 +34,8 @@ the replayed folder (cache_dir judged against the cache used) is written to --ha
 Filtered builds (filter_frac > 0) need the stage 1 cross-encoder: --rerank-ckpt (this script reads no .env).
 
 hash and compare read only the build folder; no import of kosis_rag (they run without the search dependencies).
-replay imports kosis_rag.hq (needs PYTHONPATH=.;src;vendor/phase1;vendor/phase1/src and the build dependencies).
+replay imports the build code kosis_rag_build (graph.hq_build, hq.nodes, hq.prompt; T2-41 S6a, before: the hq package of kosis_rag) and
+kosis_rag (needs PYTHONPATH=.;src;vendor/phase1;vendor/phase1/src and the build dependencies).
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ from typing import Any
 
 FILES = ("questions.jsonl", "descriptions.jsonl", "failed.jsonl", "report.md", "build.json")
 RUN_TOTALS = ("calls", "cached", "new_input_tokens", "new_output_tokens", "api_seconds")
-REPORT_RUN_LINE = "- 응답 "  # report.md line with the run-dependent totals (kosis_rag.hq.graph.report)
+REPORT_RUN_LINE = "- 응답 "  # report.md line with the run-dependent totals (kosis_rag_build.hq.report.report)
 # Entries that differ between a build from the API and the same build from the cache: notes only
 RUN_DEPENDENT = ("build.json", "report.md", "calls")
 MISSING = "missing"
@@ -69,7 +70,7 @@ def sha256(data: bytes) -> str:
 
 
 def model_slug(model: str) -> str:
-    """As kosis_rag.hq.graph.model_slug (copied so this script imports no search code)."""
+    """As kosis_rag_build.hq.nodes.model_slug (copied so hash / compare import no build or search code)."""
     return re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-")[:40].strip("-") or "model"
 
 
@@ -215,9 +216,10 @@ def replay(baseline: Path, out_dir: Path, *, tables: Path, cache_root: Path | No
     cache_root = cache_root if cache_root is not None else baseline.parent / "cache"
 
     from kosis_rag.adapters.files import read_records
-    from kosis_rag.hq import graph as hq_graph
-    from kosis_rag.hq import prompt as hq_prompt
     from kosis_rag.shared import tabletext as text
+    from kosis_rag_build.graph import hq_build
+    from kosis_rag_build.hq import nodes as hq_nodes
+    from kosis_rag_build.hq import prompt as hq_prompt
 
     model = manifest["model"]
     frac, min_keep, limit = float(manifest["filter_frac"]), int(manifest["min_keep"]), manifest.get("limit")
@@ -225,13 +227,13 @@ def replay(baseline: Path, out_dir: Path, *, tables: Path, cache_root: Path | No
     if prompt_hash != manifest.get("prompt_hash"):
         raise Refused(f"prompt_hash {prompt_hash[:8]} != baseline {str(manifest.get('prompt_hash'))[:8]}: every "
                       "table would be a cache miss")
-    sha = hq_graph.tables_sha(tables)
+    sha = hq_nodes.tables_sha(tables)
     if sha != manifest.get("tables_sha256"):
         raise Refused(f"{tables}: sha256 {sha[:8]} != baseline tables_sha256 {str(manifest.get('tables_sha256'))[:8]}")
-    bid = hq_graph.build_id(prompt_hash, sha, model, frac, min_keep, limit)
+    bid = hq_nodes.build_id(prompt_hash, sha, model, frac, min_keep, limit)
     if bid != baseline.name or bid != manifest.get("build_id"):
         raise Refused(f"the replay's build id {bid} is not the baseline's {baseline.name}")
-    cache = cache_root / prompt_hash[:8] / hq_graph.model_slug(model)
+    cache = cache_root / prompt_hash[:8] / hq_nodes.model_slug(model)
     if not cache.is_dir():
         raise Refused(f"no reply cache at {cache}")
     fmt = text_format or text.DOC_FORMAT
@@ -240,14 +242,12 @@ def replay(baseline: Path, out_dir: Path, *, tables: Path, cache_root: Path | No
     if frac > 0:
         if not rerank_ckpt:
             raise Refused(f"the baseline is filtered (filter_frac {frac}): pass --rerank-ckpt <stage 1 checkpoint>")
-        from kosis_rag.hq.build import pair_scorer
-
-        scorer = pair_scorer(rerank_ckpt, records, fmt, device)
+        scorer = hq_nodes.pair_scorer(rerank_ckpt, records, fmt, device)
     client = NoCallClient()
     print(f"replay {bid}: model {model}, limit {limit}, frac {frac}, cache {cache} -> {out_dir / bid}")
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        state = hq_graph.run_build(records, client, model=model, tables_sha256=sha, limit=limit, frac=frac,
+        state = hq_build.run_build(records, client, model=model, tables_sha256=sha, limit=limit, frac=frac,
                                    min_keep=min_keep, scorer=scorer, cache_dir=cache_root, out_root=out_dir,
                                    concurrency=concurrency, fmt=fmt)
     except CacheMiss as exc:

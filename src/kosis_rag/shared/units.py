@@ -1,6 +1,6 @@
 # copied from Phase 1 src/kosis_ai/normalize.py@e248a45
 """The table-wide unit from the KOSIS table metadata (P2-D0): Phase 1 `_meta_unit` and `_known`, copied so
-`metadata.py` (tables.jsonl) does not import Phase 1. tests/test_phase1_contract.py checks it gives the same
+the tables.jsonl builder does not import Phase 1. tests/test_phase1_contract.py checks it gives the same
 value as the Phase 1 function. Change it only together with Phase 1.
 """
 

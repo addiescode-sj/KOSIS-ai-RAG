@@ -10,34 +10,21 @@ A question is dropped when it states something the table does not hold or copies
     deictic    "이 표" and the like: the question does not say what it is about
     duplicate  almost the same as an earlier question of the same table (difflib ratio >= DUPLICATE)
 Pure functions: no model, no I/O; check_positions gives the kept questions' places in the reply (their ids).
-Thresholds are fixed constants, never tuned on golden questions.
+Thresholds are fixed constants (hq/constants.py), never tuned on golden questions; the patterns are in
+hq/patterns.py (T2-41 S6a: from the old hq/rules.py).
 """
 
 from __future__ import annotations
 
-import re
 from difflib import SequenceMatcher
 
-from kosis_rag.hq.schemas import HqQuestion
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.shared.fields import TableFields
 from kosis_rag.shared.tabletext import norm_name
 from kosis_rag.shared.vocab import SIDO_LABELS
-
-NAME_COPY = 0.9
-DUPLICATE = 0.95
-YEAR = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)(?!\s*년대)")
-DECADE = re.compile(r"(?<!\d)(19\d|20\d)0\s*년대")
-NUMBER = re.compile(r"(?<![\d.,])\d+(?:,\d{3}(?!\d))*(?:\.\d+)?")  # "3,000", "12.5", "2023"; not "2015, 2020" as one
-# a number followed by one of these is a value ("3만 명", "12.5%", "500가구"); 세·살·대 (age), 월·분기, 인 (household
-# size: "1인가구"), 개월, 년 are not values
-VALUE_UNIT = re.compile(r"\s*(?:만|천|억|조|명|%|퍼센트|프로|가구|건|원|호|쌍|세대|배|채|㎡)")
-SIDO_NAME = re.compile(
-    r"(?<![가-힣])(" + "|".join(sorted(map(re.escape, SIDO_LABELS), key=len, reverse=True)) + r")"
-    r"(?=$|[^가-힣]|시|도|특별|광역|은|는|이|가|의|에|과|와|도|별|로|을|를|만|및|지역|내|권)")
-HOMONYM = {"광주": "경기도"}  # a bare short name that is also a 시군구 of this 시도 (경기도 광주시)
-DEICTIC = re.compile(r"(?<![가-힣])(?:이|위|해당|본|아래)\s*(?:통계)?\s*표(?=$|[^가-힣]|에|의|는|를|로|가|와|과|만)")
-_SPACE = re.compile(r"[\s·,.?!~\-()]+")
+from kosis_rag_build.hq.constants import DUPLICATE, NAME_COPY
+from kosis_rag_build.hq.patterns import _SPACE, DECADE, DEICTIC, HOMONYM, NUMBER, SIDO_NAME, VALUE_UNIT, YEAR
+from kosis_rag_build.schemas import HqQuestion
 
 
 def _plain(text: str) -> str:

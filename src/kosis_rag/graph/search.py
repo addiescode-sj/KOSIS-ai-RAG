@@ -18,10 +18,10 @@ node writes its own ranked list into `runs[name]` (and its filtered-out tables i
 reducer merges the parallel writes, and fuse joins the lists in a fixed order (dense, bm25, hq, hq_bm25) by RRF, so
 the result does not depend on which branch finished first. The question-index lists (retrieve_hq,
 retrieve_hq_bm25) are added only when the resources hold them (HQ_BUILD); without them the graph returns what the
-pre-T2-39 graph returned (tests/test_graph_runs.py). The candidate pool is formed at fuse: tracing (evals.trace)
+pre-T2-39 graph returned (tests/test_graph_runs.py). The candidate pool is formed at fuse: tracing (the evals trace module)
 sees the retrieve_* nodes as spans without a ranked pool, and fuse as the first search node.
 
-LangGraph is imported only in this package (and in kosis_rag.hq.graph, the offline question build): the old path
+LangGraph is imported only in this package inside kosis_rag (the offline builds have their own package): the old path
 works without it. The list nodes run in LangGraph's worker threads. When two or more lists embed the question (dense and
 the question index share one query embedder), the `embed` node embeds it once before the branches and each list
 searches with that vector, so the embedder is never called from two threads at once and the question is embedded

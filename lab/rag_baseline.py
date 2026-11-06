@@ -121,9 +121,9 @@ def old_persistent_vectors(name: str, ids: list[str]) -> list | None:
 
 
 def dense_kure(records, device: str | None) -> dict:
-    """Master's dense side: KURE-v1 over index.to_document (T2-24)."""
-    from kosis_rag import index
+    """Master's dense side: KURE-v1 over kosis_rag_build.chroma.to_document (T2-24)."""
     from kosis_rag.adapters import models
+    from kosis_rag_build import chroma as index
 
     embed, _, _ = models.kure_embedder(device)
     return {"label": "KURE-v1 (master)", "tag": models.EMBED_MODEL, "docs": [index.to_document(r) for r in records],
@@ -165,12 +165,13 @@ def chroma_retriever(records, dense: dict, k: int):
     import numpy as np
     from chromadb.config import Settings
 
-    from kosis_rag import index
     from kosis_rag.adapters import models
     from kosis_rag.legacy.retrievers import ChromaTableRetriever
+    from kosis_rag.shared.vocab import REPO
+    from kosis_rag_build import chroma as index
 
     models.EMBED_MODEL = dense["tag"]  # recorded in the collection metadata and checked below
-    data_sha = hashlib.sha256(index.REPO.joinpath("data", "tables.jsonl").read_bytes()).hexdigest()
+    data_sha = hashlib.sha256(REPO.joinpath("data", "tables.jsonl").read_bytes()).hexdigest()
     docs = dense["docs"]
     # the cache is keyed by the model tag and the exact passages, so another model or document text never reuses it
     model_tag = hashlib.sha256("\n".join([models.EMBED_MODEL, *docs]).encode("utf-8")).hexdigest()[:8]

@@ -5,3 +5,5 @@ src/kosis_rag/rerank/prompts/*.md -text
 tests/fixtures/prompts/* -text
 # T2-41 S5: the guide prompt moved to backend/app/respond/prompts (compared byte for byte, tests/test_prompts_bytes.py)
 backend/app/respond/prompts/*.md -text
+# T2-41 S6a: the hq prompt is hashed into the cache folder name (prompt_hash, tests/test_hq_prompt_bytes.py)
+src/kosis_rag_build/hq/prompts/*.md -text

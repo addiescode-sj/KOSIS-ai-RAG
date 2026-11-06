@@ -1,4 +1,6 @@
-"""Load the tables into ChromaDB (T2-24, versioned A builds in T2-05): one document per table, built from the table metadata only (tables.jsonl).
+"""The table index (T2-24, versioned A builds in T2-05): one Chroma document per table, built from the table metadata
+only (tables.jsonl). T2-41 S6a: was index.py of the search package (its CLI is `python -m kosis_rag_build.cli chroma`, the graph
+graph/index_build.build_chroma_graph over the nodes at the end of this file).
 
 Values are not loaded. Embedding every row (617M) was measured at ~72 days and ~47 GB of vectors on an M3,
 and the values are fetched from Parquet with pandas as in stage 1, so the search document only carries what
@@ -9,38 +11,37 @@ Chroma's default (English) embedding function; queries must be embedded with the
 `TableRecord.search_text` (all labels, up to 22,929 chars) stays the BM25 document; the embedding document below
 summarizes region classes by level and caps the other labels per class so every table fits the model's input.
 
-    PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python -m kosis_rag.index
-    ... python -m kosis_rag.index --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
+    python -m kosis_rag_build.cli chroma
+    python -m kosis_rag_build.cli chroma --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
 
 `--model bge-m3-ft` loads the fine-tuned bge-m3 (kosis_rag.adapters.models) and embeds the text format it was trained on
 (kosis_rag.shared.tabletext, `--text-format`) into its own collection (FT_COLLECTION_PREFIX); the checkpoint id goes into the collection metadata
 so `ChromaTableRetriever.connect` embeds questions with the same weights. Metadata (filters) is the same either way.
+EMBED_MODEL / kure_embedder live in kosis_rag.adapters.models, region_summary in kosis_rag.shared.tabletext and the
+COLLECTION_NAME pattern in kosis_rag.shared.constants (the search reads them too).
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import os
+import json
 import re
 import time
-from datetime import datetime
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any, NamedTuple
 
-from dotenv import load_dotenv
-
-from kosis_rag.adapters import models
+from kosis_rag.adapters import files, models
 from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
 from kosis_rag.schemas.catalog import TableRecord
-from kosis_rag.schemas.resources import ChromaConfig
-from kosis_rag.shared.catalog import _META_FIELDS
 from kosis_rag.shared import constants
+from kosis_rag.shared import tabletext as text
+from kosis_rag.shared.catalog import _META_FIELDS
 from kosis_rag.shared.fields import table_fields
 from kosis_rag.shared.roles import table_roles
 from kosis_rag.shared.tabletext import region_summary
+from kosis_rag_build.schemas import IndexBuildState
 
-REPO = Path(__file__).resolve().parents[2]
 DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list or summarize what is counted; before: measure2 (KOS-97), measure (T2-27)
 # Per-table fields as list metadata (T2-30 KOS-101). Bump it whenever to_metadata changes: it is part of the build name.
 META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
@@ -124,11 +125,6 @@ def collection_name(data_sha256: str) -> str:
     return name
 
 
-def read_records(path: Path) -> list[TableRecord]:
-    with path.open(encoding="utf-8") as f:
-        return [TableRecord.model_validate_json(line) for line in f]
-
-
 def build_record(index_version: str, data_sha256: str, n_docs: int, dim: int, max_tokens: int, over_limit: int,
                  embed_model: str = EMBED_MODEL, doc_format: str = DOC_FORMAT, embed_ckpt: str | None = None) -> dict:
     """What the collection was built from; stored as collection metadata so every teammate sees the same record.
@@ -166,8 +162,6 @@ def load(client, ids: list[str], docs: list[str], metas: list[dict], embeddings:
 def write_build(path: Path, *, name: str, ids: list[str], docs: list[str], metas: list[dict], vectors: list,
                 record: dict) -> None:
     """One build as a .npz: vectors as float32, everything else as one JSON string (so reading never unpickles)."""
-    import json
-
     import numpy as np
 
     text = json.dumps({"name": name, "ids": ids, "docs": docs, "metas": metas, "record": record}, ensure_ascii=False)
@@ -176,8 +170,6 @@ def write_build(path: Path, *, name: str, ids: list[str], docs: list[str], metas
 
 def read_build(path: Path) -> dict:
     """The build write_build wrote: {name, ids, docs, metas, record, vectors (list of lists)}; ValueError if they disagree."""
-    import json
-
     import numpy as np
 
     with np.load(path, allow_pickle=False) as f:
@@ -188,11 +180,20 @@ def read_build(path: Path) -> dict:
     return build
 
 
-def _chroma_config() -> ChromaConfig:
-    """CHROMA_HOST / CHROMA_PORT from the environment or .env, as vectorstore.chroma_address read them (T2-41 S1;
-    the build CLI takes them as arguments from S6a)."""
-    load_dotenv()
-    return ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
+def list_builds(client, active: str | None = None, out: Callable[[str], None] = print) -> int:
+    """Every table collection on the server with what it was built from; * marks `active` (CHROMA_COLLECTION, the
+    one the search uses). In: client = a Chroma client (kosis_rag.adapters.chroma.chroma_client). Side effects:
+    reads the server, prints one line per build. Node: none (cli chroma --list)."""
+    for c in sorted(client.list_collections(), key=lambda c: (c.metadata or {}).get("index_version") or ""):
+        m = c.metadata or {}
+        if "doc_format" not in m:
+            continue  # not a table build (e.g. lab collections)
+        mark = "*" if c.name == active else " "
+        out(f"{mark} {c.name}  {m.get('doc_format')}  meta {m.get('meta_format', '-')}  docs {c.count()}  "
+            f"loaded {m.get('index_version', '-')}  data {str(m.get('data_sha256', '-'))[:16]}")
+    if active and active not in {c.name for c in client.list_collections()}:
+        out(f"CHROMA_COLLECTION={active} is not on this server")
+    return 0
 
 
 def _batches(items: Iterable, size: int):
@@ -201,104 +202,122 @@ def _batches(items: Iterable, size: int):
         yield items[i:i + size]
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Load the table metadata into ChromaDB (T2-24).")
-    parser.add_argument("--tables", type=Path, default=REPO / "data" / "tables.jsonl")
-    parser.add_argument("--model", choices=("kure", "bge-m3-ft"), default="kure",
-                        help="kure: KURE-v1 over the T2-27 text (default); bge-m3-ft: fine-tuned bge-m3 (T2-06)")
-    parser.add_argument("--ckpt", default=None, help="bge-m3-ft: checkpoint .pt or run folder (default: EMBED_CKPT in .env)")
-    parser.add_argument("--text-format", default=None,
-                        help="bge-m3-ft: kosis_rag.shared.tabletext format (default: TEXT_FORMAT in .env, else n2-L60)")
-    parser.add_argument("--collection", default=None,
-                        help=f"default: kure {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
-                             f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
-    parser.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
-    parser.add_argument("--list", action="store_true", help="list the builds on the server and which one is active")
-    parser.add_argument("--export", type=Path, default=None,
-                        help="write the build to this .npz instead of Chroma (e.g. embed on a Colab GPU, T2-11)")
-    parser.add_argument("--import", dest="import_", type=Path, default=None,
-                        help="load a build written by --export into Chroma (no embedding)")
-    args = parser.parse_args(argv)
-    if args.list:
-        return list_builds()
-    if args.import_:
-        from kosis_rag.adapters.chroma import chroma_client
+# --- the embedder of a build ---
 
-        build = read_build(args.import_)
-        count = load(chroma_client(_chroma_config()), build["ids"], build["docs"], build["metas"], build["vectors"], build["name"],
-                     build["record"])
-        print(f"collection {build['name']}: {count} documents")
-        print(f"to search it, set CHROMA_COLLECTION={build['name']} in .env")
-        return 0 if count == len(build["ids"]) else 1
+class DocEmbedder(NamedTuple):
+    """What the embed node needs: embed(texts) -> vectors, count_tokens(text), the model's token limit, and the
+    build-record fields it adds (bge-m3-ft: embed_model, doc_format, embed_ckpt; KURE: none)."""
 
-    index_version = datetime.now().strftime("%Y%m%d%H%M")
-    data_sha256 = hashlib.sha256(args.tables.read_bytes()).hexdigest()
-    ft = args.model == "bge-m3-ft"
-    name = args.collection or (FT_COLLECTION_PREFIX + index_version if ft else collection_name(data_sha256))
-    records = read_records(args.tables)
-    ids = [r.info.key for r in records]
-    metas = [to_metadata(r) for r in records]
-    if ft:
-        from kosis_rag.adapters import models as model
-        from kosis_rag.shared import tabletext as text
+    embed: Callable[[list[str]], list[list[float]]]
+    count_tokens: Callable[[str], int]
+    max_tokens: int
+    info: dict[str, Any]
 
-        load_dotenv()
-        fmt = args.text_format or os.getenv("TEXT_FORMAT") or text.DOC_FORMAT
-        if fmt in text.DEPRECATED:
-            print(f"warning: {fmt} is deprecated (docs/reports/t2-06-n3-text-dropped.md); use {text.DOC_FORMAT}")
-        docs = [text.build_doc(r, fmt)["embed_text"] for r in records]
-        embedder = model.load_embedder(args.ckpt or os.getenv("EMBED_CKPT"), device=args.device, doc_format=fmt)
-        embed, count_tokens, max_tokens = embedder.embed_documents, embedder.count_tokens, model.DOC_TOKENS
-        info = {"embed_model": embedder.name, "doc_format": fmt, "embed_ckpt": embedder.ckpt}
-        print(f"text format: {fmt}")
-        print(f"bge-m3 checkpoint: {embedder.ckpt}")
-    else:
-        docs = [to_document(r) for r in records]
-        embed, count_tokens, max_tokens = kure_embedder(args.device)
-        info = {}
-    tokens = [count_tokens(d) for d in docs]
-    print(f"tokens per document: max {max(tokens)} (model limit {max_tokens}), over limit {sum(t > max_tokens for t in tokens)}")
-    order = sorted(range(len(docs)), key=lambda i: len(docs[i]))  # similar lengths per batch
-    vectors: list = [None] * len(docs)
+
+def load_doc_embedder(state: IndexBuildState, log: Callable[[str], None] = print) -> DocEmbedder:
+    """The model of state.model: KURE-v1 (kure_embedder) or the fine-tuned bge-m3 (models.load_embedder over
+    state.ckpt and the text format build_docs chose). Side effects: loads the model (downloads on first use)."""
+    if state.model == "bge-m3-ft":
+        embedder = models.load_embedder(state.ckpt, device=state.device, doc_format=state.fmt)
+        log(f"bge-m3 checkpoint: {embedder.ckpt}")
+        return DocEmbedder(embedder.embed_documents, embedder.count_tokens, models.DOC_TOKENS,
+                           {"embed_model": embedder.name, "doc_format": state.fmt, "embed_ckpt": embedder.ckpt})
+    embed, count_tokens, max_tokens = kure_embedder(state.device)
+    return DocEmbedder(embed, count_tokens, max_tokens, {})
+
+
+# --- nodes (graph/index_build.build_chroma_graph) ---
+
+def _timed(name: str, trace: dict, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
+    return {**trace, name: {"seconds": time.perf_counter() - started, **extra}}
+
+
+def read_records(state: IndexBuildState) -> dict:
+    """The registry, its sha256, the collection name, table keys and metadata.
+
+    In: state.tables, state.model, state.collection, state.index_version. Out: {"records", "data_sha256", "name",
+    "ids", "metas", "trace"}. Side effects: reads tables.jsonl. Node: read_records.
+    """
     started = time.perf_counter()
-    for chunk in _batches(order, 64):
-        for i, v in zip(chunk, embed([docs[i] for i in chunk])):
-            vectors[i] = v
-    print(f"embedded {len(docs)} documents ({time.perf_counter() - started:.0f}s)")
-
-    record = build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
-                          sum(t > max_tokens for t in tokens), **info)
-    if args.export:
-        write_build(args.export, name=name, ids=ids, docs=docs, metas=metas, vectors=vectors, record=record)
-        print(f"wrote {args.export}; load it with: python -m kosis_rag.index --import {args.export.name}")
-        return 0
-
-    from kosis_rag.adapters.chroma import chroma_client
-
-    count = load(chroma_client(_chroma_config()), ids, docs, metas, vectors, name, record)
-    print(f"collection {name}: {count} documents")
-    print(f"to search it, set CHROMA_COLLECTION={name} in .env (the previous builds stay; switch back the same way)")
-    return 0 if count == len(ids) else 1
+    data_sha256 = hashlib.sha256(state.tables.read_bytes()).hexdigest()
+    ft = state.model == "bge-m3-ft"
+    name = state.collection or (FT_COLLECTION_PREFIX + state.index_version if ft else collection_name(data_sha256))
+    records = files.read_records(state.tables)
+    return {"records": records, "data_sha256": data_sha256, "name": name, "ids": [r.info.key for r in records],
+            "metas": [to_metadata(r) for r in records], "trace": _timed("read_records", state.trace, started)}
 
 
-def list_builds() -> int:
-    """Every table collection on the server with what it was built from; * marks CHROMA_COLLECTION (the active one)."""
-    from kosis_rag.adapters.chroma import chroma_client
+def make_build_docs(log: Callable[[str], None] = print):
+    """The build_docs node: bge-m3-ft embeds the kosis_rag.shared.tabletext format (state.text_format, else its
+    DOC_FORMAT; a deprecated one is warned about), KURE the to_document text."""
 
-    load_dotenv()
-    active = os.getenv("CHROMA_COLLECTION")
-    client = chroma_client(_chroma_config())
-    for c in sorted(client.list_collections(), key=lambda c: (c.metadata or {}).get("index_version") or ""):
-        m = c.metadata or {}
-        if "doc_format" not in m:
-            continue  # not a table build (e.g. lab collections)
-        mark = "*" if c.name == active else " "
-        print(f"{mark} {c.name}  {m.get('doc_format')}  meta {m.get('meta_format', '-')}  docs {c.count()}  "
-              f"loaded {m.get('index_version', '-')}  data {str(m.get('data_sha256', '-'))[:16]}")
-    if active and active not in {c.name for c in client.list_collections()}:
-        print(f"CHROMA_COLLECTION={active} is not on this server")
-    return 0
+    def build_docs(state: IndexBuildState) -> dict:
+        """In: state.records, state.model, state.text_format. Out: {"docs", "fmt", "trace"}. Node: build_docs."""
+        started = time.perf_counter()
+        if state.model == "bge-m3-ft":
+            fmt = state.text_format or text.DOC_FORMAT
+            if fmt in text.DEPRECATED:
+                log(f"warning: {fmt} is deprecated (docs/reports/t2-06-n3-text-dropped.md); use {text.DOC_FORMAT}")
+            docs = [text.build_doc(r, fmt)["embed_text"] for r in state.records]
+            log(f"text format: {fmt}")
+        else:
+            fmt, docs = None, [to_document(r) for r in state.records]
+        return {"docs": docs, "fmt": fmt, "trace": _timed("build_docs", state.trace, started)}
+
+    return build_docs
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def make_embed(embedder: DocEmbedder | Callable[[IndexBuildState], DocEmbedder] | None = None,
+               log: Callable[[str], None] = print):
+    """The embed node over `embedder` (a DocEmbedder, a function of the state giving one, or None: load_doc_embedder).
+    Documents are embedded 64 at a time, shortest first (similar lengths per batch), and put back in input order."""
+
+    def embed(state: IndexBuildState) -> dict:
+        """In: state.docs (+ the model fields). Out: {"vectors", "record" (build_record), "trace"}.
+        Side effects: loads and runs the embedding model. Node: embed."""
+        started = time.perf_counter()
+        e = embedder if isinstance(embedder, DocEmbedder) else (embedder or load_doc_embedder)(state)
+        docs = state.docs
+        tokens = [e.count_tokens(d) for d in docs]
+        over = sum(t > e.max_tokens for t in tokens)
+        log(f"tokens per document: max {max(tokens)} (model limit {e.max_tokens}), over limit {over}")
+        order = sorted(range(len(docs)), key=lambda i: len(docs[i]))  # similar lengths per batch
+        vectors: list = [None] * len(docs)
+        t0 = time.perf_counter()
+        for chunk in _batches(order, 64):
+            for i, v in zip(chunk, e.embed([docs[i] for i in chunk])):
+                vectors[i] = v
+        log(f"embedded {len(docs)} documents ({time.perf_counter() - t0:.0f}s)")
+        record = build_record(state.index_version, state.data_sha256, len(docs), len(vectors[0]), max(tokens), over,
+                              **e.info)
+        return {"vectors": vectors, "record": record, "trace": _timed("embed", state.trace, started)}
+
+    return embed
+
+
+def make_load(client: Any = None):
+    """The load node: upsert into Chroma through `client` (None: kosis_rag.adapters.chroma.chroma_client(state.chroma),
+    opened when the node runs)."""
+
+    def load_node(state: IndexBuildState) -> dict:
+        """In: state.ids, docs, metas, vectors, name, record. Out: {"count", "trace"}. Side effects: writes the
+        collection. Node: load."""
+        started = time.perf_counter()
+        c = client
+        if c is None:
+            from kosis_rag.adapters.chroma import chroma_client
+
+            c = chroma_client(state.chroma)
+        count = load(c, state.ids, state.docs, state.metas, state.vectors, state.name, state.record)
+        return {"count": count, "trace": _timed("load", state.trace, started)}
+
+    return load_node
+
+
+def write_build_node(state: IndexBuildState) -> dict:
+    """write_build to state.export instead of Chroma. Out: {"count", "trace"}. Side effects: writes the .npz.
+    Node: write_build."""
+    started = time.perf_counter()
+    write_build(state.export, name=state.name, ids=state.ids, docs=state.docs, metas=state.metas,
+                vectors=state.vectors, record=state.record)
+    return {"count": len(state.ids), "trace": _timed("write_build", state.trace, started)}

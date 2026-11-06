@@ -18,6 +18,11 @@ S5 adds: the old chain / tools paths (the answer moved to backend/app/respond, t
 backend importing first-party code only from kosis_rag (legacy included) and itself, get_stream_writer only in
 src/kosis_rag/graph/ (and the backend), the refusal sentences named only in gate/texts.py and api.py, and the guide
 prompt under backend/app/respond/prompts.
+S6a adds: the old index / metadata / hq paths and the names that left shared/vocab.py and shared/tabletext.py (the
+offline builds are the package kosis_rag_build now), the core rule that nothing in kosis_rag imports or names
+kosis_rag_build, kosis_rag_build importing only kosis_rag.{schemas,shared,adapters,llm,rerank.stage1} and itself,
+langgraph only in src/kosis_rag/graph/ and src/kosis_rag_build/graph/, the environment read only in
+src/kosis_rag_build/cli.py, no src -> evals exception, both packages in pyproject and the hq prompt as package data.
 Exceptions are listed with their reason and the step that removes them.
 """
 
@@ -32,7 +37,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 MODULE = SRC / "kosis_rag"  # the search module (online)
-BUILD = SRC / "kosis_rag_build"  # the offline DB build package (from S6a; absent until then)
+BUILD = SRC / "kosis_rag_build"  # the offline DB build package (S6a)
+# S6a: what kosis_rag_build may import from kosis_rag (besides itself): never parse, retrieve, gate, graph, api or
+# legacy.
+BUILD_ALLOWED = ("kosis_rag.schemas", "kosis_rag.shared", "kosis_rag.adapters", "kosis_rag.llm", "kosis_rag.rerank.stage1",
+                 "kosis_rag_build")
+# (file, imported name) pairs allowed against BUILD_ALLOWED, with the reason.
+BUILD_EXCEPTIONS: set[tuple[str, str]] = set()  # S6a review: question-index naming moved to kosis_rag.shared.hqnames
 # Code outside src that imports the module: an old path must be gone from all of it (P2-R6, no shims)
 CALLERS = tuple(ROOT / d for d in ("backend", "evals", "scripts", "tests", "lab"))
 
@@ -61,19 +72,22 @@ OLD_PATHS: tuple[str, ...] = (
     # S5: chain.py -> backend/app/respond/ (texts patterns prompts verify render node state graph legacy),
     # kosis_rag.legacy.search; tools.py -> kosis_rag.legacy.tools (search_tables) + backend.app.respond.legacy
     "kosis_rag.chain", "kosis_rag.tools",
+    # S6a: the offline builds -> kosis_rag_build (index.py -> chroma.py, metadata.py -> tables.py, hq/ -> hq/ +
+    # schemas.py + graph/hq_build.py + cli.py; kosis_rag.hq is gone as a whole)
+    "kosis_rag.index", "kosis_rag.metadata", "kosis_rag.hq",
 )
 # Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
 # defines them at top level (docs/migration.md).
 OLD_NAMES: dict[str, tuple[str, ...]] = {
-    # S2: the online part of hq/index.py went to retrieve/hq.py, retrieve/constants.py, adapters/files.py,
-    # shared/constants.py and legacy/retrievers.py; its CLI main stays until S6a
-    "kosis_rag.hq.index": ("HqRetriever", "hq_bm25", "max_pool", "ckpt8", "collection_name", "read_questions",
-                           "HQ_DIR", "COLLECTION_PREFIX", "DOC_FORMAT", "DESC_SUFFIX", "N_QUESTIONS"),
-    "kosis_rag.index": ("COLLECTION_NAME",),  # S2: shared/constants.py
+    # (S2: the online part of hq/index.py and index.COLLECTION_NAME moved out; S6a deleted both modules, so they are
+    # in OLD_PATHS now)
     # (S3/S4: the names chain.py gave to gate/, llm/providers.py and backend/app/config.py; S5 deleted chain.py, so it
     # is in OLD_PATHS now)
     # S4: the environment is the caller's (backend/app/config.py): connect takes ChromaConfig
     "kosis_rag.legacy.retrievers": ("env_chroma_config",),
+    # S6a: the builders and CLIs moved to kosis_rag_build (sigungu.py, cli.py sigungu / text)
+    "kosis_rag.shared.vocab": ("build_sigungu", "main", "SIGUNGU_SOURCE"),
+    "kosis_rag.shared.tabletext": ("main",),
 }
 # Packages that took an old module's name: their own modules are new paths, not the old one (kosis_rag.schemas.io).
 REUSED_NAMES = ("kosis_rag.schemas", "kosis_rag.rerank", "kosis_rag.graph")
@@ -88,8 +102,8 @@ SHARED_ALLOWED = ("kosis_rag.schemas", "kosis_rag.shared")
 # import anywhere in src).
 PHASE1 = ("kosis_ai", "kosis_chat")
 PHASE1_ALLOWED: tuple[str, ...] = ()
-# S1: client libraries in one adapter each. chromadb: adapters/chroma.py (index.py and hq/index.py take a client as an
-# argument, so they need no exception); sentence_transformers / torch: adapters/models.py (kure_embedder moved there).
+# S1: client libraries in one adapter each. chromadb: adapters/chroma.py (kosis_rag_build/chroma.py and
+# hq/questions_index.py take a client as an argument and open it through the adapter, so they need no exception); sentence_transformers / torch: adapters/models.py (kure_embedder moved there).
 # S3: the LLM transports in llm/ (an entry ending in "/" is a folder). chain.py builds its ChatClovaX through
 # llm.providers.clova_chat, so it needs no exception.
 LIBRARY_ALLOWED = {
@@ -108,7 +122,7 @@ PHASE1_COPIES = {
     "src/kosis_rag/llm/hcx.py": "# copied from Phase 1 kosis_chat/llm/model.py@e248a45",
 }
 # S3 (P2-D22): prompt files that must ship as package data: package -> glob in [tool.setuptools.package-data]
-PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"]}
+PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"], "kosis_rag_build.hq": ["prompts/*.md"]}
 
 # S5: the token stream writer only where the graph runs: src/kosis_rag/graph/ (the module's nodes write none since
 # guide moved out) and the backend (backend/app/respond/node.py guide); checked for src only (backend may use it).
@@ -124,19 +138,17 @@ BACKEND_FORBIDDEN = ("kosis_ai", "kosis_chat", "kosis_rag_build", "evals", "scri
 # S5: the guide prompt, a backend file (not package data of src), read through importlib.resources.
 GUIDE_PROMPT = ROOT / "backend" / "app" / "respond" / "prompts" / "guide-v1.md"
 
-# langgraph: only the graph folder (S4: src/kosis_rag/graph/ and, from S6a, src/kosis_rag_build/graph/); the offline
-# question build src/kosis_rag/hq/graph.py until S6a moves it to kosis_rag_build/graph/. "/" at the end = a folder.
-LANGGRAPH_ALLOWED = ("src/kosis_rag/graph/", "src/kosis_rag/hq/graph.py")
-# S4 (§0.6): no .env and no environment read in src (dotenv import, os.environ, os.getenv). Exceptions: the CLIs that
-# still read their settings from .env + environment until S6a (kosis_rag_build/cli.py, then scripts/kosis_build.py).
-ENV_ALLOWED = ("src/kosis_rag/index.py", "src/kosis_rag/hq/build.py", "src/kosis_rag/hq/index.py")
+# langgraph: only the graph folders (S4: src/kosis_rag/graph/; S6a: src/kosis_rag_build/graph/, no exception left).
+# "/" at the end = a folder.
+LANGGRAPH_ALLOWED = ("src/kosis_rag/graph/", "src/kosis_rag_build/graph/")
+# S4 (§0.6): no .env and no environment read in src (dotenv import, os.environ, os.getenv). S6a: only the build CLI
+# reads the shell environment (no .env), as the fallback of its arguments (plans/T2-41.md S6a: kosis_rag_build/cli.py).
+ENV_ALLOWED: tuple[str, ...] = ()  # 미결 3: the build env is read by scripts/kosis_build.py, outside src
 # S4: adapters/ (files, Chroma, models, loader) is imported only by graph/, api.py and llm/ (and itself).
 ADAPTERS = "kosis_rag.adapters"
 ADAPTERS_IMPORTERS = ("src/kosis_rag/adapters/", "src/kosis_rag/graph/", "src/kosis_rag/api.py", "src/kosis_rag/llm/")
 ADAPTERS_EXCEPTIONS = {
-    # The offline CLIs (index, hq build / index) read files and open Chroma / models themselves until S6a moves them
-    # to kosis_rag_build (which may import kosis_rag.adapters).
-    "src/kosis_rag/index.py", "src/kosis_rag/hq/build.py", "src/kosis_rag/hq/index.py",
+    # (S6a: the offline CLIs left for kosis_rag_build, which may import kosis_rag.adapters)
     # The old retriever classes' connect() opens its collection and embedder (evals, lab and adapters.loader call it).
     "src/kosis_rag/legacy/retrievers.py",
 }
@@ -155,13 +167,7 @@ LOAD_RESOURCES_POSITIONAL = {
 # Top-level packages src must never import (entry points and experiments depend on src, not the other way).
 NOT_FROM_SRC = ("backend", "evals", "scripts", "lab", "tests")
 # (file, imported name) pairs allowed against NOT_FROM_SRC, with the reason.
-SRC_EXCEPTIONS = {
-    # The hq build CLI prints the run's cost from evals/pricing.json through a function-level import that falls
-    # back when evals is not importable (cost_line). Removed at S6a, when the CLI moves to kosis_rag_build.
-    ("src/kosis_rag/hq/build.py", "evals.ops"),
-    ("src/kosis_rag/hq/build.py", "evals.ops.cost"),
-    ("src/kosis_rag/hq/build.py", "evals.ops.load_pricing"),
-}
+SRC_EXCEPTIONS: set[tuple[str, str]] = set()  # S6a: the hq build's evals.ops cost line is gone (tokens in build.json)
 
 
 def _py_files(*roots: Path) -> list[Path]:
@@ -216,7 +222,7 @@ NEW_MODULES = _new_modules()
 def _old(names: list[str]) -> list[str]:
     """Imported names on an old path. The bare name of a reused package (from kosis_rag.schemas import io) and its
     new modules are fine; a name taken from the package itself (from kosis_rag.schemas import TableRecord) is not.
-    A name in OLD_NAMES (from kosis_rag.hq.index import HqRetriever) is old too."""
+    A name in OLD_NAMES (from kosis_rag.shared.vocab import build_sigungu) is old too."""
     moved = tuple(f"{module}.{name}" for module, names_ in OLD_NAMES.items() for name in names_)
     return [n for n in names if (_hits(n, OLD_PATHS) and n not in REUSED_NAMES and not _hits(n, NEW_MODULES))
             or n in moved]
@@ -244,6 +250,9 @@ def test_src_import_rules(path: Path):
     problems += [n for n in names if _hits(n, NOT_FROM_SRC) and (rel, n) not in SRC_EXCEPTIONS]
     if path.is_relative_to(MODULE):  # the search module never imports the offline build package
         problems += [n for n in names if _hits(n, ("kosis_rag_build",))]
+    if path.is_relative_to(BUILD):  # S6a: the build package uses the module's lower layers only
+        problems += [n for n in names if _hits(n, ("kosis_rag", "kosis_rag_build")) and not _hits(n, BUILD_ALLOWED)
+                     and (rel, n) not in BUILD_EXCEPTIONS]
     problems += _old(names)
     if path.is_relative_to(SHARED):
         problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, SHARED_ALLOWED)]
@@ -277,9 +286,10 @@ def _env_reads(path: Path) -> list[str]:
     return hits
 
 
-@pytest.mark.parametrize("path", _py_files(MODULE), ids=_rel)
+@pytest.mark.parametrize("path", _py_files(MODULE, BUILD), ids=_rel)
 def test_src_reads_no_env(path: Path):
-    """S4 (§0.6): the module reads no .env and no environment; the caller declares the settings."""
+    """S4 (§0.6): the module reads no .env and no environment; the caller declares the settings. S6a: the build
+    package neither, except its CLI (shell environment only, never .env)."""
     rel = _rel(path)
     if rel in ENV_ALLOWED:
         return
@@ -289,6 +299,7 @@ def test_src_reads_no_env(path: Path):
 def test_env_exceptions_are_still_needed():
     for rel in ENV_ALLOWED:
         assert _env_reads(ROOT / rel), f"stale exception: {rel} no longer reads the environment"
+        assert not [n for n in _imports(ROOT / rel) if _hits(n, ("dotenv",))], f"{rel} reads .env"
 
 
 def _positional_load_resources(path: Path) -> list[int]:
@@ -366,10 +377,13 @@ def test_exceptions_are_still_needed():
         assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
     for rel in ADAPTERS_EXCEPTIONS:
         assert any(_hits(n, (ADAPTERS,)) for n in _imports(ROOT / rel)), f"stale exception: {rel} imports no adapter"
+    for rel, name in BUILD_EXCEPTIONS:
+        assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
 
 
 def test_old_modules_are_gone():
     """No shims (P2-R6): a moved module's file is deleted, so an old import fails instead of working on."""
+    assert not (MODULE / "hq").exists(), "kosis_rag/hq/ is still there (S6a: kosis_rag_build/hq)"
     for old in OLD_PATHS:
         if old in REUSED_NAMES:
             folder = SRC.joinpath(*old.split("."))
@@ -445,3 +459,30 @@ def test_the_answer_lives_in_the_backend():
     """S5: chain.py and tools.py are gone; the guide prompt is a backend file and src has no prompt for it."""
     assert GUIDE_PROMPT.is_file() and not list(SRC.rglob("guide-*.md"))
     assert (BACKEND / "app" / "respond" / "__init__.py").is_file()
+
+
+def test_the_module_never_names_the_build_package():
+    """S6a core rule (plans/T2-41.md Done: grep -rn kosis_rag_build src/kosis_rag gives nothing): not in an import,
+    not in a docstring or message either, so the search module reads as complete on its own."""
+    found = [_rel(p) for p in _py_files(MODULE) if "kosis_rag_build" in p.read_text(encoding="utf-8")]
+    found += [p.relative_to(ROOT).as_posix() for p in MODULE.rglob("*.md") if "kosis_rag_build" in p.read_text("utf-8")]
+    assert not found
+
+
+def test_importing_the_module_loads_no_build_code():
+    """S6a: python -c "import kosis_rag.api; import sys; assert 'kosis_rag_build' not in sys.modules"."""
+    import subprocess
+    import sys
+
+    code = ("import sys, kosis_rag.api, kosis_rag.graph.search, kosis_rag.adapters.loader; "
+            "bad = sorted(m for m in sys.modules if m.split('.')[0] == 'kosis_rag_build'); assert not bad, bad")
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=ROOT)
+    assert done.returncode == 0, done.stderr[-2000:]
+
+
+def test_the_build_package_is_complete():
+    """S6a: the files of plans/T2-41.md S6a (folder tree) are there, the graphs in graph/ and the node bodies outside."""
+    for rel in ("cli.py", "schemas.py", "tables.py", "sigungu.py", "chroma.py", "graph/index_build.py",
+                "graph/hq_build.py", "hq/prompt.py", "hq/rules.py", "hq/patterns.py", "hq/constants.py", "hq/nodes.py",
+                "hq/report.py", "hq/questions_index.py", "hq/prompts/hq-v1.md"):
+        assert (BUILD / rel).is_file(), rel

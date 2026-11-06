@@ -4,8 +4,8 @@ This module owns the dictionaries (T2-29, C5); `filters` and `query` import them
 (it used to be the other way round, which stopped the parser from using the table-side keys).
 - 시도 names (SIDO, SIDO_LABELS) and question region words (REGION_WORDS: a wide name such as 수도권 or 영남 stands
   for several 시도).
-- 시군구 -> 시도, read from the KOSIS region codes of one 읍면동 table (code[:2] is the 시도); built with
-  `python -m kosis_rag.shared.vocab --data-dir <provided data>` into data/sigungu.json (gitignored like all data/).
+- 시군구 -> 시도: data/sigungu.json (SIGUNGU, gitignored like all data/), read by adapters.files.load_sigungu. T2-41
+  S6a: the offline build package writes it (its `sigungu` CLI command); its builder and CLI left this module.
 - breakdown names -> standard keys (DIMENSION_KEYS, table side): KOSIS writes one breakdown many ways (현거주지 /
   현 거주지 / 현거주지별, 종사상지위 / 종사상의 지위). DIMENSION_WORDS is the question side: the same names plus
   question-only aliases (연령대 -> 연령, 지역별 -> 시도), to the same keys.
@@ -15,17 +15,14 @@ This module owns the dictionaries (T2-29, C5); `filters` and `query` import them
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 from pathlib import Path
 
 __all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "DIMENSION_WORDS", "dimension_keys", "unit_key",
-           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "REGION_LEVELS", "SIDO_ORDER"]
+           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "REGION_LEVELS", "SIDO_ORDER"]
 
 REPO = Path(__file__).resolve().parents[3]
 SIGUNGU = REPO / "data" / "sigungu.json"
-SIGUNGU_SOURCE = "values/101_DT_1IN1502.parquet"  # 인구, 가구 및 주택 - 읍면동: every 시도 and 시군구 with codes
 
 # 시도 label -> its current official name; old names (직할시, 강원도, 전라북도, 제주도) and bare short labels map to it
 SIDO = {
@@ -207,34 +204,3 @@ def measure_keys(measure: str | None) -> list[str]:
     compact = re.sub(r"\s+", "", measure)
     parts = [p for p in compact.replace("·", "|").replace(",", "|").split("|") if p]
     return list(dict.fromkeys([compact.replace("·", ""), *parts])) if len(parts) > 1 else [compact]
-
-
-def build_sigungu(parquet: Path) -> dict[str, list[str]]:
-    """{시군구 label: [시도, ...]} from a table whose region codes are 2 digits (시도) and 5 digits (시군구)."""
-    import pyarrow.parquet as pq
-
-    rows = pq.read_table(parquet, columns=["dim1_code", "dim1_label"]).group_by(["dim1_code", "dim1_label"]) \
-        .aggregate([]).to_pylist()
-    sido = {r["dim1_code"]: SIDO_LABELS[r["dim1_label"]] for r in rows
-            if len(r["dim1_code"] or "") == 2 and r["dim1_label"] in SIDO_LABELS}
-    out: dict[str, set[str]] = {}
-    for r in rows:
-        code, label = r["dim1_code"] or "", r["dim1_label"]
-        if len(code) == 5 and code[:2] in sido:
-            out.setdefault(label, set()).add(sido[code[:2]])  # 중구 sits under several 시도
-    return {label: sorted(names) for label, names in sorted(out.items())}
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build data/sigungu.json (시군구 -> 시도) from the provided data")
-    parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--out", type=Path, default=SIGUNGU)
-    args = parser.parse_args(argv)
-    mapping = build_sigungu(args.data_dir / SIGUNGU_SOURCE)
-    args.out.write_text(json.dumps(mapping, ensure_ascii=False, indent=0), encoding="utf-8")
-    print(f"wrote {args.out}: {len(mapping)} 시군구")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
