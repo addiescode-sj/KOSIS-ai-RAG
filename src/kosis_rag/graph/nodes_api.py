@@ -1,7 +1,8 @@
 """The node API's node set (T2-37; T2-41 S4: from graph.py): make_nodes, apply_update, ground_docs.
 
 backend.app.main exposes one endpoint per node. Its `retrieve` runs the graph's retrieval steps (condition, [embed],
-retrieve_<list>..., fuse) as one node, so a client's chain parse -> retrieve -> ... -> answer equals run_search.
+retrieve_<list>..., fuse) as one node, so a client's chain parse -> retrieve -> ... -> gate equals run_search.
+T2-41 S5: the set ends at gate; the backend adds its answer nodes (refuse | guide, backend.app.respond).
 Node endpoints are stateless: apply_update gives the state after a node the way the graph applies it, and
 ground_docs re-attaches tables sent from outside to the server's records.
 """
@@ -11,10 +12,8 @@ from __future__ import annotations
 import time
 
 from langchain_core.documents import Document
-from langchain_core.language_models import BaseChatModel
 
 from kosis_rag.graph.search import Node, graph_nodes
-from kosis_rag.llm.base import LLMClient
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.resources import SearchResources
 from kosis_rag.schemas.state import SearchState, merge
@@ -35,9 +34,9 @@ def apply_update(state: SearchState, update: dict) -> SearchState:
     return state.model_copy(update={**update, **merged})
 
 
-def make_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5) -> dict[str, Node]:
-    """The node functions the node API exposes, in run order (T2-37): parse, retrieve, [rerank1], [rerank2], gate,
-    refuse, guide.
+def make_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
+    """The search node functions the node API exposes, in run order (T2-37): parse, retrieve, [rerank1], [rerank2],
+    gate (T2-41 S5: the answer nodes refuse / guide are the backend's).
 
     In: as build_graph.
     Out: name -> fn(SearchState) -> state update. `retrieve` runs the graph's retrieval steps (condition, [embed],
@@ -45,11 +44,11 @@ def make_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *,
         retrieve node wrote (docs, removed, relaxed) plus the steps' own fields (table_filter, runs, run_removed;
         query_vecs is left empty, the vectors are not sent back) and a trace entry per step and one for `retrieve`.
         It ignores those fields in the incoming state, so a client cannot hand it a list or a vector. The lists are
-        fused in fuse's fixed order, so the chain parse -> retrieve -> ... -> answer equals run_search. The other
+        fused in fuse's fixed order, so the chain parse -> retrieve -> ... -> gate equals run_search. The other
         nodes are graph_nodes' own.
     Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
     """
-    nodes = graph_nodes(resources, client, k=k)
+    nodes = graph_nodes(resources, k=k)
     steps = [name for name in nodes if is_retrieval_step(name)]
 
     def retrieve(state: SearchState) -> dict:

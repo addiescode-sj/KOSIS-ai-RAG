@@ -63,7 +63,7 @@ def stage2_llm_from_env(name: str) -> LLMConfig | None:
 
 def guide_llm_from_env() -> LLMConfig:
     """The guide LLM (ChatClovaX) config: GUIDE_* or the model.yaml defaults; key HCX_API_KEY, else
-    CLOVASTUDIO_API_KEY, else None (Runtime.guide_client raises LLMKeyMissing). Side effects: reads os.environ."""
+    CLOVASTUDIO_API_KEY, else None (respond.node.GuideClient raises LLMKeyMissing when guide runs). Side effects: reads os.environ."""
     key = next((value for value in map(_env, GUIDE_KEY_ENV) if value), None)
     return LLMConfig(provider="clova_chat", api_key=key, model=_env("GUIDE_MODEL") or GUIDE_MODEL,
                      temperature=float(_env("GUIDE_TEMPERATURE") or GUIDE_TEMPERATURE),

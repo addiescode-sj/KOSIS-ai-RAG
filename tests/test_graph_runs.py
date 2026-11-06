@@ -7,6 +7,8 @@
 2. With it on, the hq list shows in rank_hq, moves tables by RRF, and HQ_WEIGHT weighs it; the question is embedded
    once for dense and hq (embed node); question-index hits outside the registry are skipped.
 3. The node API's retrieve (make_nodes, T2-37) runs the split steps as one node: its chain equals the graph.
+(T2-41 S5: the comparisons with an answer, `result`, run the backend's answer graph, backend.app.respond.graph; the
+others the module's graph, which ends at gate.)
 
 No model, no server, no API: the same kind of fakes as tests/test_graph.py.
 """
@@ -21,8 +23,11 @@ pytest.importorskip("langgraph")
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
+from backend.app.respond.graph import api_nodes, build_answer_graph, run_answer  # noqa: E402
+from backend.app.respond.node import GuideInput, RefuseInput, guide, refuse  # noqa: E402
+from backend.app.respond.state import SearchState  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
-from kosis_rag import chain  # noqa: E402
+from kosis_rag.gate import texts  # noqa: E402
 from kosis_rag.gate.node import GateInput, decide_route  # noqa: E402
 from kosis_rag.adapters.loader import load_resources  # noqa: E402
 from kosis_rag.graph.nodes_api import make_nodes  # noqa: E402
@@ -38,8 +43,7 @@ from kosis_rag.retrieve.lists import condition_filter, search_list  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.schemas.resources import IndexSpec, SearchOptions  # noqa: E402
-from kosis_rag.schemas.state import SearchState  # noqa: E402
-from kosis_rag.shared.catalog import to_document  # noqa: E402
+from kosis_rag.shared.catalog import to_candidate, to_document  # noqa: E402
 from kosis_rag.shared.filters import (TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank,  # noqa: E402
                                       why_excluded)
 
@@ -207,8 +211,10 @@ def _old_state(question, resources, client, k=5):
         docs = rerank_stage2(question, docs, resources.select, k_in=s.stage2_k, name=resources.stage2_name)
     gate = decide_route(GateInput(docs=docs[:k]))  # T2-41 S3: chain.decide_route -> gate.node (found = guide)
     route, reason = ("guide" if gate.route == "found" else gate.route), gate.refusal_reason
-    result = (chain.refusal_answer(question, docs[:k], reason) if route == "refuse"
-              else chain.guide_answer(question, docs[:k], client))
+    candidates = [to_candidate(d) for d in docs[:k]]  # T2-41 S5: chain.refusal_answer / guide_answer -> respond.node
+    result = (refuse(RefuseInput(question=question, candidates=candidates, refusal_reason=reason,
+                                 refusal_text=texts.REFUSALS.get(reason, texts.REFUSAL_TEXT))) if route == "refuse"
+              else guide(GuideInput(question=question, candidates=candidates), client))
     return {"docs": docs, "removed": removed, "relaxed": relaxed, "route": route, "refusal_reason": reason,
             "result": result}
 
@@ -232,7 +238,7 @@ def test_graph_without_hq_equals_the_old_graph(question, cond, stages):
     assert resources.hq is None and resources.hq_bm25 is None
     old_client, new_client = MockClient(reply), MockClient(reply)
     old = _old_state(question, resources, old_client)
-    state = run_search(build_graph(resources, new_client), question)
+    state = run_answer(build_answer_graph(resources, new_client), question)
     assert _plain(state.docs) == _plain(old["docs"])
     assert (state.removed, state.relaxed, state.route, state.refusal_reason) == (
         old["removed"], old["relaxed"], old["route"], old["refusal_reason"])
@@ -245,7 +251,7 @@ def test_graph_without_hq_has_no_question_nodes_even_when_a_fake_is_given():
     resources = _load(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
                                hq=CatalogRetriever(keys=[D]), hq_bm25=PlainRetriever(keys=[D]))
     assert resources.hq is None and resources.hq_bm25 is None
-    nodes = set(build_graph(resources, MockClient()).get_graph().nodes)
+    nodes = set(build_graph(resources).get_graph().nodes)
     assert not any(n.startswith("retrieve_hq") for n in nodes)
 
 
@@ -310,7 +316,7 @@ def _keys(state):
 ])
 def test_hq_list_is_fused_with_its_weight(weight, order):
     resources = _hq_resources(weight=weight, bm25=False)
-    state = run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "출생아 수")
+    state = run_search(build_graph(resources), "출생아 수")
     assert _keys(state) == order
     meta = {d.metadata["key"]: d.metadata for d in state.docs}
     assert meta[D]["rank_hq"] == 1 and meta[C]["rank_hq"] == 2 and "rank_hq" not in meta[A]
@@ -322,14 +328,14 @@ def test_hq_list_is_fused_with_its_weight(weight, order):
 def test_hq_changes_the_order_against_hq_off():
     off = _load(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
     off = replace(off, bm25=PlainRetriever(keys=[A]))
-    before = run_search(build_graph(off, MockClient("[1] DT_A 표입니다.")), "출생아 수")
-    after = run_search(build_graph(_hq_resources(bm25=False), MockClient("[1] DT_A 표입니다.")), "출생아 수")
+    before = run_search(build_graph(off), "출생아 수")
+    after = run_search(build_graph(_hq_resources(bm25=False)), "출생아 수")
     assert _keys(before) == [A, B, C, D] and _keys(after) == [A, D, C, B]
 
 
 def test_hq_bm25_adds_its_own_list():
     resources = _hq_resources(bm25=True)
-    graph = build_graph(resources, MockClient("[1] DT_A 표입니다."))
+    graph = build_graph(resources)
     assert {"retrieve_hq", "retrieve_hq_bm25"} <= set(graph.get_graph().nodes)
     state = run_search(graph, "출생아 수")
     meta = {d.metadata["key"]: d.metadata for d in state.docs}
@@ -339,7 +345,7 @@ def test_hq_bm25_adds_its_own_list():
 
 def test_a_table_only_the_question_index_found_gets_the_floor_score():
     resources = _hq_resources(dense_keys=[A, B], hq_keys=[D], bm25=False)
-    state = run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "출생아 수")
+    state = run_search(build_graph(resources), "출생아 수")
     meta = {d.metadata["key"]: d.metadata for d in state.docs}
     assert meta[D]["score_from"] == "other" and meta[D]["score"] == pytest.approx(0.8)  # dense's lowest
     assert meta[D]["table_name"] == "이혼건수"  # catalog metadata comes with the hq hit, so it can be cited
@@ -347,14 +353,14 @@ def test_a_table_only_the_question_index_found_gets_the_floor_score():
 
 def test_hq_list_gets_the_same_condition_filter():
     resources = _hq_resources(cond=True, bm25=False)
-    state = run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "2023년 인구")
+    state = run_search(build_graph(resources), "2023년 인구")
     assert C not in [d.metadata["key"] for d in state.runs["hq"]]  # DT_C holds 2010 only
     assert C not in _keys(state) and set(state.removed) == {C}
 
 
 def test_hq_with_rerankers_runs_them_after_fuse():
     resources = _hq_resources(bm25=False, stage1_score=_stage1, select=_pick(B))
-    state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수")
+    state = run_search(build_graph(resources), "출생아 수")
     assert _keys(state)[0] == B and set(state.trace) >= {"fuse", "rerank1", "rerank2"}
 
 
@@ -377,7 +383,7 @@ def test_tracing_blames_fuse_where_the_pool_is_formed():
     resources = _hq_resources(dense_keys=[A, B], hq_keys=[B], bm25=False, stage1_score=_stage1)
     resources = replace(resources, options=resources.options.model_copy(update={"rerank_mode": "score"}))
     nodes = NodeSpans()
-    run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "출생아 수", {"callbacks": [nodes]})
+    run_search(build_graph(resources), "출생아 수", {"callbacks": [nodes]})
     keyed = [s["name"] for s in nodes.spans if "keys" in s]
     assert keyed == ["fuse", "rerank1"]
     assert {s["name"] for s in nodes.spans} >= {"retrieve_dense", "retrieve_bm25", "retrieve_hq"}
@@ -440,7 +446,7 @@ def test_the_question_is_embedded_once_for_dense_and_hq():
     embedder, seen = CountingEmbedder(), []
     collection = QuestionCollection([(f"{D}#q0", D, "이혼 건수", 0.1), (f"{C}#q0", C, "혼인 건수", 0.2)])
     resources = _embedding_resources(embedder, collection, seen)
-    graph = build_graph(resources, MockClient("[1] DT_A 표입니다."))
+    graph = build_graph(resources)
     assert "embed" in graph.get_graph().nodes
     state = run_search(graph, "출생아 수")
     assert embedder.calls == ["출생아 수"]  # one call, from the embed node only
@@ -455,7 +461,7 @@ def test_without_hq_there_is_no_embed_node_and_the_result_is_the_old_one():
     embedder, seen = CountingEmbedder(), []
     resources = _load(_settings(cond_filter=True), records=RECORDS,
                                dense=EmbeddingRetriever(keys=[C, A, B, D], embed_query=embedder, seen=seen))
-    graph = build_graph(resources, MockClient("[1] DT_A 표입니다."))
+    graph = build_graph(resources)
     assert "embed" not in graph.get_graph().nodes
     state = run_search(graph, "2023년 인구")
     assert len(embedder.calls) == 1 and "embed" not in state.trace and state.query_vecs == {}
@@ -467,7 +473,7 @@ def test_question_index_hits_outside_the_registry_are_skipped_and_the_answer_sti
     embedder, seen = CountingEmbedder(), []
     collection = QuestionCollection([(f"{GONE}#q0", GONE, "없는 표 질문", 0.05), (f"{D}#q0", D, "이혼 건수", 0.1)])
     resources = _embedding_resources(embedder, collection, seen)
-    state = run_search(build_graph(resources, MockClient("[1] DT_D 표입니다.")), "이혼 건수")
+    state = run_answer(build_answer_graph(resources, MockClient("[1] DT_D 표입니다.")), "이혼 건수")
     assert [d.metadata["key"] for d in state.runs["hq"]] == [D]  # GONE (the best hit) skipped, D kept
     assert GONE not in _keys(state) and state.result is not None
     assert all(c.table_name for c in state.result.candidates)  # every cited table has its catalog fields
@@ -477,7 +483,7 @@ def test_question_index_hits_outside_the_registry_are_skipped_and_the_answer_sti
 
 def _node_chain(resources, client, state):
     """What a node API client gets by calling every node in turn (the answer node by route)."""
-    for name, fn in make_nodes(resources, client).items():
+    for name, fn in api_nodes(resources, client).items():
         if name in ("refuse", "guide") and name != state.route:
             continue
         state = state.model_copy(update=fn(state))
@@ -496,9 +502,10 @@ def test_node_api_retrieve_is_the_split_steps_and_the_chain_equals_the_graph(hq)
 
     question, reply = "2023년 인구", "[1] DT_A 표입니다."
     graph_resources, _, _ = resources()
-    expected = run_search(build_graph(graph_resources, MockClient(reply)), question)
+    expected = run_answer(build_answer_graph(graph_resources, MockClient(reply)), question)
     api_resources, embedder, seen = resources()
-    assert list(make_nodes(api_resources, MockClient(reply))) == ["parse", "retrieve", "gate", "refuse", "guide"]
+    assert list(make_nodes(api_resources)) == ["parse", "retrieve", "gate"]  # T2-41 S5: the module's set ends at gate
+    assert list(api_nodes(api_resources, MockClient(reply))) == ["parse", "retrieve", "gate", "refuse", "guide"]
     forged = SearchState(question=question, query_vecs={"dense": [9.0, 9.0]}, runs={"hq": expected.docs[:1]})
     state = _node_chain(api_resources, MockClient(reply), forged)
 

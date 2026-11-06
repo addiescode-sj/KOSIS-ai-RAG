@@ -40,6 +40,6 @@ def to_candidate(doc: Document) -> TableCandidate:
     In: doc = a search result whose metadata holds the catalog fields (key, org_id, tbl_id, names, period, url).
     Out: TableCandidate with score = metadata["score"] (None when the retriever gave none).
     Side effects: raises KeyError when a catalog field is missing.
-    Node: refuse and guide (through refusal_answer / guide_answer).
+    Node: gate (SearchOutput, api.to_output); the backend's refuse and guide (backend/app/respond).
     """
     return TableCandidate(**{name: doc.metadata[name] for name in _META_FIELDS}, score=doc.metadata.get("score"))

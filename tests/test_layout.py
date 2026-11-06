@@ -14,6 +14,10 @@ urllib.request / openai / langchain_naver only in llm/, and the rerank prompts a
 graph / pipeline paths (kosis_rag.graph is now a package), the names chain.py and legacy/retrievers.py no longer
 define, langgraph only in src/kosis_rag/graph/, no .env / environment read in src (the CLIs listed until S6a),
 adapters/ imported only by graph/, api.py and llm/, and no positional load_resources(spec, options) call anywhere.
+S5 adds: the old chain / tools paths (the answer moved to backend/app/respond, the search tool to legacy/tools.py),
+backend importing first-party code only from kosis_rag (legacy included) and itself, get_stream_writer only in
+src/kosis_rag/graph/ (and the backend), the refusal sentences named only in gate/texts.py and api.py, and the guide
+prompt under backend/app/respond/prompts.
 Exceptions are listed with their reason and the step that removes them.
 """
 
@@ -54,6 +58,9 @@ OLD_PATHS: tuple[str, ...] = (
     # S4: graph.py -> graph/ (a package now: search nodes_api spans) + schemas/state.py; pipeline.py ->
     # schemas/resources.py, adapters/loader.py, legacy/pipeline.py (SearchSettings / from_env deleted)
     "kosis_rag.graph", "kosis_rag.pipeline",
+    # S5: chain.py -> backend/app/respond/ (texts patterns prompts verify render node state graph legacy),
+    # kosis_rag.legacy.search; tools.py -> kosis_rag.legacy.tools (search_tables) + backend.app.respond.legacy
+    "kosis_rag.chain", "kosis_rag.tools",
 )
 # Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
 # defines them at top level (docs/migration.md).
@@ -63,10 +70,8 @@ OLD_NAMES: dict[str, tuple[str, ...]] = {
     "kosis_rag.hq.index": ("HqRetriever", "hq_bm25", "max_pool", "ckpt8", "collection_name", "read_questions",
                            "HQ_DIR", "COLLECTION_PREFIX", "DOC_FORMAT", "DESC_SUFFIX", "N_QUESTIONS"),
     "kosis_rag.index": ("COLLECTION_NAME",),  # S2: shared/constants.py
-    # S3: gate/node.py (decide_route, Route -> found | refuse) and gate/texts.py; chain.py uses them by module access.
-    # S4: clova_chat (-> llm.providers.clova_chat(config)) and the guide constants (-> backend/app/config.py)
-    "kosis_rag.chain": ("decide_route", "Route", "NO_MATCH", "REFUSAL_TEXT", "REFUSALS", "clova_chat", "GUIDE_MODEL",
-                        "GUIDE_TEMPERATURE", "GUIDE_MAX_TOKENS", "GUIDE_TIMEOUT", "GUIDE_KEY_ENV"),
+    # (S3/S4: the names chain.py gave to gate/, llm/providers.py and backend/app/config.py; S5 deleted chain.py, so it
+    # is in OLD_PATHS now)
     # S4: the environment is the caller's (backend/app/config.py): connect takes ChromaConfig
     "kosis_rag.legacy.retrievers": ("env_chroma_config",),
 }
@@ -104,6 +109,20 @@ PHASE1_COPIES = {
 }
 # S3 (P2-D22): prompt files that must ship as package data: package -> glob in [tool.setuptools.package-data]
 PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"]}
+
+# S5: the token stream writer only where the graph runs: src/kosis_rag/graph/ (the module's nodes write none since
+# guide moved out) and the backend (backend/app/respond/node.py guide); checked for src only (backend may use it).
+STREAM_WRITER = "langgraph.config.get_stream_writer"
+STREAM_WRITER_ALLOWED = ("src/kosis_rag/graph/",)
+# S5: the refusal sentences are named (in any form, docstrings included) only where they are defined and read.
+REFUSAL_NAMES = ("REFUSAL_TEXT", "REFUSALS")
+REFUSAL_FILES = {"src/kosis_rag/gate/texts.py", "src/kosis_rag/api.py"}
+# S5: backend imports first-party code from kosis_rag (legacy included) and itself only; never Phase 1, the offline
+# build package, evals, scripts, lab or tests.
+BACKEND = ROOT / "backend"
+BACKEND_FORBIDDEN = ("kosis_ai", "kosis_chat", "kosis_rag_build", "evals", "scripts", "lab", "tests")
+# S5: the guide prompt, a backend file (not package data of src), read through importlib.resources.
+GUIDE_PROMPT = ROOT / "backend" / "app" / "respond" / "prompts" / "guide-v1.md"
 
 # langgraph: only the graph folder (S4: src/kosis_rag/graph/ and, from S6a, src/kosis_rag_build/graph/); the offline
 # question build src/kosis_rag/hq/graph.py until S6a moves it to kosis_rag_build/graph/. "/" at the end = a folder.
@@ -218,6 +237,8 @@ def test_src_import_rules(path: Path):
     problems = []
     if not _allowed(rel, LANGGRAPH_ALLOWED):
         problems += [n for n in names if _hits(n, ("langgraph",))]
+    if not _allowed(rel, STREAM_WRITER_ALLOWED):
+        problems += [n for n in names if n == STREAM_WRITER]
     if path.is_relative_to(MODULE) and not _allowed(rel, ADAPTERS_IMPORTERS) and rel not in ADAPTERS_EXCEPTIONS:
         problems += [n for n in names if _hits(n, (ADAPTERS,))]
     problems += [n for n in names if _hits(n, NOT_FROM_SRC) and (rel, n) not in SRC_EXCEPTIONS]
@@ -402,3 +423,25 @@ def test_rerank_prompts_are_package_data():
     covered = {p.relative_to(SRC).as_posix() for package, globs in PACKAGE_DATA.items()
                for g in globs for p in SRC.joinpath(*package.split(".")).glob(g)}
     assert found == covered, f"prompt files not declared as package data: {sorted(found - covered)}"
+
+
+@pytest.mark.parametrize("path", _py_files(BACKEND), ids=_rel)
+def test_backend_imports_only_kosis_rag_and_itself(path: Path):
+    """S5: the app layer depends on the search module (kosis_rag, legacy included), never the other way, and on no
+    Phase 1, build, eval, script, lab or test code."""
+    problems = [n for n in _imports(path) if _hits(n, BACKEND_FORBIDDEN)]
+    assert not problems, f"{_rel(path)}: imports {sorted(set(problems))}"
+
+
+def test_refusal_sentences_are_named_only_in_gate_texts_and_api():
+    """S5: the module's refusal sentences are defined in gate/texts.py and read in api.to_output (SearchOutput
+    .refusal_text); the app reads them from the output (backend/app/respond)."""
+    found = {_rel(p) for p in _py_files(MODULE, BUILD)
+             if any(name in p.read_text(encoding="utf-8") for name in REFUSAL_NAMES)}
+    assert found == REFUSAL_FILES
+
+
+def test_the_answer_lives_in_the_backend():
+    """S5: chain.py and tools.py are gone; the guide prompt is a backend file and src has no prompt for it."""
+    assert GUIDE_PROMPT.is_file() and not list(SRC.rglob("guide-*.md"))
+    assert (BACKEND / "app" / "respond" / "__init__.py").is_file()

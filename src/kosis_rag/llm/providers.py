@@ -3,7 +3,7 @@
     hcx           HCXClient(config)                    (llm/hcx.py, Phase 1 copy; the stage 2 HCX selector)
     openai        OpenAIClient(config)                 (llm/openai.py; stage 2 "gpt", hq question generation)
     clova_rerank  ClovaReranker(config=config, text_of=...)   (llm/clova_rerank.py; stage 2 "clova")
-    clova_chat    clova_chat(config) -> ChatClovaX     (the guide LLM; the backend's from S5)
+    clova_chat    clova_chat(config) -> ChatClovaX     (the guide LLM: backend/app/respond builds it)
     mock          MockClient()                         (tests and CI only, no key)
 
 A client checks the key when it needs it (HCXClient when made, the others at their first call), so building a
@@ -32,7 +32,7 @@ def clova_chat(config: LLMConfig) -> Any:
     In: config = provider clova_chat; model, temperature (None: 0), max_tokens (None: 1024), timeout (None: 60 s),
         api_key (None: ChatClovaX falls back to its own CLOVASTUDIO_API_KEY, as before T2-41).
     Out: a ChatClovaX with stream_usage on (streamed chunks carry token usage, T2-38).
-    Side effects: none (no call until it is invoked). Node: guide (backend; chain.clova_chat until S5).
+    Side effects: none (no call until it is invoked). Node: guide (backend/app/respond, through build_client).
     """
     from langchain_naver import ChatClovaX
 
@@ -61,7 +61,8 @@ def build_client(config: LLMConfig, **kwargs: Any) -> Any:
 
     In: config = the LLM settings; kwargs = provider-specific arguments (clova_rerank: text_of; mock: response).
     Out: the client. Side effects: HCXClient raises LLMKeyMissing for a config without a key; ValueError for an
-        unknown provider. Node: rerank2 (the HCX selector builds its client at the first call).
+        unknown provider. Node: rerank2 (the HCX selector builds its client at the first call); the backend's guide
+        (backend.app.respond.node.GuideClient, provider clova_chat).
     """
     if config.provider not in PROVIDERS:
         raise ValueError(f"unknown LLM provider {config.provider!r}; known: {', '.join(PROVIDERS)}")

@@ -1,5 +1,6 @@
 """Phase 2 I/O contract: search candidates, tool and API inputs, and the guide answer (T2-41 S1: from schemas.py);
 the module's own input and output, SearchInput / SearchOutput (S4, plans/T2-41.md 입출력 계약; fixed at S5).
+SearchResult is what the app's answer (backend/app/respond) returns; the module returns SearchOutput.
 
 Source comes from the Phase 1 copy in `kosis_rag.schemas.common` (P2-D0).
 """
@@ -78,7 +79,7 @@ class SearchOutput(BaseModel):
     question: str
     route: Literal["found", "refuse"]
     refusal_reason: str | None = None  # gate: stage2_reason (out_of_scope | no_item) or None
-    refusal_text: str | None = None  # on refuse: gate.texts REFUSALS.get(reason, REFUSAL_TEXT) (code text, no LLM)
+    refusal_text: str | None = None  # on refuse: gate.texts' sentence for the reason (code text, no LLM)
     picked: list[TableCandidate] = Field(default_factory=list)  # found: stage 2's picks (rank order), else candidates
     candidates: list[TableCandidate] = Field(default_factory=list)  # docs[:k] (kept on refuse when there are docs)
     spans: list[dict[str, Any]] = Field(default_factory=list)  # {"node": name, **trace[name]} in node order

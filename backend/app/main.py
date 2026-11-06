@@ -1,7 +1,8 @@
 """KOSIS RAG API (T2-37): the LangGraph search nodes, one endpoint each, plus the whole search as JSON and as SSE.
 
-Logic lives in src/kosis_rag (graph.nodes_api.make_nodes, graph.search.stream_search, ground_docs); this module only
-exposes it. Settings come from the shell environment (backend/app/config.py; no .env is read, T2-41 S4).
+Search logic lives in src/kosis_rag (graph.nodes_api.make_nodes, graph.search.graph_nodes, ground_docs), the answer
+(refuse | guide) in backend/app/respond (T2-41 S5: respond.graph.build_answer_graph, api_nodes, stream_answer); this
+module only exposes them. Settings come from the shell environment (backend/app/config.py; no .env is read, T2-41 S4).
 Node endpoints are stateless: they take a SearchState and return it with that node's fields written, so a client can
 chain parse -> retrieve -> ... -> answer itself or re-run one node on an edited state. Tables in a request are
 re-attached to the server's records (ground_docs), so a client cannot invent a table or a citation.
@@ -23,12 +24,14 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
-from kosis_rag.graph.nodes_api import ground_docs, make_nodes
-from kosis_rag.graph.search import Node, build_graph, run_search, stream_search
+from kosis_rag.graph.nodes_api import ground_docs
 from kosis_rag.llm.config import LLMConfig, LLMKeyMissing
 from kosis_rag.schemas.io import AskArgs, SearchResult
 from kosis_rag.schemas.resources import SearchResources
-from kosis_rag.schemas.state import SearchState
+
+from backend.app.respond.graph import api_nodes, build_answer_graph, run_answer, stream_answer
+from backend.app.respond.node import GuideClient, Node, as_guide_client
+from backend.app.respond.state import SearchState
 
 LOG_DIR = Path("logs/api")  # gitignored; one JSON line per search, written after the response (BackgroundTasks)
 QUESTION = {"question": "2023년 시도별 출생아 수", "k": 5}
@@ -64,8 +67,9 @@ async def llm_key_missing(request: Request, exc: LLMKeyMissing) -> JSONResponse:
 class Runtime:
     """What the endpoints share: the loaded resources, the guide LLM, and one compiled graph per k.
 
-    The guide client is made on first use (guide_client, T2-41 S4): parse ... gate run without a guide key, and a
-    missing key is LLMKeyMissing (503) when guide runs. `client` is a ready guide client (tests: MockClient).
+    The guide client is made on first use (T2-41 S5: respond.node.GuideClient, built from guide_llm through
+    kosis_rag.llm.providers and kept here for every graph and node set): parse ... gate run without a guide key, and
+    a missing key is LLMKeyMissing (503) when guide runs. `client` is a ready guide client (tests: MockClient).
     """
 
     resources: SearchResources
@@ -73,33 +77,23 @@ class Runtime:
     guide_llm: LLMConfig | None = None  # backend.app.config.guide_llm_from_env(); None = no guide LLM
     client: Any = None  # a ready guide client (LLMClient | BaseChatModel); None = make one from guide_llm
     graphs: dict[int, Any] = field(default_factory=dict)
-    _guide: Any = None
-    _guide_lock: Any = field(default_factory=threading.Lock)
+    guide: GuideClient = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.guide = as_guide_client(self.client if self.client is not None else self.guide_llm)
 
     def guide_client(self) -> Any:
-        """The guide LLM client, made once on the first call (the graphs and nodes get this method as a factory).
-
-        Side effects: the first call builds ChatClovaX from guide_llm; raises LLMKeyMissing when guide_llm is None or
-        has no key (nothing is kept, the next call checks again).
-        """
-        if self.client is not None:
-            return self.client
-        with self._guide_lock:
-            if self._guide is None:
-                if self.guide_llm is None or self.guide_llm.api_key is None:
-                    raise LLMKeyMissing("guide LLM key not set (HCX_API_KEY or CLOVASTUDIO_API_KEY in the environment)")
-                from kosis_rag.llm.providers import clova_chat
-
-                self._guide = clova_chat(self.guide_llm)
-            return self._guide
+        """The guide LLM client (made once on the first call). Side effects: the first call builds it from
+        guide_llm; LLMKeyMissing when guide_llm is None or has no key (nothing is kept, the next call checks again)."""
+        return self.guide.get()
 
     def graph(self, k: int):
         if k not in self.graphs:  # ponytail: one graph per k (k <= 20), compiling is cheap next to the resources
-            self.graphs[k] = build_graph(self.resources, self.guide_client, k=k)
+            self.graphs[k] = build_answer_graph(self.resources, self.guide, k=k)
         return self.graphs[k]
 
     def nodes(self, k: int) -> dict[str, Node]:
-        return make_nodes(self.resources, self.guide_client, k=k)
+        return api_nodes(self.resources, self.guide, k=k)
 
     def k(self, requested: int | None) -> int:
         """The candidate budget: the request's k, else the server's ANSWER_K (T2-39)."""
@@ -115,7 +109,7 @@ def get_runtime() -> Runtime:
 
     Out: the shared Runtime. Side effects: the first call reads the shell environment (backend/app/config.py, no
     .env), reads tables.jsonl, connects to Chroma, loads the models; a failure is a 503 and the next request tries
-    again. The guide LLM is not made here (Runtime.guide_client, on the first guide run).
+    again. The guide LLM is not made here (Runtime.guide, on the first guide run).
     """
     global _runtime
     with _lock:
@@ -230,7 +224,7 @@ async def node_answer(state: SearchState, k: int | None = K, rt: Runtime = Depen
 async def search(args: AskArgs, background: BackgroundTasks, rt: Runtime = Depends(get_runtime)) -> SearchResult:
     """전체 그래프를 돌려 `SearchResult`를 돌려준다. `picked` = 답변이 고른 표(출처도 이것), `candidates` = LLM에 넘긴 후보.
     노드별 지연은 응답 뒤 기록한다."""
-    state = await run_in_threadpool(run_search, rt.graph(rt.k(args.k)), args.question)
+    state = await run_in_threadpool(run_answer, rt.graph(rt.k(args.k)), args.question)
     background.add_task(_log, state)
     return state.result
 
@@ -248,7 +242,7 @@ def search_stream(args: AskArgs, background: BackgroundTasks,
     예: `curl -N -X POST localhost:8000/search/stream -H 'content-type: application/json' -d '{"question": "..."}'`
     """
     try:
-        for name, payload in stream_search(rt.graph(rt.k(args.k)), args.question):
+        for name, payload in stream_answer(rt.graph(rt.k(args.k)), args.question):
             if name == "result":
                 background.add_task(_log, payload)
                 yield ServerSentEvent(event="result", data=payload.result)

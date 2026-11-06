@@ -26,7 +26,7 @@ bigrams found in the gold table name < --low-overlap), node latency p50 / p95 fr
 Contamination (plan §5.1): every golden question's highest cosine to any indexed question (same embedder) and highest
 difflib ratio; the share >= 0.9 and the verdict metrics without those questions.
 Nothing here is tuned on the golden: the build, the prompt and the filters are fixed before this script runs.
-Output: data/lab/hq_eval_<stamp>_summary.md and data/lab/hq_eval_<stamp>_ranks.jsonl. No API call (MockClient guide).
+Output: data/lab/hq_eval_<stamp>_summary.md and data/lab/hq_eval_<stamp>_ranks.jsonl. No API call (the search graph ends at gate: no guide LLM).
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ import numpy as np
 
 from evals.schemas import GOLDEN
 from evals.trace import NodeSpans
-from kosis_chat.llm.model import MockClient
 from backend.app.config import search_config_from_env
 from kosis_rag.adapters.files import TABLES, read_records
 from kosis_rag.adapters.loader import load_resources
@@ -324,7 +323,7 @@ def main() -> None:
                                                           records=records_list, dense=base.dense,
                                                           stage1_score=base.stage1_score)
                  for name, kw in variants.items()}
-    graphs = {name: build_graph(r, MockClient()) for name, r in resources.items()}
+    graphs = {name: build_graph(r) for name, r in resources.items()}  # T2-41 S5: ends at gate, no guide client
     print("configs: " + ", ".join(f"{n} = {r.options.label(r.spec)}" for n, r in resources.items()))
 
     dev = [i for i in items if i["split"] == "dev"]

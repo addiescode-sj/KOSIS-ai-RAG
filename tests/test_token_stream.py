@@ -15,9 +15,13 @@ from langchain_core.messages import AIMessage, AIMessageChunk  # noqa: E402
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult  # noqa: E402
 
 from backend.app import main  # noqa: E402
-from kosis_rag import chain  # noqa: E402
+from backend.app.respond import node as respond_node  # noqa: E402
+from backend.app.respond import verify  # noqa: E402
+from backend.app.respond.graph import build_answer_graph, run_answer, stream_answer  # noqa: E402
+from backend.app.respond.node import GuideInput  # noqa: E402
+from backend.app.respond.prompts import guide_prompt  # noqa: E402
 from kosis_rag.gate import texts  # noqa: E402
-from kosis_rag.graph.search import build_graph, run_search, stream_search  # noqa: E402
+from kosis_rag.shared.catalog import to_candidate  # noqa: E402
 from kosis_rag.schemas.io import TableCandidate  # noqa: E402
 from test_api_nodes import _resources  # noqa: E402
 
@@ -35,12 +39,12 @@ def _streamed(reply, question="출생아 수"):
     """(token pieces, final state) of the streaming search, and the run_search state for the same reply."""
     resources = _resources()
     pieces, final = [], None
-    for name, payload in stream_search(build_graph(resources, _fake(reply)), question):
+    for name, payload in stream_answer(build_answer_graph(resources, _fake(reply)), question):
         if name == "token":
             pieces.append(payload["delta"])
         elif name == "result":
             final = payload
-    return pieces, final, run_search(build_graph(resources, _fake(reply)), question)
+    return pieces, final, run_answer(build_answer_graph(resources, _fake(reply)), question)
 
 
 # --- 1. streamable_prefix ---
@@ -54,12 +58,12 @@ def _streamed(reply, question="출생아 수"):
     ("표DT_ZZZ를 보세요 ", None),  # an id right after a Korean letter is caught (\b missed it)
 ])
 def test_streamable_prefix(text, expected):
-    assert chain.streamable_prefix(text, "출생아 수", CANDS) == expected
+    assert verify.streamable_prefix(text, "출생아 수", CANDS) == expected
 
 
 def test_unsupported_claims_finds_an_id_after_a_korean_letter():
-    assert chain.unsupported_claims("표DT_ZZZ를 보세요", "q", CANDS) == ["DT_ZZZ"]
-    assert chain.unsupported_claims("표DT_A를 보세요", "q", CANDS) == []
+    assert verify.unsupported_claims("표DT_ZZZ를 보세요", "q", CANDS) == ["DT_ZZZ"]
+    assert verify.unsupported_claims("표DT_A를 보세요", "q", CANDS) == []
 
 
 # --- 2. the streaming graph ---
@@ -79,7 +83,7 @@ def test_no_match_streams_nothing_and_refuses():
 def test_an_invented_id_stops_the_stream_before_it_and_falls_back_to_the_template():
     pieces, final, expected = _streamed("[1] DT_A 표와 DT_ZZZ 표가 맞습니다.")
     assert "".join(pieces) == "[1] DT_A 표와 "
-    assert not chain.unsupported_claims("".join(pieces), "출생아 수", CANDS)
+    assert not verify.unsupported_claims("".join(pieces), "출생아 수", CANDS)
     assert final.result == expected.result and final.result.answer_origin == "template"
 
 
@@ -96,7 +100,8 @@ def test_a_stream_that_fails_midway_is_a_status_and_the_template():
         def _llm_type(self):
             return "broken"
 
-    result = chain.guide_answer("출생아 수", _resources().dense.invoke("q")[:1], Broken(), on_text=lambda d: None)
+    candidates = [to_candidate(d) for d in _resources().dense.invoke("q")[:1]]
+    result = respond_node.guide(GuideInput(question="출생아 수", candidates=candidates), Broken(), on_text=lambda d: None)
     assert result.answer_origin == "template" and result.llm_status == "api_error"
 
 
@@ -115,7 +120,8 @@ def test_streamed_chunks_sum_their_usage():
             return "counting"
 
     seen = []
-    result = chain.llm_runnable(Counting(), seen.append).invoke(chain.PROMPT.invoke({"question": "q", "context": "c"}))
+    result = respond_node.llm_runnable(Counting(), seen.append).invoke(guide_prompt().invoke({"question": "q",
+                                                                                              "context": "c"}))
     assert result.text == "a b" and result.usage["output_tokens"] == 5
     assert seen[0] == "a " and set(seen[1:]) == {"a b"}  # LangChain may end with an empty chunk: same text again
 

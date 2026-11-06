@@ -78,11 +78,10 @@ def build_preset_graph(preset: str):
     from backend.app.config import search_config_from_env
     from kosis_rag.adapters.loader import load_resources
     from kosis_rag.graph.search import build_graph
-    from kosis_rag.llm.base import MockClient
 
     cfg = search_config_from_env(**preset_overrides(preset))
     resources = load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm)
-    return build_graph(resources, MockClient()), resources
+    return build_graph(resources), resources  # T2-41 S5: the module graph ends at gate, no guide client
 
 
 def file_sha256(path: Path) -> str:

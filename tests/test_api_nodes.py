@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app import main  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
-from kosis_rag.graph.search import build_graph, run_search  # noqa: E402
+from backend.app.respond.graph import build_answer_graph, run_answer  # noqa: E402
 from kosis_rag.llm.config import LLMConfig  # noqa: E402
 from test_graph import KEYS, RECORDS, CatalogRetriever, _load, _pick, _stage1  # noqa: E402
 
@@ -36,7 +36,7 @@ def client(tmp_path, monkeypatch):
 
 
 def _expected(question, **kw):
-    return run_search(build_graph(_resources(**kw), MockClient(REPLY)), question)
+    return run_answer(build_answer_graph(_resources(**kw), MockClient(REPLY)), question)
 
 
 def _chain(client, question):
@@ -141,7 +141,7 @@ def test_without_a_guide_key_parse_to_gate_run_and_answer_is_503(client):
     assert refused.status_code == 200 and refused.json()["result"]["no_answer"]  # refuse needs no LLM
 
 
-def test_the_guide_factory_is_called_once_on_the_first_guide_run(client, monkeypatch):
+def test_the_guide_client_is_built_once_on_the_first_guide_run(client, monkeypatch):
     from kosis_rag.llm import providers
 
     made = []
@@ -150,7 +150,8 @@ def test_the_guide_factory_is_called_once_on_the_first_guide_run(client, monkeyp
         made.append(config)
         return MockClient(REPLY)
 
-    monkeypatch.setattr(providers, "clova_chat", fake_clova_chat)
+    # T2-41 S5: the guide is built through llm.providers.build_client (the provider table), cached on the Runtime
+    monkeypatch.setitem(providers.PROVIDERS, "clova_chat", fake_clova_chat)
     runtime = main.Runtime(_resources(), guide_llm=LLMConfig(provider="clova_chat", model="HCX-DASH-002", api_key="k"))
     main.app.dependency_overrides[main.get_runtime] = lambda: runtime
     assert client.post("/nodes/parse", json={"question": "출생아 수"}).status_code == 200

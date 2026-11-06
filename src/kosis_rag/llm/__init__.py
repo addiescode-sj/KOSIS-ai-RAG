@@ -3,5 +3,5 @@ copies (base: LLMClient, LLMResult, STATUS_*, MockClient; hcx: HCXClient), the o
 clova_rerank: ClovaReranker) and the provider table (providers: PROVIDERS, build_client, clova_chat).
 
 Keys come in as arguments (LLMConfig.api_key); nothing here reads .env or the environment. urllib.request, openai and
-langchain_naver are imported only in this folder (tests/test_layout.py). llm imports no other part of kosis_rag.
+the CLOVA chat SDK are imported only in this folder (providers.py; tests/test_layout.py). llm imports no other part of kosis_rag.
 """

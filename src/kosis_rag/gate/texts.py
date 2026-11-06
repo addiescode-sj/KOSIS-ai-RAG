@@ -4,8 +4,9 @@ REFUSALS maps why the stage 2 LLM re-ranker picked nothing (rerank.hcx.REASONS) 
 its own sentence (no_item, None) gets REFUSAL_TEXT: refusal_text = REFUSALS.get(reason, REFUSAL_TEXT).
 Only out_of_scope gets its own sentence: on the T2-09 golden set HCX-007 labelled 9 of 13 out-of-scope refusals
 "no_item", so a "related tables exist" sentence would mislead; no_item falls back to REFUSAL_TEXT.
-NO_MATCH is what the guide LLM answers when no candidate fits (the guide prompt asks for it; S5 moves it with the
-guide to backend/app/respond).
+NO_MATCH is what the app's guide LLM answers when no candidate fits (backend/app/respond/prompts/guide-v1.md asks
+for it; the backend reads it here). The module itself uses REFUSAL_TEXT / REFUSALS only, in api.to_output
+(SearchOutput.refusal_text).
 """
 
 from __future__ import annotations

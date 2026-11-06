@@ -4,6 +4,8 @@ schemas/common.py (TableInfo, Source, MAX_DIMS) and shared/units.py (meta_unit) 
 TableCandidate.to_source() JSON stay what Phase 1 would write. Skipped when vendor/phase1/src/kosis_ai is absent.
 S3 adds ⑤: llm/base.py and llm/hcx.py (copies of kosis_chat/llm/model.py) keep LLMResult's fields, the STATUS_*
 values, MockClient's replies and HCXClient's request; the guide model defaults are Phase 1's configs/model.yaml.
+S5 adds ⑥: the handover key — SearchModule.search()'s picked[0].key is the tables.csv key Phase 1 looks up
+(kosis_chat.api.table_path), not tbl_id. No LLM.
 """
 
 import csv
@@ -151,3 +153,53 @@ def test_5_guide_model_defaults_are_phase1_model_yaml():
     assert (config.GUIDE_MODEL, config.GUIDE_TEMPERATURE, config.GUIDE_MAX_TOKENS, config.GUIDE_TIMEOUT,
             config.GUIDE_KEY_ENV[0]) == (s.model_name, s.temperature, s.max_tokens, s.timeout_seconds, s.api_key_env)
     assert hcx.DEFAULT_BASE_URL == DEFAULT_BASE_URL == s.base_url
+
+
+# --- ⑥ (S5) the handover key: what Phase 2 hands Phase 1 is picked[0].key (external review 11/05 P1-1) ---
+
+def test_6_picked_key_is_the_tables_csv_key_phase1_looks_up(tmp_path: Path, monkeypatch):
+    pytest.importorskip("langgraph")
+    from langchain_core.documents import Document
+    from langchain_core.retrievers import BaseRetriever
+
+    from kosis_chat.api import table_path
+    from kosis_rag.adapters.loader import load_resources
+    from kosis_rag.api import SearchModule
+    from kosis_rag.schemas.catalog import TableRecord
+    from kosis_rag.schemas.io import SearchInput
+    from kosis_rag.schemas.resources import IndexSpec, SearchOptions
+    from kosis_rag.shared.catalog import load_catalog, to_document
+
+    infos = load_catalog(SAMPLE)
+    docs = [to_document(i) for i in infos]
+
+    class Listed(BaseRetriever):  # the dense list: the sample tables in file order, catalog metadata
+        def _get_relevant_documents(self, query, *, run_manager):
+            return [Document(page_content=d.page_content, id=d.id, metadata={**d.metadata, "score": 0.9}) for d in docs]
+
+    records = [TableRecord(info=i, cycle=["Y"], prd_se=["Y"], periods=["2020"], start=2020, end=2020,
+                           menu_paths=[i.menu_path]) for i in infos]
+    resources = load_resources(spec=IndexSpec(), options=SearchOptions(cond_filter=False, stage2="none"),
+                               records=records, dense=Listed())
+    out = SearchModule.from_resources(resources).search(SearchInput(question="시군구별 주민등록세대수"))
+    assert out.route == "found" and out.picked
+    top = out.picked[0]
+
+    with SAMPLE.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    keys = {r["key"] for r in rows}
+    assert top.key in keys and top.key == f"{top.org_id}_{top.tbl_id}"  # "<org>_<tbl_id>", the key column's form
+
+    # a Phase 1 work root holding the sample tables.csv (its parquet paths) and the picked table's file
+    data = tmp_path / "data"
+    (data / "values").mkdir(parents=True)
+    with (data / "tables.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    parquet = next(r["parquet"] for r in rows if r["key"] == top.key)
+    (data / parquet).write_bytes(b"")
+    monkeypatch.setenv("KOSIS_WORKSPACE", str(tmp_path))
+    assert table_path(top.key) == data / parquet
+    with pytest.raises(LookupError):
+        table_path(top.tbl_id)  # tbl_id alone ("DT_...") is not a tables.csv key

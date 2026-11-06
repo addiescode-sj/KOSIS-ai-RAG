@@ -11,6 +11,7 @@ pytest.importorskip("langgraph")
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from backend.app import config as app_config  # noqa: E402
+from backend.app.respond.graph import build_answer_graph, run_answer  # noqa: E402
 from kosis_rag.graph.search import build_graph, run_search, stream_search  # noqa: E402
 from kosis_rag.llm import providers  # noqa: E402
 from kosis_rag.llm.base import MockClient as OurMock  # noqa: E402
@@ -29,14 +30,16 @@ SECRET = "nv-test-secret-0000"
 def _graph(stage2: str, stage2_llm: LLMConfig | None):
     resources = _load(_settings(stage2=stage2), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
                       stage1_score=_stage1, llm=stage2_llm)
-    return resources, build_graph(resources, MockClient("[1] DT_A 표입니다."))
+    return resources, build_graph(resources)
 
 
 def test_keyless_search_without_stage2_runs_to_the_end():
     resources, graph = _graph("none", None)
     assert resources.select is None and resources.stage2_llm is None
     state = run_search(graph, "출생아 수")
-    assert state.result is not None and state.route == "guide" and "rerank2" not in state.trace
+    assert state.route == "found" and "gate" in state.trace and "rerank2" not in state.trace
+    answer = run_answer(build_answer_graph(resources, MockClient("[1] DT_A 표입니다.")), "출생아 수")
+    assert answer.result is not None and answer.route == "guide"
 
 
 def test_missing_key_raises_when_rerank2_starts_after_the_rules_ran():
@@ -55,13 +58,13 @@ def test_mock_provider_needs_no_key():
     resources, graph = _graph("hcx", LLMConfig(provider="mock", model="mock"))
     state = run_search(graph, "출생아 수")  # MockClient's "[mock] answer" is no JSON: a stage 2 error, not a refusal
     top = state.docs[0].metadata
-    assert top["stage2"] == "hcx" and "no JSON" in top["stage2_error"] and state.route == "guide"
+    assert top["stage2"] == "hcx" and "no JSON" in top["stage2_error"] and state.route == "found"
 
 
 def test_a_given_selector_is_not_checked_for_a_key():
     resources = _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), select=lambda q, ks: ["101_DT_B"])
     assert resources.stage2_llm is None and resources.stage2_name == "custom"
-    state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수")
+    state = run_search(build_graph(resources), "출생아 수")
     assert state.docs[0].metadata["key"] == "101_DT_B"
 
 

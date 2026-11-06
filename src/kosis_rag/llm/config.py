@@ -1,7 +1,7 @@
 """LLM settings the caller declares and passes in (T2-41 S3, plans/T2-41.md 입출력 계약; §0.6: no .env here).
 
 LLMConfig names the provider (llm/providers.py PROVIDERS), the model and the key. The key may be None when the config
-is made: a node that needs the LLM raises LLMKeyMissing when it starts (rerank2; backend guide from S5), so a search
+is made: a node that needs the LLM raises LLMKeyMissing when it starts (rerank2; the backend's guide, T2-41 S5), so a search
 that needs no LLM (stage2 "none") runs without a key. provider "mock" never needs one.
 """
 

@@ -8,9 +8,9 @@
 The module opens its resources once (adapters.loader.load_resources: records, Chroma, models, question index) and
 compiles one graph per k. It reads no .env and no environment: the caller declares the settings (§0.6).
 
-Until S5 the graph still ends in the app's answer nodes (refuse | guide, plans/T2-41.md); the module runs them with
-a mock guide client (no LLM call) and reads only what gate decided: to_output projects the final state to
-SearchOutput by the rules of tests/parity_cases.project_output (the S0 fixtures' output.json).
+The graph ends at gate (T2-41 S5): no LLM writes a sentence here. to_output reads the final state as SearchOutput
+(the S0 fixtures' output.json, tests/test_parity_fixtures.py); the app's guide sentence and citations are
+backend/app/respond's, which reads its refusal sentence from this output (refusal_text).
 """
 
 from __future__ import annotations
@@ -21,25 +21,22 @@ from kosis_rag.adapters.loader import load_resources
 from kosis_rag.gate.texts import REFUSAL_TEXT, REFUSALS
 from kosis_rag.graph.search import build_graph, run_search, stream_search
 from kosis_rag.graph.spans import spans_of
-from kosis_rag.llm.base import MockClient
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.schemas.io import SearchInput, SearchOutput, TableCandidate
 from kosis_rag.schemas.resources import IndexSpec, SearchOptions, SearchResources
 from kosis_rag.schemas.state import SearchState
 from kosis_rag.shared.catalog import to_candidate
 
-APP_NODES = ("refuse", "guide")  # the app's answer nodes, still in the graph until S5: not module spans
-
 
 def to_output(state: SearchState, k: int) -> SearchOutput:
-    """The module's SearchOutput read off a final graph state (T2-41 S4; the rules of parity_cases.project_output).
+    """The module's SearchOutput read off a final graph state (T2-41 S4; fixed at S5).
 
-    In: state = run_search(...)'s final state; k = the candidate budget the graph was built with.
-    Out: route found (gate's guide) | refuse; refusal_text = REFUSALS.get(reason, REFUSAL_TEXT) on refuse, else None;
+    In: state = run_search(...)'s final state (or a state with the same fields: the backend's refuse node reads its
+        sentence through this); k = the candidate budget the graph was built with.
+    Out: route found | refuse (gate's); refusal_text = REFUSALS.get(reason, REFUSAL_TEXT) on refuse, else None;
         candidates = to_candidate(docs[:k]); picked = [] on refuse, the docs stage 2 picked (rank order) when it ran
-        without error and picked something, else the candidates; spans = the trace in node order without the app's
-        refuse / guide nodes.
-    Side effects: none. Node: none (SearchModule.search / stream call it).
+        without error and picked something, else the candidates; spans = the trace in node order.
+    Side effects: none. Node: none (SearchModule.search / stream and the backend's refuse node call it).
     """
     refuse = state.route == "refuse"
     docs = state.docs[:k]
@@ -58,7 +55,7 @@ def to_output(state: SearchState, k: int) -> SearchOutput:
         refusal_text=REFUSALS.get(state.refusal_reason, REFUSAL_TEXT) if refuse else None,
         picked=picked,
         candidates=candidates,
-        spans=spans_of(state.trace, skip=APP_NODES),
+        spans=spans_of(state.trace),
     )
 
 
@@ -90,7 +87,7 @@ class SearchModule:
     def graph(self, k: int):
         """The compiled search graph for budget k (one per k, compiled on first use)."""
         if k not in self._graphs:
-            self._graphs[k] = build_graph(self.resources, MockClient(""), k=k)  # guide: no LLM call (until S5)
+            self._graphs[k] = build_graph(self.resources, k=k)
         return self._graphs[k]
 
     def search(self, inp: SearchInput) -> SearchOutput:
@@ -100,13 +97,9 @@ class SearchModule:
 
     def stream(self, inp: SearchInput) -> Iterator[tuple[str, Any]]:
         """Run the search and yield ("<node>", its trace entry) per finished search node, then ("output", SearchOutput)
-        — the same value search() returns. The app's refuse / guide events and tokens are not sent."""
+        — the same value search() returns (graph.search.stream_search)."""
         k = self.k(inp.k)
-        for name, payload in stream_search(self.graph(k), inp.question):
-            if name == "result":
-                yield "output", to_output(payload, k)
-            elif name != "token" and name not in APP_NODES:
-                yield name, payload
+        yield from stream_search(self.graph(k), inp.question, k=k)
 
     def search_tables(self, question: str, k: int | None = None) -> list[TableCandidate]:
         """The candidate tables for a question (= search(...).candidates)."""

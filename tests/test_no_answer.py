@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
-from kosis_rag import chain
+from backend.app.respond.legacy import answer
 from kosis_rag.gate import texts
 from kosis_rag.legacy.rerankers import LLMReranker
 from kosis_rag.rerank.hcx import HcxSelector, parse
@@ -86,6 +86,6 @@ def test_service_refuses_on_empty_pick_and_skips_answer_model(reason, text):
     reply = f'{{"picked": [], "reason": "{reason}"}}'
     select = HcxSelector(text_of={"a": "표 a"}, thinking="none", client=MockClient(reply))
     answer_model = MockClient("안내 문장")
-    result = chain.answer(LLMReranker(base=ListRetriever(keys=["a"]), select=select), answer_model, "자동차 등록 대수")
+    result = answer(LLMReranker(base=ListRetriever(keys=["a"]), select=select), answer_model, "자동차 등록 대수")
     assert result.no_answer and result.no_answer_reason == reason and result.answer == text
     assert answer_model.calls == []

@@ -1,7 +1,8 @@
 """Gate stage step function (T2-41 S3: chain.decide_route as a step): refuse before calling the guide LLM, or not.
 
-The route is "found" or "refuse". Until S5 the graph writes "guide" for "found" (the API state keeps
-route refuse | guide); S5 settles the module state on found | refuse.
+The route is "found" or "refuse", and the module graph ends here (T2-41 S5). "found" means there are candidates,
+not that Phase 1 can compute on them. The backend's answer graph reads "found" as its "guide" route
+(backend.app.respond.graph.gate_to_api).
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ class GateOutput(BoundaryModel):
 
 
 def decide_route(inp: GateInput, resources: Any = None) -> GateOutput:
-    """Decide whether the answer refuses before calling the guide LLM.
+    """Decide whether the search refuses (before any guide LLM call in the app).
 
     In: inp.docs = the tables shown to the answer (cut to k), in rank order; resources = unused (step signature).
     Out: GateOutput. "refuse" when there are no docs, or when stage 2 ran without error and picked nothing (T2-09;

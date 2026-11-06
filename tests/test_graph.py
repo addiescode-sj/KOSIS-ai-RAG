@@ -1,5 +1,6 @@
 """T2-10: the stage functions give what the old retriever classes give, and the LangGraph search gives what
-chain.answer(build_search(...)) gives.
+chain.answer(build_search(...)) gives (T2-41 S5: the answer graph backend.app.respond.graph.build_answer_graph ==
+backend.app.respond.legacy.answer(build_search(...)); the module's build_graph ends at gate).
 
 No model, no server, no API: the dense side is a list retriever, stage 1 / stage 2 are fake functions, the guide LLM
 is Phase 1 MockClient.
@@ -12,8 +13,9 @@ pytest.importorskip("langgraph")
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
+from backend.app.respond import legacy as respond_legacy  # noqa: E402
+from backend.app.respond.graph import build_answer_graph, run_answer  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
-from kosis_rag import chain  # noqa: E402
 from kosis_rag.gate import texts  # noqa: E402
 from kosis_rag.adapters.loader import load_resources  # noqa: E402
 from kosis_rag.graph.search import build_graph, run_search  # noqa: E402
@@ -135,7 +137,7 @@ def test_rerank_stage2_equals_llm_reranker(select):
     assert _plain(rerank_stage2("q", base.invoke("q"), select, k_in=3, name="hcx")) == _plain(old)
 
 
-# --- 2. graph == chain.answer(build_search(...)) ---
+# --- 2. answer graph == respond.legacy.answer(build_search(...)) (the old chain.answer) ---
 
 def _settings(**kw):
     """The search options of these tests (T2-41 S4: SearchOptions; the fakes need an empty IndexSpec())."""
@@ -152,10 +154,10 @@ def _both(question, reply="", *, settings=None, dense_keys=KEYS, stage1=_stage1,
     settings = settings or _settings()
     parts = dict(records=RECORDS, stage1_score=stage1, select=select)
     old_client, new_client = MockClient(reply), MockClient(reply)
-    old = chain.answer(build_search(_load(settings, dense=CatalogRetriever(keys=dense_keys), **parts)), old_client,
-                       question)
+    old = respond_legacy.answer(build_search(_load(settings, dense=CatalogRetriever(keys=dense_keys), **parts)),
+                                old_client, question)
     resources = _load(settings, dense=CatalogRetriever(keys=dense_keys), **parts)
-    state = run_search(build_graph(resources, new_client), question)
+    state = run_answer(build_answer_graph(resources, new_client), question)
     return old, old_client, state, new_client
 
 
@@ -216,15 +218,19 @@ def test_graph_keeps_the_whole_pool_and_records_each_node():
 
 # --- 3. graph shape ---
 
-def _nodes(**kw):
+def _nodes(answer=True, **kw):
     resources = _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), **kw)
-    return set(build_graph(resources, MockClient()).get_graph().nodes) - {"__start__", "__end__"}
+    graph = build_answer_graph(resources, MockClient()) if answer else build_graph(resources)
+    return set(graph.get_graph().nodes) - {"__start__", "__end__"}
 
 
 def test_graph_has_only_the_stages_that_are_on():
     base = {"parse", "condition", *SEARCH_LISTS, "fuse", "gate", "refuse", "guide"}
     assert _nodes(stage1_score=_stage1, select=_pick()) == base | {"rerank1", "rerank2"}
     assert _nodes() == base  # T2-39: no question index loaded -> no retrieve_hq
+    # T2-41 S5: the module's graph ends at gate
+    assert _nodes(answer=False, stage1_score=_stage1, select=_pick()) == base - {"refuse", "guide"} | {"rerank1",
+                                                                                                         "rerank2"}
 
 
 # --- evals L1 runner: graph:<preset> gives the rows the old preset gives ---
@@ -261,7 +267,8 @@ def test_node_spans_record_each_node_once_with_its_output():
     resources = _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), stage1_score=_stage1,
                                select=_pick("101_DT_B"))
     nodes = NodeSpans()
-    state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수", {"callbacks": [nodes]})
+    state = run_answer(build_answer_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수",
+                       {"callbacks": [nodes]})
     spans = {s["name"]: s for s in nodes.spans}
     # inner runs (channel writes, the gate branch, the guide chain and its LLM) carry the node name too: not spans.
     # T2-39: the list nodes run in parallel (any order between them) and carry no pool; fuse forms it
@@ -284,7 +291,7 @@ def test_node_spans_mark_a_failing_node():
     resources = _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), stage1_score=_boom)
     nodes = NodeSpans()
     with pytest.raises(TimeoutError):
-        run_search(build_graph(resources, MockClient()), "출생아 수", {"callbacks": [nodes]})
+        run_search(build_graph(resources), "출생아 수", {"callbacks": [nodes]})
     assert [(s["name"], s["status"]) for s in nodes.spans if s["name"] not in SEARCH_LISTS] == [
         ("parse", "ok"), ("condition", "ok"), ("fuse", "ok"), ("rerank1", "error")]
     assert "TimeoutError" in nodes.spans[-1]["attributes"]["error"]
@@ -302,5 +309,5 @@ def test_graph_parses_the_question_once(monkeypatch):
 
     monkeypatch.setattr(parse_step, "parse_query", counting)
     resources = _load(_settings(cond_filter=True), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
-    run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "2023년 인구")
+    run_search(build_graph(resources), "2023년 인구")
     assert calls == ["2023년 인구"]

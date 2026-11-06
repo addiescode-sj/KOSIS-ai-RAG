@@ -3,7 +3,8 @@ hq/index.py). LangChain BaseRetriever wrappers whose bodies call the stage funct
 
 Each reports a score in Document.metadata["score"] (the no-answer check needs it); the hybrid keeps the dense cosine
 there and orders by RRF (T2-06). Unlike the stage functions they keep what the last query removed / relaxed in
-`last_*` attributes, as their callers (build_search, chain.answer, the eval runners, lab, tests) read them.
+`last_*` attributes, as their callers (build_search, backend.app.respond.legacy.answer, the eval runners, lab, tests)
+read them.
 """
 
 from __future__ import annotations
@@ -299,8 +300,8 @@ class HybridRetriever(BaseRetriever):
     A table only the other lists found gets the lowest score of that list, marked `score_from="other"`.
 
     The work is done by `hybrid_search`; this class is the retriever-shaped wrapper the old path (build_search,
-    chain.answer, the eval runners) uses. Side effects: sets `self.last_removed` and `self.last_relaxed` on every
-    query (tests read them).
+    backend.app.respond.legacy.answer, the eval runners) uses. Side effects: sets `self.last_removed` and
+    `self.last_relaxed` on every query (tests read them).
     Node: not used by the graph (its condition, retrieve_* and fuse nodes run the parts of hybrid_search).
     """
 

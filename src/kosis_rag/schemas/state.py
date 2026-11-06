@@ -1,8 +1,8 @@
 """The search graph's shared state (T2-41 S4: from graph.py). No LangGraph import: the reducer is a plain function
 LangGraph reads off the Annotated field, so this module imports without langgraph.
 
-`result` (the backend SearchResult written by refuse / guide) and `route` "guide" stay until S5, when the answer
-nodes move to backend/app/respond/ (plans/T2-41.md).
+T2-41 S5: the module graph ends at gate, so route is found | refuse and there is no `result`; the app's state with
+route refuse | guide and the SearchResult is backend/app/respond/state.py.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
 from kosis_rag.parse.schemas import ParsedQuery
-from kosis_rag.schemas.io import SearchResult
 from kosis_rag.shared.filters import TableFilter
 
 
@@ -39,7 +38,6 @@ class SearchState(BaseModel):
     run_removed: Annotated[dict[str, dict[str, str]], merge] = Field(default_factory=dict)  # retrieve_*: name -> removed
     removed: dict[str, str] = Field(default_factory=dict)  # set by fuse: key -> why filtered out (lists in fuse order)
     docs: list[Document] = Field(default_factory=list)  # overwritten by fuse, rerank1, rerank2
-    route: Literal["refuse", "guide"] | None = None  # set by gate
+    route: Literal["found", "refuse"] | None = None  # set by gate
     refusal_reason: str | None = None  # set by gate
-    result: SearchResult | None = None  # set by refuse or guide
     trace: Annotated[dict[str, dict[str, Any]], merge] = Field(default_factory=dict)  # node -> {"seconds": float, ...}

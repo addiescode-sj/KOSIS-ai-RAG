@@ -1,7 +1,7 @@
 """Master's RAG baseline end to end, without Docker: ChromaDB + BM25 hybrid -> answer -> HTML views.
 
 Master's own pieces, unchanged: index.to_document / kure_embedder / load (T2-24, KURE-v1, labels capped at 100),
-BM25 over TableRecord.search_text (bm25-record), chain.answer (T2-18/T2-26) with the Phase 1 LLM client
+BM25 over TableRecord.search_text (bm25-record), backend.app.respond.legacy.answer (T2-18/T2-26; was chain.answer) with the Phase 1 LLM client
 (vendor/phase1/configs/model.yaml, HCX-DASH-002), and the L1 harness (evals.run_eval -> report.md / report.html).
 Added here only:
     - an in-memory chromadb client loaded from cached vectors in place of the docker server; same collection API
@@ -295,7 +295,7 @@ def make_client(backend: str | None):
 
 
 def answers(retriever: BaseRetriever, llm, n: str, split: str, interval: float, dense_label: str) -> Path:
-    from kosis_rag import chain
+    from backend.app.respond.legacy import answer  # T2-41 S5: kosis_rag.chain.answer
     from evals import schemas
 
     settings, client = llm
@@ -305,7 +305,7 @@ def answers(retriever: BaseRetriever, llm, n: str, split: str, interval: float, 
     for j, item in enumerate(items, 1):
         started = time.perf_counter()
         try:
-            res = chain.answer(retriever, client, item.question, k=5)
+            res = answer(retriever, client, item.question, k=5)
             res_d, error = res.model_dump(), None
         except Exception as exc:  # one failing question is shown, the run goes on
             res_d, error = {"candidates": [], "answer": "", "answer_origin": "error", "no_answer": False,
@@ -519,7 +519,7 @@ def answers_html(rows: list[dict], model: str, split: str, dense_label: str) -> 
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>RAG baseline answers</title>
 <style>{CSS}</style></head><body><main>
 <h1>RAG baseline answers</h1>
-<p class="sub">hybrid (BM25 bm25-record + Chroma {e(dense_label)}, RRF c={RRF_C}) → top 5 → chain.answer · {e(model)} ·
+<p class="sub">hybrid (BM25 bm25-record + Chroma {e(dense_label)}, RRF c={RRF_C}) → top 5 → respond.legacy.answer · {e(model)} ·
 {"Phase 1 golden" if KIND else "L1 " + e(split)} · {dt.datetime.now():%Y-%m-%d %H:%M}</p>
 <div class="tiles">{tile_html}</div>
 <div class="filters"><button class="on" data-f="all">all</button><button data-f="miss">miss</button>

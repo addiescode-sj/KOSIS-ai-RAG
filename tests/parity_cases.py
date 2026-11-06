@@ -3,9 +3,10 @@
 Each case runs the search graph on the fakes of tests/test_graph.py (no model, no server, no API) and gives three
 JSON texts:
 
-- result: the backend `SearchResult` (`run_search(...).result`), what `/search` returns;
-- output: the module's future `SearchOutput`, projected from today's final state (project_output);
-- state: a summary of the final state (removed, relaxed, route, refusal_reason, docs' key and metadata).
+- result: the backend `SearchResult` (`run_answer(build_answer_graph(...)).result`), what `/search` returns;
+- output: the module's `SearchOutput` (T2-41 S5: `SearchModule.search()` itself, without spans; at S0 it was
+  projected from the final state);
+- state: a summary of the backend graph's final state (removed, relaxed, route, refusal_reason, docs' key and metadata).
 
 Timings never enter a fixture: no spans, no `seconds`, no `*_seconds` metadata (they differ between two runs).
 The steps of the refactor change only the lines that build the graph and read the state here; the JSON must stay the
@@ -20,17 +21,17 @@ from typing import Any, Callable
 
 from kosis_chat.llm.model import MockClient
 
-from kosis_rag.gate.texts import NO_MATCH, REFUSAL_TEXT, REFUSALS
+from backend.app.respond.graph import build_answer_graph, run_answer
+from backend.app.respond.state import SearchState
 from kosis_rag.adapters.loader import load_resources
-from kosis_rag.graph.search import build_graph, run_search
-from kosis_rag.schemas.resources import IndexSpec
-from kosis_rag.schemas.state import SearchState
-from kosis_rag.shared.catalog import to_candidate
+from kosis_rag.api import SearchModule
+from kosis_rag.gate.texts import NO_MATCH
+from kosis_rag.schemas.io import SearchInput, SearchOutput
+from kosis_rag.schemas.resources import IndexSpec, SearchResources
 
 from tests.test_graph import RECORDS, CatalogRetriever, KEYS, _boom, _pick, _settings, _stage1
 
-SCHEMA_VERSION = "2.0"
-K = 5  # tables shown to gate / refuse / guide (build_graph's default)
+K = 5  # tables shown to gate / refuse / guide (build_answer_graph's default)
 # Keys never written to a fixture (timings: they differ between two runs of the same code)
 EXCLUDED_KEYS = ("seconds",)
 EXCLUDED_SUFFIXES = ("_seconds",)
@@ -67,12 +68,21 @@ CASE_NAMES = tuple(c.name for c in CASES)
 KINDS = ("result", "output", "state")
 
 
+def case_resources(case: Case) -> SearchResources:
+    """The resources of one case over fresh fakes."""
+    return load_resources(spec=IndexSpec(), options=_settings(**case.settings), records=RECORDS,
+                          dense=CatalogRetriever(keys=list(case.dense_keys)),
+                          stage1_score=case.stage1, select=case.select)
+
+
 def run_case(case: Case) -> SearchState:
-    """The final graph state of one case (fresh fakes and a fresh MockClient each time)."""
-    resources = load_resources(spec=IndexSpec(), options=_settings(**case.settings), records=RECORDS,
-                               dense=CatalogRetriever(keys=list(case.dense_keys)),
-                               stage1_score=case.stage1, select=case.select)
-    return run_search(build_graph(resources, MockClient(case.reply), k=case.k), case.question)
+    """The final state of the backend's answer graph for one case (fresh fakes and a fresh MockClient each time)."""
+    return run_answer(build_answer_graph(case_resources(case), MockClient(case.reply), k=case.k), case.question)
+
+
+def module_output(case: Case) -> SearchOutput:
+    """The module's SearchModule.search() output for one case (fresh fakes; the module calls no guide LLM)."""
+    return SearchModule.from_resources(case_resources(case)).search(SearchInput(question=case.question, k=case.k))
 
 
 def _clean(value: Any) -> Any:
@@ -83,34 +93,6 @@ def _clean(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_clean(v) for v in value]
     return value
-
-
-def project_output(state: SearchState, k: int = K) -> dict[str, Any]:
-    """The module's SearchOutput (plans/T2-41.md 입출력 계약) read off today's final state, without spans.
-
-    route: gate's guide -> found, refuse -> refuse. refusal_text: REFUSALS.get(reason, REFUSAL_TEXT) on refuse,
-    else None. candidates: to_candidate(docs[:k]). picked: [] on refuse; the docs stage 2 picked (rank order) when
-    stage 2 ran without error and picked something; otherwise the candidates.
-    """
-    refuse = state.route == "refuse"
-    docs = state.docs[:k]
-    candidates = [to_candidate(d).model_dump(mode="json") for d in docs]
-    top = docs[0].metadata if docs else {}
-    if refuse:
-        picked: list[dict] = []
-    elif (top.get("stage2_picked_n") or 0) > 0 and not top.get("stage2_error"):
-        picked = [to_candidate(d).model_dump(mode="json") for d in state.docs if d.metadata.get("stage2_picked")]
-    else:
-        picked = candidates
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "question": state.question,
-        "route": "refuse" if refuse else "found",
-        "refusal_reason": state.refusal_reason,
-        "refusal_text": REFUSALS.get(state.refusal_reason, REFUSAL_TEXT) if refuse else None,
-        "picked": picked,
-        "candidates": candidates,
-    }
 
 
 def summarize_state(state: SearchState) -> dict[str, Any]:
@@ -151,6 +133,6 @@ def case_texts(case: Case) -> dict[str, str]:
     state = run_case(case)
     return {
         "result": dumps(state.result.model_dump(mode="json")),
-        "output": dumps(project_output(state, case.k)),
+        "output": dumps(module_output(case).model_dump(mode="json", exclude={"spans"})),
         "state": dumps(summarize_state(state)),
     }

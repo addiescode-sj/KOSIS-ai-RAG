@@ -147,6 +147,47 @@
 - **evals (고치지 않음, `refactor/phase2/03-evals-direction-for-worker.md` §2)**: `evals/runners/retrieval.py`는 import 줄만 새 경로로 바꿨어요(`kosis_rag.legacy.pipeline.build_search`, `kosis_rag.adapters.loader.load_resources`, `kosis_rag.graph.search`). `_staged_settings`의 `from kosis_rag.pipeline import SearchSettings`는 대체 이름이 없어 그대로 두었고(`tests/test_layout.py` `CALLER_EXCEPTIONS`), 그래서 **`--layer l1 --retriever <STAGED 프리셋>|graph:<프리셋>`은 `ImportError`**, `--retriever chroma`와 `--layer l0`의 Chroma 확인(`ChromaTableRetriever.connect()`)은 컬렉션 이름을 환경에서 읽지 않으므로 **`ValueError`(no collection)**로 실패해요. `oracle`·`bm25-*` 리트리버, L2·ablation·L3·e2e(검색기 주입) 경로와 채점·리포트는 영향 없음. `tests/test_graph.py::test_eval_runner_graph_preset_matches_the_old_preset`는 같은 이유로 skip(사유에 03 §2). 평가 담당자가 03 §2대로 `search_config_from_env`(또는 자체 설정) + `load_resources(spec=, options=)` / `SearchModule`로 바꾸면 돼요.
 - **`scripts/parity_l1.py`**: `build_preset_graph`가 evals를 거치지 않고 `search_config_from_env(**STAGED[preset])` → `load_resources(spec=, options=, llm=)` → `build_graph(resources, MockClient())`(모듈 사본 `kosis_rag.llm.base.MockClient`)로 만들어요. `STAGED` 프리셋 값은 evals에서 데이터로만 읽어요. `config_fingerprint`의 키·값은 S0과 같음(`tests/test_parity_l1_tool.py`가 S0 함수 사본과 대조) — 단 **덤프 전에 셸에 `CHROMA_COLLECTION`·`EMBED_CKPT`·`RERANK_CKPT`를 `.env`와 같은 값으로** 두어야 S0 manifest와 지문이 맞아요.
 
-## S5. respond → backend · SearchOutput
+## S5. respond → backend · 모듈은 gate에서 END · SearchOutput 확정
+
+옛 모듈 파일 2개(`chain.py tools.py`)는 지웠어요. **안내 문장·답변 검증·출처·토큰 스트림·거절 답변은 앱 계층 `backend/app/respond/`로 나갔어요** — 종합 레포(KOSIS-ai-multi-agent)는 자기 에이전트가 문장을 쓰므로 이 패키지를 가져가지 않아요. 가져갈 것은 `kosis_rag.gate.texts`의 문구와 `SearchOutput.refusal_text`예요. 모듈 그래프는 `parse → condition → [embed] → retrieve_* → fuse → [rerank1] → [rerank2] → gate → END`로 끝나고 **LLM 클라이언트를 받지 않아요**(`build_graph`·`graph_nodes`·`make_nodes`에서 `client` 제거, S4의 0-인자 팩토리 통로도 삭제). backend가 모듈 노드 + respond 노드를 한 그래프로 조립해 `/search`·`/search/stream`·`/nodes/*`가 그대로예요: 노드 이름·간선·SSE 이벤트 순서·`/nodes` 목록·`docs/openapi.json` 변경 0, 패리티 fixture 33개 바이트 동일(`output` fixture는 이제 **`SearchModule.search()` 결과**를 그대로 비교하고, S0 투영 함수 `tests/parity_cases.project_output`은 지웠어요).
+
+| 옛 import | 새 import | 바뀐 인자·반환 |
+|---|---|---|
+| `kosis_rag.graph.search.build_graph(resources, client, *, k=5)` | `kosis_rag.graph.search.build_graph(resources, *, k=5)` | **`client` 제거.** 그래프는 `gate → END`(refuse·guide 없음). 앱 응답 그래프는 `backend.app.respond.graph.build_answer_graph` |
+| `kosis_rag.graph.search.graph_nodes(resources, client, *, k=5)` | `graph_nodes(resources, *, k=5)` | `client` 제거, 노드표가 `gate`로 끝남(`refuse`·`guide` 행 없음) |
+| `kosis_rag.graph.search.add_search_edges(g, nodes)` | 같은 이름 | **gate까지만** 이어요(gate 뒤 간선은 호출자: `build_graph`는 `gate → END`, backend는 `refuse \| guide`) |
+| `kosis_rag.graph.search.stream_search(graph, question, config=None)` → 마지막 `("result", SearchState)`, 중간 `("token", …)` | `stream_search(graph, question, config=None, *, k=5)` → 노드 이벤트 뒤 마지막 **`("output", SearchOutput)`** | `k`는 그래프를 만든 k(`to_output`의 `docs[:k]`). token 이벤트 없음. 앱의 옛 동작은 `backend.app.respond.graph.stream_answer` |
+| `kosis_rag.graph.search.run_search(graph, q)` | 같은 이름 | 반환 `SearchState`에 `result`가 없고 `route`는 `found \| refuse` |
+| `kosis_rag.graph.nodes_api.make_nodes(resources, client, *, k=5)` | `make_nodes(resources, *, k=5)` | `client` 제거, `parse retrieve [rerank1] [rerank2] gate`만. 앱 노드 API 집합은 `backend.app.respond.graph.api_nodes(resources, guide_llm, *, k=5)` |
+| `kosis_rag.schemas.state.SearchState.route: "refuse" \| "guide"` · `.result: SearchResult` | `route: "found" \| "refuse"` · **`result` 삭제** | `gate` trace의 `route`도 `found`. 앱(API) 상태는 `backend.app.respond.state.SearchState`(옛 13필드·순서·`route` refuse\|guide·`result` 그대로 — openapi 스키마 이름·필드 순서 동일) |
+| `kosis_rag.api.to_output(state, k)` · `SearchModule` | 같은 이름 | 확정: 그래프에 앱 노드가 없어 mock 안내 클라이언트·`APP_NODES` 제외 규칙을 지웠어요. `spans`는 trace 전체(노드 순서, 마지막이 `gate`). `refusal_text = gate.texts.REFUSALS.get(reason, REFUSAL_TEXT)`(거절일 때). `SearchModule.stream`은 `stream_search`를 그대로 내보내요 |
+| `kosis_rag.chain.search(retriever, question, k=5)` | `kosis_rag.legacy.search.search` | 없음 |
+| `kosis_rag.tools.build_tools(retriever, client)` → `[search_tables, answer_table_question]` | `kosis_rag.legacy.tools.build_tools(retriever)` → **`[search_tables]`** | `client` 제거. 답 툴은 `backend.app.respond.legacy.answer_tool(retriever, client)` (이름·인자·설명 그대로) |
+| `kosis_rag.chain.answer(retriever, client, question, k=5)` | `backend.app.respond.legacy.answer` | 없음 (같은 결과) |
+| `kosis_rag.chain.PROMPT` (ChatPromptTemplate) | `backend.app.respond.prompts.guide_prompt()` (파일 `backend/app/respond/prompts/guide-v1.md`, `importlib.resources`로 읽음) · `guide_messages() -> (system, human)` · `PROMPT_FILE` · `SEPARATOR` | 상수가 아니라 함수(한 번 읽어 캐시). 파일 = system + `"\n<!-- human -->\n"` + human, 옛 문자열과 바이트 동일(`tests/test_prompts_bytes.py`) |
+| `kosis_rag.chain.llm_runnable(client, on_chunk=None)` | `backend.app.respond.node.llm_runnable` | 없음 (계획은 `respond/legacy.py`였지만 guide가 매번 쓰므로 `node.py`에 둠) |
+| `kosis_rag.chain.refusal_answer(question, docs, reason)` | `backend.app.respond.node.refuse(RefuseInput(question, candidates, refusal_reason, refusal_text)) -> SearchResult` | **입력이 모듈 출력의 필드**: `candidates`(TableCandidate)·`refusal_text`를 `SearchOutput`에서 받아요(그래프의 `refuse` 노드는 `kosis_rag.api.to_output`으로 읽음). 결과 같음 |
+| `kosis_rag.chain.guide_answer(question, docs, client, on_text=None)` | `backend.app.respond.node.guide(GuideInput(question, candidates), llm, on_text=None) -> SearchResult` | 문서 대신 `candidates`(TableCandidate). 결과·스트림 조각 같음 |
+| `kosis_rag.chain.unsupported_claims` · `_references` · `picked_from_reply` · `streamable_prefix` | `backend.app.respond.verify.unsupported_claims` · `references` · `picked_from_reply` · `streamable_prefix` | `_references` → `references`(공개 이름) |
+| `kosis_rag.chain.format_context` · `template_answer` · `with_citations` | `backend.app.respond.render.<같은 이름>` | 없음. 고정 문구는 `backend.app.respond.texts.TEMPLATE_OPENING`·`CITATION_HEADER`("출처:") |
+| `kosis_rag.chain._TBL_ID` · `_YEAR` · `_REF_RANGE` · `_REF` | `backend.app.respond.patterns.TBL_ID` · `YEAR` · `REF_RANGE` · `REF` | 밑줄 없는 이름 |
+| `kosis_rag.gate.texts.NO_MATCH` | 그대로 | 안내 LLM의 "맞는 표 없음" 표지(앱이 읽음). 거절 문구 `REFUSAL_TEXT`·`REFUSALS`도 그대로 |
+| `graph.search` 안 refuse·guide 노드 | `backend.app.respond.node.answer_nodes(guide_client, *, k=5) -> {"refuse", "guide"}` | API 상태 위에서 돌고 trace(`refuse`, `guide` + `origin`)는 옛 것과 같아요. guide는 `get_stream_writer`로 `{"delta"}`를 흘려요 |
+| — (신규) | `backend.app.respond.graph.gate_to_api(update) -> dict` | 모듈 gate 노드 반환의 `route`(와 gate trace의 `route`) `"found"` → `"guide"`. **`build_answer_graph`와 `api_nodes`(→ `/nodes/gate`) 둘 다 이 함수 하나**를 써요 — `/nodes/gate` 응답을 그대로 `/nodes/answer`에 보내면 돼요 |
+| — (신규) | `backend.app.respond.graph.build_answer_graph(resources, guide_llm, *, k=5)` · `run_answer(graph, q, config=None)` · `stream_answer(graph, q, config=None)` | 옛 `build_graph(resources, client)`·`run_search`·`stream_search`의 앱 쪽. `guide_llm`은 `LLMConfig`(guide 첫 실행 때 `llm.providers.build_client`로 생성), 미리 만든 클라이언트(ChatClovaX·MockClient), 또는 `GuideClient`. 계획 문구의 `options` 인자는 `resources.options`라 따로 받지 않아요 |
+| `backend.app.main.Runtime.guide_client` (S4: 그래프에 팩토리로 전달) | `backend.app.respond.node.GuideClient(llm)` · `.get()`; `Runtime.guide`(하나를 모든 그래프·노드 집합이 공유) · `Runtime.guide_client()` = `guide.get()` | `Runtime(resources, *, guide_llm=None, client=None, graphs={})` 호출 방식 그대로. 키(`api_key`)가 없으면 guide 진입 때 `LLMKeyMissing` → `/search`·`/nodes/answer` 503, `/search/stream`은 `event: error`. 클라이언트는 `PROVIDERS["clova_chat"]`로 만들어요(테스트가 바꿀 곳: `providers.PROVIDERS`, 옛 `providers.clova_chat` 패치는 더 안 먹어요) |
+
+**실전 3(종합 레포) 인계**
+- **실전 1에 넘기는 값은 `picked[0].key`(복합 키 `"<org_id>_<tbl_id>"`, `tables.csv`의 `key` 열)**예요. `picked[0].tbl_id`로 `kosis_chat.api.table_path`/`summarize_stat`를 부르면 `LookupError`(`tests/test_phase1_contract.py` ⑥).
+- **`route == "found"`는 "후보를 찾았다"이지 "계산할 수 있다"가 아니에요.** 그 뒤의 거절은 모듈 밖에서 받아요: (1) 이 레포 앱의 안내 LLM이 `NO_MATCH`로 답하면 `SearchResult.no_answer=True`·`answer_origin="refusal"`(backend만), (2) 실전 1 `StatAnswer`의 `refused`·`clarify` 답, 표를 못 찾으면 `LookupError`. `SearchOutput`에는 필드를 더하지 않았어요(승인된 2.0 그대로).
+- `route == "refuse"`면 `refusal_text`(코드 문구, `gate.texts`)를 그대로 보여 주면 돼요. `refusal_reason`은 `out_of_scope | no_item | None`.
+
+**영향받는 진입점 (S5)**
+- **evals (고치지 않음)**: `evals/runners/retrieval.py`의 `graph:<프리셋>` 줄은 `build_graph(load_resources(...), MockClient())`라 S4부터 이미 깨져 있었고(`load_resources` 위치 인자), 이제 `build_graph`가 클라이언트를 받지 않아 고칠 때 `build_graph(load_resources(spec=…, options=…))`로 바꾸면 돼요. 다른 evals 경로는 영향 없음.
+- `lab/rag_baseline.py`: `kosis_rag.chain.answer` → `backend.app.respond.legacy.answer`(import 줄만). `lab/hq_eval.py`: `build_graph(r, MockClient())` → `build_graph(r)`.
+- `scripts/parity_l1.py`: `build_preset_graph`가 `build_graph(resources)`(생성 줄만). 덤프의 `route`가 이제 `found`이고 compare는 S0의 `guide`를 `found`로 읽어요(`ROUTE_ALIASES`).
+
+- `notebooks/rag_skeleton.ipynb`: `from kosis_rag import chain`·`chain.PROMPT`·`chain.answer`·`from kosis_rag.tools import build_tools`가 이제 `ImportError`예요(S2부터 `kosis_rag.retriever`도 없어 이미 깨져 있었음). 쓰려면 `backend.app.respond.legacy.answer`·`backend.app.respond.prompts`·`kosis_rag.legacy.tools.build_tools`로 바꿔요(노트북은 사용자가 관리해 리팩터에서 고치지 않음).
+- `tests/fixtures/parity/README.md`의 `project_output(state, k)` 설명은 S0 기준이에요. S5부터 `output.json`은 `SearchModule.search()` 결과(spans 제외)와 바이트 비교해요(얼린 폴더라 README는 그대로 둠).
 
 ## S6. kosis_rag_build/ 분리 · 정리
