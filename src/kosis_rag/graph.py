@@ -45,13 +45,14 @@ from kosis_chat.llm.model import LLMClient
 
 from kosis_rag import chain
 from kosis_rag import query as query_rules  # module access, so a test can patch query.parse_query
-from kosis_rag.filters import TableFilter, filter_with_relaxation, relax
-from kosis_rag.loader import to_document
 from kosis_rag.pipeline import SearchResources
 from kosis_rag.query import ParsedQuery
 from kosis_rag.rerank import rerank_stage1, rerank_stage2
 from kosis_rag.retriever import condition_filter, rrf_fuse, search_list
-from kosis_rag.schemas import SearchResult, TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.schemas.io import SearchResult
+from kosis_rag.shared.catalog import to_document
+from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax
 
 
 def merge(old: dict, new: dict) -> dict:

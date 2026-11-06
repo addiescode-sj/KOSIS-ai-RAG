@@ -123,9 +123,10 @@ def old_persistent_vectors(name: str, ids: list[str]) -> list | None:
 def dense_kure(records, device: str | None) -> dict:
     """Master's dense side: KURE-v1 over index.to_document (T2-24)."""
     from kosis_rag import index
+    from kosis_rag.adapters import models
 
-    embed, _, _ = index.kure_embedder(device)
-    return {"label": "KURE-v1 (master)", "tag": index.EMBED_MODEL, "docs": [index.to_document(r) for r in records],
+    embed, _, _ = models.kure_embedder(device)
+    return {"label": "KURE-v1 (master)", "tag": models.EMBED_MODEL, "docs": [index.to_document(r) for r in records],
             "embed_docs": embed, "embed_query": lambda q: embed([q])[0], "legacy": True}
 
 
@@ -165,19 +166,20 @@ def chroma_retriever(records, dense: dict, k: int):
     from chromadb.config import Settings
 
     from kosis_rag import index
+    from kosis_rag.adapters import models
     from kosis_rag.retriever import ChromaTableRetriever
 
-    index.EMBED_MODEL = dense["tag"]  # recorded in the collection metadata and checked below
+    models.EMBED_MODEL = dense["tag"]  # recorded in the collection metadata and checked below
     data_sha = hashlib.sha256(index.REPO.joinpath("data", "tables.jsonl").read_bytes()).hexdigest()
     docs = dense["docs"]
     # the cache is keyed by the model tag and the exact passages, so another model or document text never reuses it
-    model_tag = hashlib.sha256("\n".join([index.EMBED_MODEL, *docs]).encode("utf-8")).hexdigest()[:8]
+    model_tag = hashlib.sha256("\n".join([models.EMBED_MODEL, *docs]).encode("utf-8")).hexdigest()[:8]
     name = f"local_{data_sha[:8]}_{model_tag}"
     ids = [r.info.key for r in records]
     metas = [index.to_metadata(r, name) for r in records]
     npy, keys_file = OUT / f"{name}.npy", OUT / f"{name}.keys.json"
     # earlier versions of this script named the KURE-v1 cache/collection by the model alone
-    legacy = f"local_{index.COLLECTION_PREFIX}{data_sha[:8]}_{hashlib.sha256(index.EMBED_MODEL.encode()).hexdigest()[:6]}"
+    legacy = f"local_{index.COLLECTION_PREFIX}{data_sha[:8]}_{hashlib.sha256(models.EMBED_MODEL.encode()).hexdigest()[:6]}"
     vectors = None
     for stem in [name, *([legacy] if dense.get("legacy") else [])]:
         f, kf = OUT / f"{stem}.npy", OUT / f"{stem}.keys.json"
@@ -188,7 +190,7 @@ def chroma_retriever(records, dense: dict, k: int):
     if vectors is None and dense.get("legacy"):
         vectors = old_persistent_vectors(legacy, ids)
     if vectors is None:
-        print(f"collection {name}: embedding {len(docs)} tables with {index.EMBED_MODEL} (once)")
+        print(f"collection {name}: embedding {len(docs)} tables with {models.EMBED_MODEL} (once)")
         vectors = embed_all(dense["embed_docs"], docs)
     np.save(npy, np.asarray(vectors, dtype=np.float32))
     keys_file.write_text(json.dumps(ids), encoding="utf-8")
@@ -201,7 +203,7 @@ def chroma_retriever(records, dense: dict, k: int):
     count = index.load(client, ids, docs, metas, vectors, name, record)
     print(f"collection {name}: {count} tables in Chroma (in memory)")
     collection = client.get_collection(name, embedding_function=None)
-    assert (collection.metadata or {}).get("embed_model") == index.EMBED_MODEL
+    assert (collection.metadata or {}).get("embed_model") == models.EMBED_MODEL
     return ChromaTableRetriever(collection=collection, embed_query=dense["embed_query"], k=k)
 
 
@@ -539,7 +541,7 @@ def main() -> int:
     p.add_argument("--backend", choices=("hcx", "mock"), default=None, help="default: vendor/phase1/configs/model.yaml")
     p.add_argument("--interval", type=float, default=1.0, help="seconds between model calls")
     p.add_argument("--device", default=None, help="cpu or cuda (default: auto)")
-    p.add_argument("--embed-model", default=None, help="override index.EMBED_MODEL (default: master's KURE-v1)")
+    p.add_argument("--embed-model", default=None, help="override adapters.models.EMBED_MODEL (default: master's KURE-v1)")
     p.add_argument("--dense", choices=("kure", "bge-m3", "ft"), default="kure",
                    help="kure: master KURE-v1; bge-m3: lab V0 dense; ft: bge-m3 + plan 29 weights (--ckpt)")
     p.add_argument("--ckpt", type=Path, default=None,
@@ -556,9 +558,9 @@ def main() -> int:
     args = p.parse_args()
 
     if args.embed_model:
-        from kosis_rag import index
+        from kosis_rag.adapters import models
 
-        index.EMBED_MODEL = args.embed_model
+        models.EMBED_MODEL = args.embed_model
     OUT.mkdir(parents=True, exist_ok=True)
     ensure_golden()
     split, tau = args.split, None

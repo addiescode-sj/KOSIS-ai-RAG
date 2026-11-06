@@ -10,8 +10,8 @@ from kosis_chat.llm.model import MockClient
 from langchain_core.documents import Document
 
 from kosis_rag import chain
-from kosis_rag.loader import to_candidate
-from kosis_rag.schemas import TableCandidate
+from kosis_rag.schemas.io import TableCandidate
+from kosis_rag.shared.catalog import to_candidate
 
 pytestmark = pytest.mark.offline
 

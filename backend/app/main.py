@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from kosis_rag.graph import Node, SearchState, build_graph, ground_docs, make_nodes, run_search, stream_search
 from kosis_rag.pipeline import SearchResources
-from kosis_rag.schemas import AskArgs, SearchResult
+from kosis_rag.schemas.io import AskArgs, SearchResult
 
 LOG_DIR = Path("logs/api")  # gitignored; one JSON line per search, written after the response (BackgroundTasks)
 QUESTION = {"question": "2023년 시도별 출생아 수", "k": 5}

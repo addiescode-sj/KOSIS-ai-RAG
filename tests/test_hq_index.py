@@ -10,14 +10,14 @@ from pathlib import Path
 import pytest
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag.filters import TableFilter
 from kosis_rag.hq import index as hq_index
 from kosis_rag.hq.index import HqRetriever, ckpt8, collection_name, hq_bm25, max_pool, read_questions
 from kosis_rag.index import COLLECTION_NAME
 from kosis_rag.pipeline import SearchSettings, load_resources
 from kosis_rag.retriever import BM25TableRetriever
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.filters import TableFilter
 
 pytestmark = pytest.mark.offline
 

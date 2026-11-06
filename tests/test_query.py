@@ -4,10 +4,10 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag.filters import TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank, table_regions
 from kosis_rag.query import ConditionRetriever, parse_query
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.filters import TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank, table_regions
 
 offline = pytest.mark.offline
 # a made-up 시군구 -> 시도 dictionary (data/sigungu.json is not in git); 중구 sits in several 시도

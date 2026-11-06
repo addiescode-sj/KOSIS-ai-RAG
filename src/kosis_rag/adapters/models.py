@@ -1,4 +1,5 @@
-"""Model loading for the fine-tuned search models (T2-06, T2-07). Inference only; training stays in min `lab/`.
+"""Model loading for the search models (T2-06, T2-07; T2-41 S1: from model.py, plus KURE-v1 from index.py).
+Inference only; training stays in min `lab/`. The only place that imports sentence_transformers / torch.
 
 Both fine-tunings trained only the top layers, so a checkpoint (`.pt`, ~400MB) holds just those layers. Loading
 = the public base model + the checkpoint's tensors put back by name (`strict=False`, but a tensor the base model
@@ -6,7 +7,7 @@ does not have is an error, so a checkpoint for another model never loads silentl
 Checkpoints are not in git: they live under data/models/ (gitignored) and `.env` points at them
 (EMBED_CKPT, RERANK_CKPT). Without a checkpoint the base model loads as is (useful as a baseline).
 
-A model is only right for the table text it was trained on (kosis_rag.text formats). The trainers write a `.json`
+A model is only right for the table text it was trained on (kosis_rag.shared.tabletext formats). The trainers write a `.json`
 next to each `.pt`; its "doc_format" names that text, and loading with another text format is refused. Checkpoints
 without the key were trained on "n2-L60" (plans 29 and 43).
 """
@@ -15,10 +16,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# TODO(T2-05): placeholder embedding model (and its tokenizer, used for token counts in index.py). Not final: T2-05
+# compares candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the
+# same model; retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
+EMBED_MODEL = "nlpai-lab/KURE-v1"
 EMBED_BASE = "BAAI/bge-m3"
 RERANK_BASE = "BAAI/bge-reranker-v2-m3"
 DOC_TOKENS = 1024  # passage length the fine-tuned embedding was trained and measured with
@@ -163,3 +169,18 @@ def load_cross_encoder(ckpt: str | Path | None = None, base: str = RERANK_BASE, 
     if device == "cuda":  # after loading, so the fp32 checkpoint is cast once
         hf.half()
     return CrossEncoderScorer(model=ce, name=base, ckpt=ckpt_id(path), batch=batch)
+
+
+Embed = Callable[[list[str]], list[list[float]]]
+
+
+def kure_embedder(device: str | None = None) -> tuple[Embed, Callable[[str], int], int]:
+    """(embed documents, count tokens, max tokens) for KURE-v1; embeddings are L2-normalized for cosine search."""
+    from sentence_transformers import SentenceTransformer
+
+    model = SentenceTransformer(EMBED_MODEL, device=device)
+
+    def embed(texts: list[str]) -> list[list[float]]:
+        return model.encode(texts, batch_size=8, normalize_embeddings=True, convert_to_numpy=True).tolist()
+
+    return embed, lambda text: len(model.tokenizer(text)["input_ids"]), model.max_seq_length

@@ -214,10 +214,10 @@ def replay(baseline: Path, out_dir: Path, *, tables: Path, cache_root: Path | No
     manifest = json.loads((baseline / "build.json").read_text(encoding="utf-8"))
     cache_root = cache_root if cache_root is not None else baseline.parent / "cache"
 
-    from kosis_rag import text
+    from kosis_rag.adapters.files import read_records
     from kosis_rag.hq import graph as hq_graph
     from kosis_rag.hq import prompt as hq_prompt
-    from kosis_rag.pipeline import read_records
+    from kosis_rag.shared import tabletext as text
 
     model = manifest["model"]
     frac, min_keep, limit = float(manifest["filter_frac"]), int(manifest["min_keep"]), manifest.get("limit")
@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     p_rep.add_argument("--tables", type=Path, default=Path("data") / "tables.jsonl")
     p_rep.add_argument("--cache-root", type=Path, default=None, help="default: cache next to the baseline folder")
     p_rep.add_argument("--rerank-ckpt", default=None, help="stage 1 cross-encoder (filtered builds only)")
-    p_rep.add_argument("--text-format", default=None, help="table text format (default: kosis_rag.text.DOC_FORMAT)")
+    p_rep.add_argument("--text-format", default=None, help="table text format (default: kosis_rag.shared.tabletext.DOC_FORMAT)")
     p_rep.add_argument("--device", default=None)
     p_rep.add_argument("--concurrency", type=int, default=8)
     p_rep.add_argument("--hash-out", type=Path, default=None, help="default: <out-dir>/<build_id>.sha256")

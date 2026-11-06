@@ -1,4 +1,5 @@
-"""Load the Phase 1 table catalog (data/tables.csv) as TableInfo rows and turn each table into one Document."""
+"""Load the Phase 1 table catalog (data/tables.csv) as TableInfo rows and turn each table into one Document (T2-41 S1:
+from loader.py)."""
 
 from __future__ import annotations
 
@@ -7,9 +8,8 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
-from kosis_ai.schemas import TableInfo
-
-from kosis_rag.schemas import TableCandidate
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.schemas.io import TableCandidate
 
 # Fields copied into Document.metadata; enough to rebuild a TableCandidate without the catalog.
 _META_FIELDS = ("key", "org_id", "tbl_id", "table_name", "survey_name", "organization", "period", "url")

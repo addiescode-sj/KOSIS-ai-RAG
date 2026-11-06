@@ -11,30 +11,24 @@ When no table passes, `filter_with_relaxation` drops the conditions one at a tim
 
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from kosis_rag.roles import table_roles
-from kosis_rag.schemas import TableRecord
-from kosis_rag.vocab import SIDO, SIDO_LABELS, dimension_keys  # noqa: F401  (SIDO·SIDO_LABELS re-exported, T2-30 imports)
+from kosis_rag.schemas.catalog import TableRecord
+# filters imports fields, never the other way (T2-41 S1): table_regions / has_dimension moved to fields for that
+from kosis_rag.shared.fields import has_dimension, implied, table_regions
+from kosis_rag.shared.roles import table_roles
+from kosis_rag.shared.vocab import SIDO, SIDO_LABELS  # noqa: F401  (SIDO·SIDO_LABELS re-exported, T2-30 imports)
 
 # Same organization under its old and new names (통계청 became 국가데이터처)
 ORG_ALIASES = {"통계청": "국가데이터처"}
-MIN_SIDO = 3  # a class is administrative only with at least this many 시도 labels ("국적(지역)별" has none)
-REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels when present (T2-25, PR #10)
 # A requested cycle is met by data that holds its points as they are: annual data holds every 5th year, so a
 # "5년마다" (F) question can use a yearly table. Monthly data does not hold quarter values (they need adding up).
 CYCLE_MET_BY = {"F": {"F", "Y"}}
 # Met only loosely (T2-29, B6): a "연도별" (Y) question usually means "over time", so a 5-year table is kept and
 # ranked lower (soft_rank) instead of dropped.
 CYCLE_SOFT = {"Y": {"F"}}
-SEX = re.compile(r"(?:^|\s|의\s?)성$|남녀")  # "성", "가구주의 성"; not "세대구성"
-# a table with no administrative class whose name starts with one 시도 is that 시도's table (T2-29, 분석 #22: 33 tables
-# such as "서울특별시 총조사인구 총괄(...)"); full names only, followed by a non-Hangul character
-TABLE_SIDO = re.compile("^(" + "|".join(sorted((x for x in SIDO_LABELS if len(x) >= 3), key=len, reverse=True))
-                        + r")(?![가-힣])")
 # relaxation order (T2-29, D1); years and period are never dropped (D2)
 RELAX_ORDER = ("measures", "dimensions", "regions", "cycle")
 
@@ -76,20 +70,6 @@ class TableFilter(BaseModel):
         In: self. Out: True when soft_rank could change an order. Side effects: none. Node: retrieve.
         """
         return bool((self.regions and self.region_mode == "soft") or self.soft_measures or self.cycle in CYCLE_SOFT)
-
-
-def table_regions(record: TableRecord) -> set[str] | None:
-    """Official 시도 names the table's administrative classes hold; None when it has no administrative class.
-
-    A table with no administrative class whose name starts with a 시도 ("부산광역시 총조사인구 총괄(…)") holds that
-    one 시도 (T2-29, 분석 #22).
-    """
-    found = [{SIDO_LABELS[x] for x in c.labels if x in SIDO_LABELS} for c in record.classes]
-    found = [names for names in found if len(names) >= MIN_SIDO]
-    if found:
-        return set().union(*found)
-    m = TABLE_SIDO.match(record.info.table_name.strip())
-    return {SIDO_LABELS[m.group(1)]} if m else None
 
 
 def lacks_region(record: TableRecord, f: TableFilter) -> str | None:
@@ -158,23 +138,6 @@ def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
     return None
 
 
-def has_dimension(record: TableRecord, dim: str, names: list[str]) -> bool:
-    """Whether the table breaks down by the key `dim`; `names` are its breakdown names (from its name and classes).
-
-    A name counts when its standard key (vocab.dimension_keys: 가구의 크기 -> 가구원수, 배우관계 -> 혼인상태, 도 -> 시도)
-    is `dim`, or when it holds `dim` as text (T2-29, 분석 #26).
-    """
-    keys = {k for n in names for k in dimension_keys(n)}
-    if dim in REGION_LEVEL_DIMS:
-        levels = {lv for c in record.classes for lv in (getattr(c, "levels", None) or {})}
-        if levels:
-            return dim in levels
-        return dim in keys or "행정구역" in keys or any(dim in n or "행정구역" in n for n in names)  # no level counts
-    if dim == "성":
-        return "성" in keys or any(SEX.search(n) for n in names)
-    return dim in keys or any(dim in n for n in names)
-
-
 def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
     """Reason when the table misses a requested breakdown or counts something else, else None (T2-27).
 
@@ -187,8 +150,6 @@ def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
     names = dims + [c.name for c in record.classes]
     missing = [d for d in f.dimensions if not has_dimension(record, d, names)]
     if missing:
-        from kosis_rag.fields import implied  # here, not at the top: fields imports this module
-
         implied_keys, fixed = implied(record, measure, [])
         held = {k for k in implied_keys if not any(x.startswith(f"{k}=") for x in fixed)}
         missing = [d for d in missing if d not in held]

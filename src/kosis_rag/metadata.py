@@ -19,9 +19,10 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from kosis_ai.normalize import _meta_unit
-from kosis_ai.schemas import MAX_DIMS, TableInfo
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import MAX_DIMS, TableInfo
+from kosis_rag.shared.units import meta_unit
+from kosis_rag.shared.vocab import REGION_LEVELS
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 CATALOG = Path("reference") / "population_table_catalog.jsonl"
@@ -35,7 +36,6 @@ SIDO = {
     "제주특별자치도", "제주도",
 }
 TOP_REGIONS = NATION | URBAN | SIDO
-REGION_LEVELS = ["전국", "동읍면부", "시도", "시군구", "읍면동", "하위 지역"]  # display order of TableClass.levels
 
 
 def region_level(code: str, label: str, class_name: str = "") -> str:
@@ -174,7 +174,7 @@ def build_records(data_dir: Path = DATA_DIR) -> Iterator[TableRecord]:
             table_name_en=(meta or {}).get("tblEngNm") or None,
             topic=(cat or {}).get("topic"),
             menu_paths=list(dict.fromkeys([info.menu_path, *(p["path"] for p in (cat or {}).get("paths", []))])),
-            unit=_meta_unit(info.key, data_dir),
+            unit=meta_unit(info.key, data_dir),
             cycle=[c for c in ((meta or {}).get("periodStr") or "").split("#") if c],
             contain_period=((meta or {}).get("containPeriod") or "").strip(),
             start=min(years, default=None),

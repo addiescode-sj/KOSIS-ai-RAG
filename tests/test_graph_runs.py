@@ -22,20 +22,20 @@ pytest.importorskip("langgraph")
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
-from kosis_ai.schemas import TableInfo  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
 from kosis_rag import query as query_rules  # noqa: E402
-from kosis_rag.filters import (TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank,  # noqa: E402
-                               why_excluded)
 from kosis_rag.graph import SearchState, build_graph, make_nodes, run_search  # noqa: E402
 from kosis_rag.hcx import HcxResult  # noqa: E402
 from kosis_rag.hq.index import HqRetriever  # noqa: E402
-from kosis_rag.loader import to_document  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
 from kosis_rag.rerank import rerank_stage1, rerank_stage2  # noqa: E402
 from kosis_rag.retriever import HybridRetriever, condition_filter, hybrid_search, rrf_fuse, search_list  # noqa: E402
-from kosis_rag.schemas import TableRecord  # noqa: E402
+from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
+from kosis_rag.schemas.common import TableInfo  # noqa: E402
+from kosis_rag.shared.catalog import to_document  # noqa: E402
+from kosis_rag.shared.filters import (TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank,  # noqa: E402
+                                      why_excluded)
 
 pytestmark = pytest.mark.offline
 

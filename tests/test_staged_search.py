@@ -7,15 +7,15 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag import text
+from kosis_rag.adapters.models import resolve_ckpt
 from kosis_rag.clova import WRAP, ClovaReranker, ClovaResult
-from kosis_rag.filters import TableFilter
-from kosis_rag.model import resolve_ckpt
 from kosis_rag.pipeline import SearchSettings, build_search
 from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, blend_order
 from kosis_rag.retriever import HybridRetriever
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared import tabletext as text
+from kosis_rag.shared.filters import TableFilter
 
 offline = pytest.mark.offline
 
@@ -42,7 +42,7 @@ class ListRetriever(BaseRetriever):
     allowed: list[str] | None = None
 
     def with_filter(self, f, records):
-        from kosis_rag.filters import filter_tables
+        from kosis_rag.shared.filters import filter_tables
 
         passed, removed = filter_tables(records, f)
         return self.model_copy(update={"allowed": sorted(passed), "last_removed": removed})
@@ -252,7 +252,7 @@ def test_settings_from_env(monkeypatch):
 def test_checkpoint_text_format_is_checked(tmp_path):
     import json
 
-    from kosis_rag.model import check_format, trained_format
+    from kosis_rag.adapters.models import check_format, trained_format
 
     old, new = tmp_path / "unseen-e2.pt", tmp_path / "seen-e1.pt"
     new.with_suffix(".json").write_text(json.dumps({"doc_format": "n3-L60"}), encoding="utf-8")

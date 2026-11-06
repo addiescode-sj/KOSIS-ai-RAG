@@ -14,18 +14,18 @@ pytest.importorskip("langgraph")
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
-from kosis_ai.schemas import TableInfo  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
 from kosis_rag import query as query_rules  # noqa: E402
-from kosis_rag.filters import TableFilter, filter_tables  # noqa: E402
 from kosis_rag.graph import build_graph, run_search  # noqa: E402
 from kosis_rag.hcx import HcxResult  # noqa: E402
-from kosis_rag.loader import to_document  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
 from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, rerank_stage1, rerank_stage2  # noqa: E402
 from kosis_rag.retriever import HybridRetriever, hybrid_search  # noqa: E402
-from kosis_rag.schemas import TableRecord  # noqa: E402
+from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
+from kosis_rag.schemas.common import TableInfo  # noqa: E402
+from kosis_rag.shared.catalog import to_document  # noqa: E402
+from kosis_rag.shared.filters import TableFilter, filter_tables  # noqa: E402
 
 pytestmark = pytest.mark.offline
 

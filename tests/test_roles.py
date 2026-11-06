@@ -2,9 +2,9 @@
 
 import pytest
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag.roles import table_roles
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.roles import table_roles
 
 offline = pytest.mark.offline
 
@@ -50,8 +50,8 @@ def test_same_word_on_either_side_of_the_name():
 
 @offline
 def test_bundle_table_passes_the_counted_filter_for_each_listed_word():
-    from kosis_rag.filters import TableFilter, lacks_role
     from kosis_rag.query import parse_query
+    from kosis_rag.shared.filters import TableFilter, lacks_role
 
     bundle = _record("시도/인구동태건수 및 동태율(출생,사망,혼인,이혼)", classes=("행정구역별",))
     for question in ("2024년 서울 출생아 수", "2024년 부산 사망자 수", "2024년 혼인 건수", "2024년 이혼 건수"):

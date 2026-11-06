@@ -2,12 +2,12 @@
 
 import pytest
 
-from kosis_ai.schemas import TableInfo
 from kosis_rag.chain import search
-from kosis_rag.filters import TableFilter, filter_tables, filter_with_relaxation, why_excluded
-from kosis_rag.loader import to_document
 from kosis_rag.retriever import ChromaTableRetriever
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.catalog import to_document
+from kosis_rag.shared.filters import TableFilter, filter_tables, filter_with_relaxation, why_excluded
 
 offline = pytest.mark.offline
 

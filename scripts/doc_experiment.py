@@ -22,8 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-from kosis_rag.index import LABEL_CAP, clean_item, read_records, region_summary, sido_names, to_document
-from kosis_rag.schemas import TableRecord
+from kosis_rag.index import LABEL_CAP, clean_item, read_records, to_document
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.tabletext import region_summary, sido_names
 
 REPO = Path(__file__).resolve().parents[1]
 DATA = REPO / "data"

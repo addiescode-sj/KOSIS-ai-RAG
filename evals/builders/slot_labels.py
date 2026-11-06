@@ -28,7 +28,7 @@ import random
 import sys
 from collections import Counter
 
-from kosis_rag.vocab import DIMENSION_KEYS
+from kosis_rag.shared.vocab import DIMENSION_KEYS
 
 from evals.schemas import DATASETS, QUERY_GOLDEN, QueryItem
 

@@ -22,8 +22,8 @@ from kosis_chat.llm.model import MockClient
 
 from kosis_rag.chain import NO_MATCH, REFUSAL_TEXT, REFUSALS
 from kosis_rag.graph import SearchState, build_graph, run_search
-from kosis_rag.loader import to_candidate
 from kosis_rag.pipeline import load_resources
+from kosis_rag.shared.catalog import to_candidate
 
 from tests.test_graph import RECORDS, CatalogRetriever, KEYS, _boom, _pick, _settings, _stage1
 

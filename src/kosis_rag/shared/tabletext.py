@@ -1,4 +1,5 @@
 """Table text for the fine-tuned search models (T2-06, T2-07): one place for training (min `lab/`) and serving.
+(T2-41 S1: from text.py, plus region_summary / sido_names / SIDO_SHORT from index.py.)
 
 A model only works as measured when it sees the text it was trained on, so every format is named, the name is stored
 with the Chroma collection (doc_format) and next to the weights, and a rule change means a new name and new training.
@@ -13,7 +14,7 @@ Every rule is a text pattern applied the same way to all tables (no table-specif
   as standard keys ("분류"), its units, and region classes as level counts instead of place names. Trained and
   measured against n2 it found the right family as well but picked the wrong sibling more often (the added lines are
   the same for tables that share a name), so do not build or train on it. The roles / vocab / levels themselves stay:
-  the condition filters (kosis_rag.filters, query) read them from the record, not from this text.
+  the condition filters (kosis_rag.shared.filters, query) read them from the record, not from this text.
 
     build_doc(record, fmt) -> {"key", "embed_text" (embedding / re-ranker passage), "bm25_text" (full text), "fields"}
     norm_query(question) -> the question with the same surface rules (both formats)
@@ -24,7 +25,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.vocab import REGION_LEVELS
 
 MAX_LABELS = 60  # longer label lists are summarized in the embedding text
 FORMATS = ("n2-L60", "n3-L60")
@@ -40,6 +42,35 @@ TARGET_WORD = re.compile(r"\d+\s*세|\d+\+|가구|인구|내국인|외국인|주
 BASIS = re.compile(r"\d{4}\s*년?\s*~|~\s*\d{4}|단위|기준|총액|순위|응답")  # how it is counted
 UNIT_SUFFIX = re.compile(r"\s*\((명|가구|호|%|세|개|건|원|천원|백만원|㎡|년|개월|회|일|시간|분|천명|천가구)\)\s*$")
 CYCLE = {"Y": "연", "H": "반기", "Q": "분기", "M": "월", "D": "일", "F": "다년(5년 등)", "IR": "부정기"}
+
+
+# region summary of a table's region classes (T2-25; T2-41 S1: from index.py, used by n3 text and index.to_document)
+SIDO_SHORT = {
+    "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천", "광주광역시": "광주",
+    "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종", "경기도": "경기", "강원도": "강원",
+    "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북",
+    "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주", "제주도": "제주",
+}
+
+
+def sido_names(labels: list[str]) -> list[str]:
+    """The 시도 in a label list, in the short form questions use (서울특별시 -> 서울); old and new names merge."""
+    return list(dict.fromkeys(SIDO_SHORT[label] for label in labels if label in SIDO_SHORT))
+
+
+def region_summary(levels: dict[str, int], sido: list[str] | None = None) -> str:
+    """{'전국': 1, '시도': 17, '시군구': 250} -> '전국·시도(17)·시군구(250)'; with sido: '시도(17: 서울, 부산, …)'."""
+    parts = []
+    for lv in REGION_LEVELS:
+        if lv not in levels:
+            continue
+        if lv == "전국":
+            parts.append(lv)
+        elif lv == "시도" and sido:
+            parts.append(f"{lv}({levels[lv]:,}: {', '.join(sido)})")
+        else:
+            parts.append(f"{lv}({levels[lv]:,})")
+    return "·".join(parts)
 
 
 def _unify(s: str) -> str:
@@ -121,7 +152,7 @@ def _menu_tails(rec: dict[str, Any]) -> list[str]:
 
 def _dimension_names(dims: list[str]) -> list[str]:
     """Breakdowns as standard keys (vocab.py) where known, else as the table names them."""
-    from kosis_rag.vocab import dimension_keys
+    from kosis_rag.shared.vocab import dimension_keys
 
     out: list[str] = []
     for d in dims:
@@ -131,7 +162,7 @@ def _dimension_names(dims: list[str]) -> list[str]:
 
 def _units(rec: TableRecord) -> list[str]:
     """Known units of the table: its own unit, then the units its item names end with ("혼인건수 (건)")."""
-    from kosis_rag.vocab import unit_key
+    from kosis_rag.shared.vocab import unit_key
 
     found = [rec.unit] + [m.group(1) for i in rec.items if (m := TRAILING_PAREN.search(i))]
     return list(dict.fromkeys(u for u in map(unit_key, found) if u))
@@ -155,7 +186,7 @@ def build_doc(record: TableRecord | dict[str, Any], fmt: str = DOC_FORMAT, max_i
     head = [f"통계표: {name}"]
     roles: list[str] = []
     if n3:
-        from kosis_rag.roles import table_roles
+        from kosis_rag.shared.roles import table_roles
 
         measure, dims = table_roles(record)
         if measure:
@@ -180,8 +211,6 @@ def build_doc(record: TableRecord | dict[str, Any], fmt: str = DOC_FORMAT, max_i
         embed.append("단위: " + ", ".join(units))
     for cname, labels, levels in classes:
         if n3 and levels:  # region class: which levels it covers, not hundreds of place names
-            from kosis_rag.index import region_summary
-
             embed.append(f"{cname}: 지역 단위 {region_summary(levels)}")
         elif max_labels and len(labels) > max_labels:  # long lists (mostly 읍면동) would drown the topic
             embed.append(f"{cname}: {len(labels)}개 (예: {', '.join(labels[:5])})")
@@ -203,8 +232,8 @@ def main(argv: list[str] | None = None) -> int:
     import random
     from pathlib import Path
 
-    repo = Path(__file__).resolve().parents[2]
-    parser = argparse.ArgumentParser(description="Table text formats: lengths and samples (kosis_rag.text)")
+    repo = Path(__file__).resolve().parents[3]
+    parser = argparse.ArgumentParser(description="Table text formats: lengths and samples (kosis_rag.shared.tabletext)")
     parser.add_argument("--tables", type=Path, default=repo / "data" / "tables.jsonl")
     parser.add_argument("--tokens", action="store_true", help="also count bge-m3 tokens (downloads the tokenizer)")
     parser.add_argument("--samples", type=int, default=20)

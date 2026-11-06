@@ -19,8 +19,8 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from kosis_chat.config import get_secret, load_env, load_settings
 from kosis_chat.llm.model import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
 
-from kosis_rag.loader import to_candidate
-from kosis_rag.schemas import SearchResult, TableCandidate
+from kosis_rag.schemas.io import SearchResult, TableCandidate
+from kosis_rag.shared.catalog import to_candidate
 
 NO_MATCH = "NO_MATCH"
 REFUSAL_TEXT = "제공된 KOSIS 통계표 중에서 이 질문에 맞는 표를 찾지 못했습니다. 다른 표현으로 다시 질문해 주세요."

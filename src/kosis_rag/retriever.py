@@ -14,10 +14,23 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 from rank_bm25 import BM25Okapi
 
-from kosis_rag.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.schemas.resources import ChromaConfig
+from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
 
 _WORD = re.compile(r"[0-9A-Za-z가-힣]+")
+
+
+def env_chroma_config() -> ChromaConfig:
+    """CHROMA_HOST / CHROMA_PORT from the environment or .env (loads .env), as vectorstore.chroma_address read them.
+
+    T2-41 S1: chroma_client takes a ChromaConfig; until S4 moves the environment to backend/app/config.py, the
+    callers in src that connected with no arguments build it here.
+    """
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    return ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
 
 
 def tokenize(text: str) -> list[str]:
@@ -69,7 +82,7 @@ class ChromaTableRetriever(BaseRetriever):
     embed_query: Callable[[str], list[float]]
     k: int = 20  # upper bound; callers slice to their own k (SearchArgs.k <= 20)
     records: dict[str, TableRecord] = Field(default_factory=dict)  # registry the filter is decided on
-    doc_format: str | None = None  # collection metadata doc_format (kosis_rag.text format for fine-tuned collections)
+    doc_format: str | None = None  # collection metadata doc_format (kosis_rag.shared.tabletext format for fine-tuned collections)
     table_filter: TableFilter = Field(default_factory=TableFilter)
     last_removed: dict[str, str] = Field(default_factory=dict)  # why each table was filtered out on the last query
     last_relaxed: list[str] = Field(default_factory=list)  # conditions dropped on the last query (filters.RELAX_ORDER)
@@ -80,14 +93,14 @@ class ChromaTableRetriever(BaseRetriever):
                 embed_ckpt: str | None = None) -> ChromaTableRetriever:
         """Open CHROMA_COLLECTION (or `name`) on the shared server and load the query embedder it was built with.
 
-        KURE-v1 collections (T2-24 text) need nothing more. Fine-tuned bge-m3 collections (T2-06, kosis_rag.text
+        KURE-v1 collections (T2-24 text) need nothing more. Fine-tuned bge-m3 collections (T2-06, kosis_rag.shared.tabletext
         formats) need the same checkpoint (`embed_ckpt`, else EMBED_CKPT in .env); a different file is refused, and
         questions get the same surface rules as the documents.
         """
-        from kosis_rag.index import EMBED_MODEL, kure_embedder
-        from kosis_rag.vectorstore import chroma_client
+        from kosis_rag.adapters.chroma import chroma_client
+        from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
 
-        client = chroma_client()  # also loads .env
+        client = chroma_client(env_chroma_config())  # also loads .env
         name = name or os.getenv("CHROMA_COLLECTION")
         if not name:
             raise ValueError("Set CHROMA_COLLECTION in .env to the collection built by `python -m kosis_rag.index`")
@@ -98,7 +111,8 @@ class ChromaTableRetriever(BaseRetriever):
             embed, _, _ = kure_embedder(device)
             return cls(collection=collection, embed_query=lambda text: embed([text])[0], k=k,
                        doc_format=meta.get("doc_format"))
-        from kosis_rag import model, text
+        from kosis_rag.adapters import models as model
+        from kosis_rag.shared import tabletext as text
 
         if built_with != model.EMBED_BASE:
             raise ValueError(f"collection {name} was embedded with {built_with!r}; known: {EMBED_MODEL}, {model.EMBED_BASE}")

@@ -5,7 +5,7 @@ This module owns the dictionaries (T2-29, C5); `filters` and `query` import them
 - 시도 names (SIDO, SIDO_LABELS) and question region words (REGION_WORDS: a wide name such as 수도권 or 영남 stands
   for several 시도).
 - 시군구 -> 시도, read from the KOSIS region codes of one 읍면동 table (code[:2] is the 시도); built with
-  `python -m kosis_rag.vocab --data-dir <provided data>` into data/sigungu.json (gitignored like all data/).
+  `python -m kosis_rag.shared.vocab --data-dir <provided data>` into data/sigungu.json (gitignored like all data/).
 - breakdown names -> standard keys (DIMENSION_KEYS, table side): KOSIS writes one breakdown many ways (현거주지 /
   현 거주지 / 현거주지별, 종사상지위 / 종사상의 지위). DIMENSION_WORDS is the question side: the same names plus
   question-only aliases (연령대 -> 연령, 지역별 -> 시도), to the same keys.
@@ -21,9 +21,9 @@ import re
 from pathlib import Path
 
 __all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "DIMENSION_WORDS", "dimension_keys", "unit_key",
-           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "load_sigungu"]
+           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "REGION_LEVELS"]
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 SIGUNGU = REPO / "data" / "sigungu.json"
 SIGUNGU_SOURCE = "values/101_DT_1IN1502.parquet"  # 인구, 가구 및 주택 - 읍면동: every 시도 and 시군구 with codes
 
@@ -36,6 +36,7 @@ SIDO = {
     "경상북도": ["경북"], "경상남도": ["경남"], "제주특별자치도": ["제주도", "제주"],
 }
 SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
+REGION_LEVELS = ["전국", "동읍면부", "시도", "시군구", "읍면동", "하위 지역"]  # display order of TableClass.levels (from metadata.py)
 _CAPITAL = ["서울특별시", "인천광역시", "경기도"]
 # Question wording -> official 시도 names; a wide name stands for several (C2: 영남·호남·충청권·비수도권 unfold too)
 REGION_WORDS: dict[str, list[str]] = {
@@ -221,11 +222,6 @@ def build_sigungu(parquet: Path) -> dict[str, list[str]]:
         if len(code) == 5 and code[:2] in sido:
             out.setdefault(label, set()).add(sido[code[:2]])  # 중구 sits under several 시도
     return {label: sorted(names) for label, names in sorted(out.items())}
-
-
-def load_sigungu(path: Path = SIGUNGU) -> dict[str, list[str]]:
-    """{시군구 label: [시도, ...]} from data/sigungu.json; {} when the file is not there (the caller logs that once)."""
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
 def main(argv: list[str] | None = None) -> int:

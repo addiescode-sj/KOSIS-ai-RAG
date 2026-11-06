@@ -34,11 +34,11 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 from rank_bm25 import BM25Okapi
 
-from kosis_rag import text
-from kosis_rag.filters import TableFilter, filter_with_relaxation, relax, soft_rank
-from kosis_rag.loader import to_document
-from kosis_rag.retriever import BM25TableRetriever, tokenize
-from kosis_rag.schemas import TableRecord
+from kosis_rag.retriever import BM25TableRetriever, env_chroma_config, tokenize
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared import tabletext as text
+from kosis_rag.shared.catalog import to_document
+from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank
 
 REPO = Path(__file__).resolve().parents[3]
 HQ_DIR = REPO / "data" / "hq"
@@ -149,12 +149,12 @@ class HqRetriever(BaseRetriever):
         Side effects: connects to Chroma; ValueError when the collection was embedded with other weights.
         Node: none (load_resources calls it; retrieve_hq searches it).
         """
-        from kosis_rag.vectorstore import chroma_client
+        from kosis_rag.adapters.chroma import chroma_client
 
         meta = (getattr(getattr(dense, "collection", None), "metadata", None) or {})
         ckpt = meta.get("embed_ckpt") or meta.get("embed_model")
         name = name or collection_name(build_id, ckpt)
-        collection = chroma_client().get_collection(name, embedding_function=None)
+        collection = chroma_client(env_chroma_config()).get_collection(name, embedding_function=None)
         hq_meta = collection.metadata or {}
         if (hq_meta.get("embed_ckpt") or hq_meta.get("embed_model")) != ckpt or hq_meta.get("doc_format") != DOC_FORMAT:
             raise ValueError(f"question collection {name} was embedded with {hq_meta.get('embed_ckpt')!r} "
@@ -247,9 +247,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from dotenv import load_dotenv
 
-    from kosis_rag import model
+    from kosis_rag.adapters import models as model
+    from kosis_rag.adapters.chroma import chroma_client
     from kosis_rag.index import load
-    from kosis_rag.vectorstore import chroma_client
 
     load_dotenv(REPO / ".env")
     build = args.build + (DESC_SUFFIX if args.desc and not args.build.endswith(DESC_SUFFIX) else "")
@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
               "embed_model": embedder.name, "embed_ckpt": embedder.ckpt, "data_sha256": digest,
               "dim": len(vectors[0]), "normalized": True, "hnsw:space": "cosine", "n_docs": len(rows),
               "n_tables": len({r["key"] for r in rows})}
-    count = load(chroma_client(), [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
+    count = load(chroma_client(env_chroma_config()), [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
                  vectors, name, record)
     print(f"collection {name}: {count} questions over {record['n_tables']} tables (embedder {embedder.ckpt})")
     print(f"to search with it, set HQ_BUILD={build} in .env (empty = off); HQ_BM25=on adds the question BM25")

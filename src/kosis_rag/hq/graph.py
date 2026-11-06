@@ -43,12 +43,12 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field, ValidationError
 
-from kosis_rag import text
-from kosis_rag.fields import table_fields
 from kosis_rag.hq import prompt as hq_prompt
 from kosis_rag.hq.rules import check_positions
 from kosis_rag.hq.schemas import TYPES, HqState, TableQuestions
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared import tabletext as text
+from kosis_rag.shared.fields import table_fields
 
 REPO = Path(__file__).resolve().parents[3]
 HQ_DIR = REPO / "data" / "hq"

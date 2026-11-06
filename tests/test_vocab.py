@@ -2,8 +2,9 @@
 
 import pytest
 
-from kosis_rag import filters, query, vocab
-from kosis_rag.vocab import LABEL_ALIASES, dimension_keys, unit_key
+from kosis_rag import query
+from kosis_rag.shared import filters, vocab
+from kosis_rag.shared.vocab import LABEL_ALIASES, dimension_keys, unit_key
 
 offline = pytest.mark.offline
 

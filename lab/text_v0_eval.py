@@ -1,6 +1,6 @@
 """Plan 53: does the table text matter before any training? Untrained bge-m3 (V0) hybrid search over text variants.
 
-Variants (2 x 2): text format n2-L60 / n3-L60 (kosis_rag.text) x tables.jsonl before the rebuild (no region
+Variants (2 x 2): text format n2-L60 / n3-L60 (kosis_rag.shared.tabletext) x tables.jsonl before the rebuild (no region
 levels, 10/29) / after it (levels filled, 11/03). Only the n3 text changes with levels (region classes become
 "지역 단위 전국·시도(17)·시군구(250)" instead of a label list), so the four cells separate the format from the data.
 
@@ -32,7 +32,7 @@ from lab_common import (
     DEFAULT_MODEL, DEPTH, METRICS, OUT_DIR, CACHE, RETRIEVAL, ROOT, ROUTING, bm25_tokenize, boot, encode, group_rank,
     model_for, query_text, question_vectors, read_jsonl, rrf, summary, top,
 )
-from kosis_rag import text as T  # noqa: E402  (lab_common puts src/ on sys.path)
+from kosis_rag.shared import tabletext as T  # noqa: E402  (lab_common puts src/ on sys.path)
 
 FORMATS = ("n2-L60", "n3-L60")
 TABLES = {"old": ROOT / "data" / "tables_old_1029.jsonl", "new": ROOT / "data" / "tables.jsonl"}

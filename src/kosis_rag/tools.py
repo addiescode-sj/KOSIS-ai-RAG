@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from kosis_chat.llm.model import LLMClient
 
 from kosis_rag import chain
-from kosis_rag.schemas import SearchArgs
+from kosis_rag.schemas.io import SearchArgs
 
 
 def build_tools(retriever: BaseRetriever, client: LLMClient | BaseChatModel) -> list[BaseTool]:

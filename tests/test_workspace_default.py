@@ -1,4 +1,5 @@
-"""KOSIS_WORKSPACE defaults to this repo, so Phase 1 reads data/, eval/golden and .env here (docs/ISSUES.md P2-07)."""
+"""KOSIS_WORKSPACE (docs/ISSUES.md P2-07): importing kosis_rag leaves the environment alone (T2-41 S1, P2-D5); the
+Phase 1 runner script still defaults it to this repo, so Phase 1 reads data/, eval/golden and .env here."""
 
 import os
 import subprocess
@@ -13,14 +14,15 @@ def _run(args: list[str], cwd: Path, **env: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, *args], cwd=cwd, env=clean, capture_output=True, text=True)
 
 
-def test_importing_kosis_rag_defaults_the_workspace_to_this_repo():
-    code = "import kosis_rag; from kosis_ai import paths; print(paths.data_dir())"
+def test_importing_kosis_rag_does_not_change_the_environment():
+    code = "import os, kosis_rag; assert 'KOSIS_WORKSPACE' not in os.environ; print('clean')"
     path = os.pathsep.join([str(ROOT / "src"), str(ROOT / "vendor" / "phase1" / "src")])
     out = _run(["-c", code], ROOT, PYTHONPATH=path)
     assert out.returncode == 0, out.stderr
-    assert Path(out.stdout.strip()) == ROOT / "data"
-    kept = _run(["-c", code], ROOT, PYTHONPATH=path, KOSIS_WORKSPACE=str(ROOT / "elsewhere"))
-    assert Path(kept.stdout.strip()) == ROOT / "elsewhere" / "data"  # a value already set wins
+    assert out.stdout.strip() == "clean"
+    kept = _run(["-c", "import os, kosis_rag; print(os.environ['KOSIS_WORKSPACE'])"], ROOT, PYTHONPATH=path,
+                KOSIS_WORKSPACE=str(ROOT / "elsewhere"))
+    assert Path(kept.stdout.strip()) == ROOT / "elsewhere"  # a value the caller set is left as it is
 
 
 def test_phase1_runner_works_from_any_folder_with_this_repo_as_workspace(tmp_path):

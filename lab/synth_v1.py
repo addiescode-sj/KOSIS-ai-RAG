@@ -108,7 +108,7 @@ def compact(s: str) -> str:
 @dataclass
 class Profile:
     key: str
-    name: str  # normalized table name (kosis_rag.text.norm_name)
+    name: str  # normalized table name (kosis_rag.shared.tabletext.norm_name)
     raw_name: str
     survey: str
     measure: str | None
@@ -126,10 +126,10 @@ class Profile:
 
 
 def load_profiles(path: Path = TABLES) -> dict[str, Profile]:
-    from kosis_rag.fields import table_fields
-    from kosis_rag.schemas import TableRecord
-    from kosis_rag.text import norm_item, norm_label, norm_name
-    from kosis_rag.vocab import SIDO_LABELS, dimension_keys, normalize_dimension
+    from kosis_rag.schemas.catalog import TableRecord
+    from kosis_rag.shared.fields import table_fields
+    from kosis_rag.shared.tabletext import norm_item, norm_label, norm_name
+    from kosis_rag.shared.vocab import SIDO_LABELS, dimension_keys, normalize_dimension
 
     out: dict[str, Profile] = {}
     with path.open(encoding="utf-8") as f:

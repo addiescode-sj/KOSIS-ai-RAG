@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from kosis_rag.metadata import build_records, main
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
 
 offline = pytest.mark.offline
 

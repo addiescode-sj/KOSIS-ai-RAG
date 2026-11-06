@@ -16,9 +16,9 @@ import argparse
 import os
 from pathlib import Path
 
-from kosis_rag import text
 from kosis_rag.hq import graph as hq_graph
 from kosis_rag.hq import prompt as hq_prompt
+from kosis_rag.shared import tabletext as text
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -30,7 +30,7 @@ def pair_scorer(ckpt: str, records: list, fmt: str, device: str | None = None) -
         device = cpu / cuda (default: auto). Out: the PairScore the score node calls.
     Side effects: loads the cross-encoder (GPU memory). Node: score (built here, called there).
     """
-    from kosis_rag.model import load_cross_encoder
+    from kosis_rag.adapters.models import load_cross_encoder
     from kosis_rag.rerank import passage_scorer
 
     text_of = {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
@@ -76,8 +76,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from dotenv import load_dotenv
 
+    from kosis_rag.adapters.files import read_records
     from kosis_rag.hcx import OpenAIClient
-    from kosis_rag.pipeline import read_records
 
     load_dotenv(REPO / ".env")
     if not os.getenv("OPENAI_API_KEY"):

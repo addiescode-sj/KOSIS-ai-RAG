@@ -7,8 +7,8 @@ and the eval runners use.
 
 Settings come from .env (SearchSettings.from_env); every stage can be switched off, so the same code measures
 "none / stage 1 / stage 2 only / stage 1 + stage 2" (plans/T2-07.md). The weights are not in git (data/models/).
-BM25, the re-ranker and the collection all use one table text format (kosis_rag.text): the collection's own
-doc_format, which TEXT_FORMAT (when set) must match; weights trained on another format are refused (kosis_rag.model).
+BM25, the re-ranker and the collection all use one table text format (kosis_rag.shared.tabletext): the collection's own
+doc_format, which TEXT_FORMAT (when set) must match; weights trained on another format are refused (kosis_rag.adapters.models).
 
     CHROMA_COLLECTION=kosis_a_bgeft_<version>   # built by `python -m kosis_rag.index --model bge-m3-ft`
     EMBED_CKPT=data/models/bge-m3-seen-e2.pt
@@ -35,11 +35,12 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import BaseModel
 
-from kosis_rag import text
-from kosis_rag.loader import to_document
+from kosis_rag.adapters.files import read_records
 from kosis_rag.rerank import LLM_RERANKERS, CrossEncoderReranker, LLMReranker, Score, Select, passage_scorer
 from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever, HybridRetriever
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared import tabletext as text
+from kosis_rag.shared.catalog import to_document
 
 REPO = Path(__file__).resolve().parents[2]
 OFF = ("", "0", "off", "false", "no", "none")
@@ -96,21 +97,10 @@ class SearchSettings(BaseModel):
         return " -> ".join(parts)
 
 
-def read_records(path: Path) -> list[TableRecord]:
-    """Read the table registry (data/tables.jsonl) the filters and the table texts are built from.
-
-    In: path = a TableRecord jsonl file. Out: one TableRecord per non-empty line, in file order.
-    Side effects: reads the file; raises on a missing file or an invalid line.
-    Node: none directly (load_resources calls it once before the graph is built).
-    """
-    with path.open(encoding="utf-8") as f:
-        return [TableRecord.model_validate_json(line) for line in f if line.strip()]
-
-
 def bm25_text(records: list[TableRecord], k: int, fmt: str = text.DOC_FORMAT) -> BM25TableRetriever:
     """BM25 over the full table text (every label) of `fmt`, questions with the same surface rules (lab F0).
 
-    In: records = every table; k = tables each search returns; fmt = the table text format (kosis_rag.text).
+    In: records = every table; k = tables each search returns; fmt = the table text format (kosis_rag.shared.tabletext).
     Out: a BM25TableRetriever whose documents carry the catalog metadata (key, ids, names, period, url).
     Side effects: builds the BM25 index in memory. Node: none directly (built by load_resources; the retrieve
     node searches it).
@@ -187,7 +177,7 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
     # 2. stage 1 scorer (fine-tuned cross-encoder)
     text_of: dict[str, str] | None = None
     if s.rerank_ckpt and stage1_score is None:
-        from kosis_rag.model import load_cross_encoder
+        from kosis_rag.adapters.models import load_cross_encoder
 
         text_of = {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
         scorer = load_cross_encoder(s.rerank_ckpt, device=s.device, doc_format=fmt)

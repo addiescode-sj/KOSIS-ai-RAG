@@ -3,7 +3,7 @@
 `/v1/api-tools/reranker` gets the question and up to K table texts, answers, and lists the documents it cited
 (`citedDocuments`). It gives no scores, so stage 2 only says which tables to put first (rerank.LLMReranker).
 The question is wrapped as "다음 질문의 수치를 찾을 수 있는 통계표: {q}" (lab plan 42: the plain question made the
-model answer the question instead of picking tables). The table text is the n2 passage (kosis_rag.text).
+model answer the question instead of picking tables). The table text is the n2 passage (kosis_rag.shared.tabletext).
 
 Key: HCX_API_KEY from this repo's .env, read the same way as chain.clova_chat; it is never printed or logged.
 Plain urllib, so LangChain callbacks do not see the call: calls, seconds and tokens go into the result instead.

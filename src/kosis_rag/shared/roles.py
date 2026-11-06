@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
 
 # "...-시군구", "… – 읍면동(연도 끝자리 0, 5), 시군구(그 외 연도)", "… / 전국": a region-level tail, not the subject
 LEVEL_TAIL = re.compile(  # not "-혼인 귀화자(계)", not "시도/시군구별 혼인종류"

@@ -19,9 +19,10 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import BaseModel, ConfigDict, Field
 
-from kosis_rag.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
-from kosis_rag.schemas import TableRecord
-from kosis_rag.vocab import DIMENSION_WORDS, REGION_WORDS, SIDO, load_sigungu
+from kosis_rag.adapters.files import load_sigungu
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
+from kosis_rag.shared.vocab import DIMENSION_WORDS, REGION_WORDS, SIDO
 
 log = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ SIDO_ORDER = list(SIDO)
 SIGUNGU: dict[str, list[str]] = load_sigungu()  # 시군구 label -> 시도 names (C3); {} without data/sigungu.json
 if not SIGUNGU:
     log.warning("data/sigungu.json not found: 시군구 names in questions are not read as 시도 "
-                "(build it with `python -m kosis_rag.vocab --data-dir <provided data>`)")
+                "(build it with `python -m kosis_rag.shared.vocab --data-dir <provided data>`)")
 # --- breakdowns (step 4, 분석 #23~#27; C4·C5) ---
 # Only known words (vocab.DIMENSION_WORDS): "월별"·"연도별" are cycles, and an unknown "X별" could drop the right table.
 # A word may be written with spaces between its characters ("가구원 수별", "태어난 곳별"). Front boundary: not inside

@@ -4,8 +4,8 @@ import pytest
 
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
 from kosis_rag import chain
-from kosis_rag.loader import load_catalog, to_document
 from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
+from kosis_rag.shared.catalog import load_catalog, to_document
 from kosis_rag.tools import build_tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tables_sample.csv"

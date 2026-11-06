@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import hashlib
 
-from kosis_rag.fields import TableFields
-from kosis_rag.schemas import TableRecord
-from kosis_rag.text import CYCLE
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.fields import TableFields
+from kosis_rag.shared.tabletext import CYCLE
 
 PROMPT_VERSION = "hq-v1"
 TEMPERATURE = 0.7  # some variety between the questions of one table; the seed keeps a rerun close

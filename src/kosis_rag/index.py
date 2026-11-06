@@ -12,8 +12,8 @@ summarizes region classes by level and caps the other labels per class so every 
     PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python -m kosis_rag.index
     ... python -m kosis_rag.index --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
 
-`--model bge-m3-ft` loads the fine-tuned bge-m3 (kosis_rag.model) and embeds the text format it was trained on
-(kosis_rag.text, `--text-format`) into its own collection (FT_COLLECTION_PREFIX); the checkpoint id goes into the collection metadata
+`--model bge-m3-ft` loads the fine-tuned bge-m3 (kosis_rag.adapters.models) and embeds the text format it was trained on
+(kosis_rag.shared.tabletext, `--text-format`) into its own collection (FT_COLLECTION_PREFIX); the checkpoint id goes into the collection metadata
 so `ChromaTableRetriever.connect` embeds questions with the same weights. Metadata (filters) is the same either way.
 """
 
@@ -25,38 +25,29 @@ import os
 import re
 import time
 from datetime import datetime
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from kosis_rag.fields import table_fields
-from kosis_rag.loader import _META_FIELDS
-from kosis_rag.metadata import REGION_LEVELS
-from kosis_rag.roles import table_roles
-from kosis_rag.schemas import TableRecord
+from kosis_rag.adapters import models
+from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.schemas.resources import ChromaConfig
+from kosis_rag.shared.catalog import _META_FIELDS
+from kosis_rag.shared.fields import table_fields
+from kosis_rag.shared.roles import table_roles
+from kosis_rag.shared.tabletext import region_summary
 
 REPO = Path(__file__).resolve().parents[2]
-# TODO(T2-05): placeholder embedding model (and its tokenizer, used for token counts below). Not final: T2-05 compares
-# candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the same model;
-# retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
-EMBED_MODEL = "nlpai-lab/KURE-v1"
 DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list or summarize what is counted; before: measure2 (KOS-97), measure (T2-27)
 # Per-table fields as list metadata (T2-30 KOS-101). Bump it whenever to_metadata changes: it is part of the build name.
 META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
 COLLECTION_PREFIX = "kosis_kure__"  # T2-30: content-named builds; before T2-30 "kosis_a_kure_<YYYYMMDDHHMM>" (kept on servers)
-FT_COLLECTION_PREFIX = "kosis_a_bgeft_"  # T2-06: fine-tuned bge-m3 over a kosis_rag.text format
+FT_COLLECTION_PREFIX = "kosis_a_bgeft_"  # T2-06: fine-tuned bge-m3 over a kosis_rag.shared.tabletext format
 COLLECTION_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,510}[a-z0-9]$")  # Chroma: 3-512 chars, alphanumeric at both ends
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
-SIDO_SHORT = {
-    "서울특별시": "서울", "부산광역시": "부산", "대구광역시": "대구", "인천광역시": "인천", "광주광역시": "광주",
-    "대전광역시": "대전", "울산광역시": "울산", "세종특별자치시": "세종", "경기도": "경기", "강원도": "강원",
-    "강원특별자치도": "강원", "충청북도": "충북", "충청남도": "충남", "전라북도": "전북", "전북특별자치도": "전북",
-    "전라남도": "전남", "경상북도": "경북", "경상남도": "경남", "제주특별자치도": "제주", "제주도": "제주",
-}
-
-Embed = Callable[[list[str]], list[list[float]]]
 
 
 def clean_item(item: str) -> tuple[str, str | None]:
@@ -65,26 +56,6 @@ def clean_item(item: str) -> tuple[str, str | None]:
     name, unit = (item[: m.start()], m.group(1).strip()) if m else (item, None)
     name = name.replace("_", " ").replace("ㆍ", "·").replace("–", "-")
     return re.sub(r"\s+", " ", name).strip(), unit
-
-
-def sido_names(labels: list[str]) -> list[str]:
-    """The 시도 in a label list, in the short form questions use (서울특별시 -> 서울); old and new names merge."""
-    return list(dict.fromkeys(SIDO_SHORT[label] for label in labels if label in SIDO_SHORT))
-
-
-def region_summary(levels: dict[str, int], sido: list[str] | None = None) -> str:
-    """{'전국': 1, '시도': 17, '시군구': 250} -> '전국·시도(17)·시군구(250)'; with sido: '시도(17: 서울, 부산, …)'."""
-    parts = []
-    for lv in REGION_LEVELS:
-        if lv not in levels:
-            continue
-        if lv == "전국":
-            parts.append(lv)
-        elif lv == "시도" and sido:
-            parts.append(f"{lv}({levels[lv]:,}: {', '.join(sido)})")
-        else:
-            parts.append(f"{lv}({levels[lv]:,})")
-    return "·".join(parts)
 
 
 def to_document(record: TableRecord) -> str:
@@ -125,7 +96,7 @@ def to_document(record: TableRecord) -> str:
 def to_metadata(record: TableRecord) -> dict:
     """Chroma metadata: the listing scalars, plus the per-table fields (T2-30) as `f_*` lists for `$contains` filters.
 
-    Keys of loader._META_FIELDS stay as they are, so loader.to_candidate works unchanged. Chroma rejects None and
+    Keys of shared.catalog._META_FIELDS stay as they are, so shared.catalog.to_candidate works unchanged. Chroma rejects None and
     empty lists, so a field the table does not have is left out; a table with no administrative class gets
     f_national instead of f_regions. No load time per document, so reloading a build gives the same metadata.
     """
@@ -158,18 +129,6 @@ def read_records(path: Path) -> list[TableRecord]:
         return [TableRecord.model_validate_json(line) for line in f]
 
 
-def kure_embedder(device: str | None = None) -> tuple[Embed, Callable[[str], int], int]:
-    """(embed documents, count tokens, max tokens) for KURE-v1; embeddings are L2-normalized for cosine search."""
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(EMBED_MODEL, device=device)
-
-    def embed(texts: list[str]) -> list[list[float]]:
-        return model.encode(texts, batch_size=8, normalize_embeddings=True, convert_to_numpy=True).tolist()
-
-    return embed, lambda text: len(model.tokenizer(text)["input_ids"]), model.max_seq_length
-
-
 def build_record(index_version: str, data_sha256: str, n_docs: int, dim: int, max_tokens: int, over_limit: int,
                  embed_model: str = EMBED_MODEL, doc_format: str = DOC_FORMAT, embed_ckpt: str | None = None) -> dict:
     """What the collection was built from; stored as collection metadata so every teammate sees the same record.
@@ -190,7 +149,7 @@ def load(client, ids: list[str], docs: list[str], metas: list[dict], embeddings:
     """Upsert by table key and drop ids that are no longer in the input, so reloading gives the same collection."""
     collection = client.get_or_create_collection(
         name, embedding_function=None,
-        metadata=record or {"embed_model": EMBED_MODEL, "doc_format": DOC_FORMAT, "dim": len(embeddings[0]), "hnsw:space": "cosine"},
+        metadata=record or {"embed_model": models.EMBED_MODEL, "doc_format": DOC_FORMAT, "dim": len(embeddings[0]), "hnsw:space": "cosine"},
     )
     if record and collection.metadata != record:  # get_or_create keeps the first loader's record: refresh it
         collection.modify(metadata={k: v for k, v in record.items() if not k.startswith("hnsw:")})
@@ -229,6 +188,13 @@ def read_build(path: Path) -> dict:
     return build
 
 
+def _chroma_config() -> ChromaConfig:
+    """CHROMA_HOST / CHROMA_PORT from the environment or .env, as vectorstore.chroma_address read them (T2-41 S1;
+    the build CLI takes them as arguments from S6a)."""
+    load_dotenv()
+    return ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
+
+
 def _batches(items: Iterable, size: int):
     items = list(items)
     for i in range(0, len(items), size):
@@ -242,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="kure: KURE-v1 over the T2-27 text (default); bge-m3-ft: fine-tuned bge-m3 (T2-06)")
     parser.add_argument("--ckpt", default=None, help="bge-m3-ft: checkpoint .pt or run folder (default: EMBED_CKPT in .env)")
     parser.add_argument("--text-format", default=None,
-                        help="bge-m3-ft: kosis_rag.text format (default: TEXT_FORMAT in .env, else n2-L60)")
+                        help="bge-m3-ft: kosis_rag.shared.tabletext format (default: TEXT_FORMAT in .env, else n2-L60)")
     parser.add_argument("--collection", default=None,
                         help=f"default: kure {COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
                              f"bge-m3-ft {FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
@@ -256,10 +222,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         return list_builds()
     if args.import_:
-        from kosis_rag.vectorstore import chroma_client
+        from kosis_rag.adapters.chroma import chroma_client
 
         build = read_build(args.import_)
-        count = load(chroma_client(), build["ids"], build["docs"], build["metas"], build["vectors"], build["name"],
+        count = load(chroma_client(_chroma_config()), build["ids"], build["docs"], build["metas"], build["vectors"], build["name"],
                      build["record"])
         print(f"collection {build['name']}: {count} documents")
         print(f"to search it, set CHROMA_COLLECTION={build['name']} in .env")
@@ -273,7 +239,8 @@ def main(argv: list[str] | None = None) -> int:
     ids = [r.info.key for r in records]
     metas = [to_metadata(r) for r in records]
     if ft:
-        from kosis_rag import model, text
+        from kosis_rag.adapters import models as model
+        from kosis_rag.shared import tabletext as text
 
         load_dotenv()
         fmt = args.text_format or os.getenv("TEXT_FORMAT") or text.DOC_FORMAT
@@ -306,9 +273,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {args.export}; load it with: python -m kosis_rag.index --import {args.export.name}")
         return 0
 
-    from kosis_rag.vectorstore import chroma_client
+    from kosis_rag.adapters.chroma import chroma_client
 
-    count = load(chroma_client(), ids, docs, metas, vectors, name, record)
+    count = load(chroma_client(_chroma_config()), ids, docs, metas, vectors, name, record)
     print(f"collection {name}: {count} documents")
     print(f"to search it, set CHROMA_COLLECTION={name} in .env (the previous builds stay; switch back the same way)")
     return 0 if count == len(ids) else 1
@@ -316,11 +283,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def list_builds() -> int:
     """Every table collection on the server with what it was built from; * marks CHROMA_COLLECTION (the active one)."""
-    from kosis_rag.vectorstore import chroma_client
+    from kosis_rag.adapters.chroma import chroma_client
 
     load_dotenv()
     active = os.getenv("CHROMA_COLLECTION")
-    client = chroma_client()
+    client = chroma_client(_chroma_config())
     for c in sorted(client.list_collections(), key=lambda c: (c.metadata or {}).get("index_version") or ""):
         m = c.metadata or {}
         if "doc_format" not in m:

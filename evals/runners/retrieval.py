@@ -14,9 +14,9 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from kosis_rag.loader import to_document
+from kosis_rag.shared.catalog import to_document
 from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
 
 from evals.ops import UsageCallback
 from evals.schemas import TABLES, RetrievalItem

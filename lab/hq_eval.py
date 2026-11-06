@@ -45,9 +45,10 @@ import numpy as np
 from evals.schemas import GOLDEN
 from evals.trace import NodeSpans
 from kosis_chat.llm.model import MockClient
-from kosis_rag import text
+from kosis_rag.adapters.files import read_records
 from kosis_rag.graph import build_graph, run_search
-from kosis_rag.pipeline import REPO, SearchSettings, load_resources, read_records
+from kosis_rag.pipeline import REPO, SearchSettings, load_resources
+from kosis_rag.shared import tabletext as text
 
 KS = (1, 5, 10)
 SELECTABLE = ("S1", "S2", "S1-w.5")  # chosen among on dev (plans/T2-39.md Eval)

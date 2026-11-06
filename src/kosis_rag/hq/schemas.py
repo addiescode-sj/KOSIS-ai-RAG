@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from kosis_rag.fields import TableFields
-from kosis_rag.schemas import TableRecord
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.fields import TableFields
 
 QType = Literal["concept", "condition", "distinct", "keyword"]
 TYPES: tuple[str, ...] = ("concept", "condition", "distinct", "keyword")
@@ -36,7 +36,7 @@ class HqState(BaseModel):
     key: str
     record: TableRecord | None = None  # load
     fields: TableFields | None = None  # load
-    doc: str = ""  # load: the table's n2 embedding text (kosis_rag.text.build_doc)
+    doc: str = ""  # load: the table's n2 embedding text (kosis_rag.shared.tabletext.build_doc)
     messages: list[dict[str, str]] = Field(default_factory=list)  # prompt: system + user; validate adds re-ask turns
     prompt_hash: str = ""  # prompt: hash of the fixed template + version (cache folder); the table's own text is
     # keyed separately (graph.user_sha, in the cache file name)

@@ -10,11 +10,51 @@ import re
 
 from pydantic import BaseModel, Field
 
-from kosis_rag.filters import MIN_SIDO, REGION_LEVEL_DIMS, SIDO_LABELS, has_dimension, table_regions
-from kosis_rag.roles import table_roles
-from kosis_rag.schemas import TableRecord
-from kosis_rag.vocab import (FEMALE_ONLY, FEMALE_WORDS, HOUSEHOLD_SIZE, MALE_ONLY, MALE_WORDS, MARITAL_WORDS,
-                             dimension_keys, measure_keys, normalize_dimension)
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.roles import table_roles
+from kosis_rag.shared.vocab import (FEMALE_ONLY, FEMALE_WORDS, HOUSEHOLD_SIZE, MALE_ONLY, MALE_WORDS, MARITAL_WORDS,
+                                    SIDO_LABELS, dimension_keys, measure_keys, normalize_dimension)
+
+# T2-41 S1: from filters.py, so fields does not import filters (filters imports fields)
+MIN_SIDO = 3  # a class is administrative only with at least this many 시도 labels ("국적(지역)별" has none)
+REGION_LEVEL_DIMS = {"시도", "시군구", "읍면동"}  # decided on TableClass.levels when present (T2-25, PR #10)
+SEX = re.compile(r"(?:^|\s|의\s?)성$|남녀")  # "성", "가구주의 성"; not "세대구성"
+# a table with no administrative class whose name starts with one 시도 is that 시도's table (T2-29, 분석 #22: 33 tables
+# such as "서울특별시 총조사인구 총괄(...)"); full names only, followed by a non-Hangul character
+TABLE_SIDO = re.compile("^(" + "|".join(sorted((x for x in SIDO_LABELS if len(x) >= 3), key=len, reverse=True))
+                        + r")(?![가-힣])")
+
+
+def table_regions(record: TableRecord) -> set[str] | None:
+    """Official 시도 names the table's administrative classes hold; None when it has no administrative class.
+
+    A table with no administrative class whose name starts with a 시도 ("부산광역시 총조사인구 총괄(…)") holds that
+    one 시도 (T2-29, 분석 #22).
+    """
+    found = [{SIDO_LABELS[x] for x in c.labels if x in SIDO_LABELS} for c in record.classes]
+    found = [names for names in found if len(names) >= MIN_SIDO]
+    if found:
+        return set().union(*found)
+    m = TABLE_SIDO.match(record.info.table_name.strip())
+    return {SIDO_LABELS[m.group(1)]} if m else None
+
+
+def has_dimension(record: TableRecord, dim: str, names: list[str]) -> bool:
+    """Whether the table breaks down by the key `dim`; `names` are its breakdown names (from its name and classes).
+
+    A name counts when its standard key (vocab.dimension_keys: 가구의 크기 -> 가구원수, 배우관계 -> 혼인상태, 도 -> 시도)
+    is `dim`, or when it holds `dim` as text (T2-29, 분석 #26).
+    """
+    keys = {k for n in names for k in dimension_keys(n)}
+    if dim in REGION_LEVEL_DIMS:
+        levels = {lv for c in record.classes for lv in (getattr(c, "levels", None) or {})}
+        if levels:
+            return dim in levels
+        return dim in keys or "행정구역" in keys or any(dim in n or "행정구역" in n for n in names)  # no level counts
+    if dim == "성":
+        return "성" in keys or any(SEX.search(n) for n in names)
+    return dim in keys or any(dim in n for n in names)
+
 
 # units accepted from an item name's last bracket, e.g. "남자 (명)"; "(15세 이상)" or "(치매 포함)" are not units
 ITEM_UNITS = {"명", "가구", "건", "%", "호", "세", "천명당", "개", "명/㎢", "세대", "만원", "원", "천원", "개월", "㎡", "쌍"}

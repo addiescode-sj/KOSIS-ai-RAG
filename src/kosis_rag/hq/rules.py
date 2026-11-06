@@ -18,11 +18,11 @@ from __future__ import annotations
 import re
 from difflib import SequenceMatcher
 
-from kosis_rag.fields import TableFields
 from kosis_rag.hq.schemas import HqQuestion
-from kosis_rag.schemas import TableRecord
-from kosis_rag.text import norm_name
-from kosis_rag.vocab import SIDO_LABELS
+from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.shared.fields import TableFields
+from kosis_rag.shared.tabletext import norm_name
+from kosis_rag.shared.vocab import SIDO_LABELS
 
 NAME_COPY = 0.9
 DUPLICATE = 0.95

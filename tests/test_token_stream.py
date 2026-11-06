@@ -17,7 +17,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from backend.app import main  # noqa: E402
 from kosis_rag import chain  # noqa: E402
 from kosis_rag.graph import build_graph, run_search, stream_search  # noqa: E402
-from kosis_rag.schemas import TableCandidate  # noqa: E402
+from kosis_rag.schemas.io import TableCandidate  # noqa: E402
 from test_api_nodes import _resources  # noqa: E402
 
 pytestmark = pytest.mark.offline

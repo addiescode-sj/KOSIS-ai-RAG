@@ -38,4 +38,4 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = {"" = "src"}
 # T2-41: every package under src, added by the step that creates it (tests/test_layout.py checks the list)
-packages = ["kosis_rag", "kosis_rag.hq"]
+packages = ["kosis_rag", "kosis_rag.adapters", "kosis_rag.hq", "kosis_rag.schemas", "kosis_rag.shared"]
