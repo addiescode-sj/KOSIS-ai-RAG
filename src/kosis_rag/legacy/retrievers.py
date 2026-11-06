@@ -1,31 +1,41 @@
-"""BM25, ChromaDB and hybrid (RRF) retrievers. Each reports a score in Document.metadata["score"] (the no-answer check
-needs it); the hybrid keeps the dense cosine there and orders by RRF (T2-06)."""
+"""BM25, ChromaDB, hybrid (RRF), condition and question-index retrievers (T2-41 S2: from retriever.py, query.py and
+hq/index.py). LangChain BaseRetriever wrappers whose bodies call the stage functions (retrieve/, parse/), P2-D18.
+
+Each reports a score in Document.metadata["score"] (the no-answer check needs it); the hybrid keeps the dense cosine
+there and orders by RRF (T2-06). Unlike the stage functions they keep what the last query removed / relaxed in
+`last_*` attributes, as their callers (build_search, chain.answer, the eval runners, lab, tests) read them.
+"""
 
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
-from rank_bm25 import BM25Okapi
 
+from kosis_rag.parse.constants import MAX_RESULTS
+from kosis_rag.parse.node import parse_query
+from kosis_rag.parse.schemas import ParsedQuery
+from kosis_rag.retrieve.bm25 import Bm25Index, bm25_index, bm25_search
+from kosis_rag.retrieve.constants import HQ_DOC_FORMAT, HQ_N_QUESTIONS
+from kosis_rag.retrieve.dense import DenseIndex
+from kosis_rag.retrieve.fuse import rrf_fuse
+from kosis_rag.retrieve.hq import HqIndex, collection_name
+from kosis_rag.retrieve.lists import condition_filter, search_list
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.resources import ChromaConfig
 from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
-
-_WORD = re.compile(r"[0-9A-Za-z가-힣]+")
 
 
 def env_chroma_config() -> ChromaConfig:
     """CHROMA_HOST / CHROMA_PORT from the environment or .env (loads .env), as vectorstore.chroma_address read them.
 
     T2-41 S1: chroma_client takes a ChromaConfig; until S4 moves the environment to backend/app/config.py, the
-    callers in src that connected with no arguments build it here.
+    callers in src that connected with no arguments build it here (S2: from retriever.py).
     """
     from dotenv import load_dotenv
 
@@ -33,19 +43,8 @@ def env_chroma_config() -> ChromaConfig:
     return ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
 
 
-def tokenize(text: str) -> list[str]:
-    """Words plus Korean character bigrams, so '출생아수' also matches '출생아 수'."""
-    # TODO(T2-04): placeholder tokenizer (no morphological analyzer). Replace with the Korean tokenizer T2-04 picks
-    # (e.g. Kiwi); BM25 is rebuilt in memory, so changing this function is the whole swap.
-    tokens: list[str] = []
-    for word in _WORD.findall(text.lower()):
-        tokens.append(word)
-        tokens += [word[i : i + 2] for i in range(len(word) - 1)]
-    return tokens
-
-
 class BM25TableRetriever(BaseRetriever):
-    """Top-k tables by BM25. Score 0 means no query token appears in any table text."""
+    """Top-k tables by BM25 (retrieve.bm25.bm25_search). Score 0 means no query token appears in any table text."""
 
     docs: list[Document]
     k: int = 20  # upper bound; callers slice to their own k (SearchArgs.k <= 20)
@@ -56,20 +55,24 @@ class BM25TableRetriever(BaseRetriever):
     @classmethod
     def from_documents(cls, docs: list[Document], k: int = 20,
                        query_text: Callable[[str], str] | None = None) -> BM25TableRetriever:
-        return cls(docs=docs, k=k, bm25=BM25Okapi([tokenize(d.page_content) for d in docs]), query_text=query_text)
+        return cls.from_index(bm25_index(docs, k=k, query_text=query_text))
+
+    @classmethod
+    def from_index(cls, index: Bm25Index) -> BM25TableRetriever:
+        """The retriever over a retrieve.bm25.Bm25Index (bm25_text, hq_bm25)."""
+        return cls(docs=index.docs, k=index.k, bm25=index.bm25, query_text=index.query_text)
+
+    @property
+    def index(self) -> Bm25Index:
+        return Bm25Index(docs=self.docs, bm25=self.bm25, k=self.k, query_text=self.query_text)
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
-        scores = self.bm25.get_scores(tokenize(self.query_text(query) if self.query_text else query))
-        top = sorted(range(len(self.docs)), key=lambda i: scores[i], reverse=True)[: self.k]
-        return [
-            Document(page_content=self.docs[i].page_content, metadata={**self.docs[i].metadata, "score": float(scores[i])}, id=self.docs[i].id)
-            for i in top
-            if scores[i] > 0
-        ]
+        return bm25_search(self.index, query)
 
 
 class ChromaTableRetriever(BaseRetriever):
-    """Top-k tables by cosine similarity over a T2-24 collection. Score = 1 - cosine distance (higher is closer).
+    """Top-k tables by cosine similarity over a T2-24 collection (retrieve.dense.DenseIndex.search). Score = 1 - cosine
+    distance (higher is closer).
 
     The collection holds vectors we computed ourselves (embedding_function=None), so the query must be embedded
     with the same model; `connect` refuses a collection built with another model.
@@ -126,130 +129,133 @@ class ChromaTableRetriever(BaseRetriever):
         return cls(collection=collection, embed_query=lambda q: embedder.embed_query(text.norm_query(q)), k=k,
                    doc_format=fmt)
 
+    @property
+    def index(self) -> DenseIndex:
+        """The stateless dense index over this retriever's collection and embedder."""
+        return DenseIndex(collection=self.collection, embed_query=self.embed_query, k=self.k, doc_format=self.doc_format)
+
     def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> ChromaTableRetriever:
         """A copy that applies `f`; the tools keep their search_tables(question, k) signature."""
         return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {},
                                        "last_relaxed": []})
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
-        # TODO(T2-09): Chroma always returns k hits, so the chain's "no candidates" refusal never fires here;
-        # refusal relies on the LLM's NO_MATCH until a cosine threshold is calibrated on the L1 dev split.
-        extra, n = {}, self.k
         self.last_removed, self.last_relaxed = {}, []
-        f = self.table_filter
-        if not f.is_empty():
-            if not self.records:
-                raise ValueError("a table filter needs records (tables.jsonl) to decide on")
-            keys, self.last_relaxed, self.last_removed = filter_with_relaxation(self.records, f)
-            f = relax(f, self.last_relaxed)
-            if not keys:  # no table holds the requested years (the one condition never relaxed); reasons in last_removed
-                return []
-            extra, n = {"where": {"key": {"$in": sorted(keys)}}}, min(self.k, len(keys))
-        res = self.collection.query(query_embeddings=[self.embed_query(query)], n_results=n,
-                                    include=["documents", "metadatas", "distances"], **extra)
-        docs = [
-            Document(page_content=doc, metadata={**meta, "score": 1.0 - dist}, id=key)
-            for key, doc, meta, dist in zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0])
-        ]
-        return soft_rank(docs, self.records, f)
+        docs, self.last_removed, self.last_relaxed, _ = self.index.search(query, table_filter=self.table_filter,
+                                                                          records=self.records)
+        return docs
 
 
-def condition_filter(table_filter: TableFilter | None, records: dict[str, TableRecord] | None) -> TableFilter | None:
-    """The filter every list is searched under: hybrid_search's relaxation step, shared by the graph's lists (T2-39).
+class HqRetriever(BaseRetriever):
+    """Top-k tables by their closest hypothetical questions (retrieve.hq.HqIndex.search: max-pool over the top
+    n_questions; score = 1 - cosine distance of the best question). Filters like ChromaTableRetriever: `with_filter`
+    decides the TableFilter on `records`, relaxes it when no table meets it (last_relaxed) and sends `key $in`.
 
-    In: table_filter = conditions from the question (None or empty: no filtering); records = the registry the filter
-        is decided on. Out: the filter as given when it is None or empty; else the filter with the conditions no table
-        meets dropped (filters.filter_with_relaxation, T2-29). A filter the caller relaxed already comes back the same.
-    Side effects: raises ValueError when a non-empty filter has no records to decide on.
-    Node: condition (and hybrid_search for the old path).
+    Documents carry the table's catalog metadata, key, score, hq_best_question, hq_best_id and hq_n, and the
+    table's n2 text as page_content (text_of). A question whose table key is not in `records` is skipped, counted in
+    last_missing and logged.
     """
-    if table_filter is None or table_filter.is_empty():
-        return table_filter
-    if not records:
-        raise ValueError("a condition needs records (tables.jsonl) to decide on")
-    _, dropped, _ = filter_with_relaxation(records, table_filter)
-    return relax(table_filter, dropped)
+
+    collection: Any
+    embed_query: Callable[[str], list[float]]
+    text_of: dict[str, str] = Field(default_factory=dict)  # key -> n2 embedding text (the re-ranker passage)
+    records: dict[str, TableRecord] = Field(default_factory=dict)
+    k: int = 50
+    n_questions: int = HQ_N_QUESTIONS
+    n_docs: int | None = None  # questions in the collection (n_results never asks for more)
+    table_filter: TableFilter = Field(default_factory=TableFilter)
+    last_removed: dict[str, str] = Field(default_factory=dict)
+    last_relaxed: list[str] = Field(default_factory=list)
+    last_missing: int = 0  # tables of the last query's hits not in records (skipped)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @classmethod
+    def connect(cls, build_id: str, dense: Any, *, records: dict[str, TableRecord], text_of: dict[str, str],
+                k: int = 50, name: str | None = None) -> HqRetriever:
+        """Open the question collection of `build_id` for the dense side's embedder.
+
+        In: build_id = HQ_BUILD; dense = the table retriever (ChromaTableRetriever: its embed_query and its
+            collection's embed_model / embed_ckpt are reused); records, text_of = the registry and n2 passages;
+            k = tables returned; name = collection override. Out: HqRetriever.
+        Side effects: connects to Chroma; ValueError when the collection was embedded with other weights.
+        Node: none (load_resources calls it; retrieve_hq searches it).
+        """
+        from kosis_rag.adapters.chroma import chroma_client
+
+        meta = (getattr(getattr(dense, "collection", None), "metadata", None) or {})
+        ckpt = meta.get("embed_ckpt") or meta.get("embed_model")
+        name = name or collection_name(build_id, ckpt)
+        collection = chroma_client(env_chroma_config()).get_collection(name, embedding_function=None)
+        hq_meta = collection.metadata or {}
+        if (hq_meta.get("embed_ckpt") or hq_meta.get("embed_model")) != ckpt or hq_meta.get("doc_format") != HQ_DOC_FORMAT:
+            raise ValueError(f"question collection {name} was embedded with {hq_meta.get('embed_ckpt')!r} "
+                             f"({hq_meta.get('doc_format')!r}); the dense side uses {ckpt!r}")
+        return cls(collection=collection, embed_query=dense.embed_query, text_of=text_of, records=records, k=k,
+                   n_docs=collection.count())
+
+    @property
+    def index(self) -> HqIndex:
+        """The stateless question index over this retriever's collection, embedder, passages and registry."""
+        return HqIndex(collection=self.collection, embed_query=self.embed_query, text_of=self.text_of,
+                       records=self.records, k=self.k, n_questions=self.n_questions, n_docs=self.n_docs)
+
+    def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> HqRetriever:
+        """A copy that applies `f` (as ChromaTableRetriever.with_filter).
+
+        Side effects: none. Node: retrieve_hq (through retrieve.lists.search_list).
+        """
+        return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {},
+                                       "last_relaxed": [], "last_missing": 0})
+
+    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+        """Tables for the question through their questions (HqIndex.search); sets last_removed / last_relaxed /
+        last_missing. Node: retrieve_hq."""
+        self.last_removed, self.last_relaxed, self.last_missing = {}, [], 0
+        docs, self.last_removed, self.last_relaxed, self.last_missing = self.index.search(
+            query, table_filter=self.table_filter)
+        return docs
 
 
-def search_list(query: str, retriever: BaseRetriever, *, table_filter: TableFilter | None = None,
-                records: dict[str, TableRecord] | None = None, k_each: int = 50, filtered: bool | None = None
-                ) -> tuple[list[Document], dict[str, str]]:
-    """One retriever's ranked list under the question's conditions (one list of hybrid_search, T2-39).
+class ConditionRetriever(BaseRetriever):
+    """Parses each question (parse.node.parse_query with `sigungu`) and applies the conditions to `base`.
 
-    In: query = the user question; retriever = one list's retriever; table_filter = the filter from condition_filter
-        (None or empty: no filtering; soft signals only re-rank); records = the registry; k_each = top kept;
-        filtered = take the filtering path (default: when table_filter is non-empty). hybrid_search decides it on the
-        filter before relaxation, as it always did, so a filter relaxed to empty still takes the filtering path there.
-    Out: (docs, removed). A retriever with with_filter (Chroma, HqRetriever) filters before its search, the others
-        (BM25) are filtered after and soft-ranked; then the top k_each. removed = table key -> why the filter dropped it.
-    Side effects: calls the retriever (Chroma query / BM25 scoring); ValueError for a non-empty filter without records.
-    Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25 (and hybrid_search).
+    A base with `with_filter` (the Chroma retriever) filters before the vector search; any other base (BM25) is asked
+    for its candidates first and filtered after, so give it a large k. At most MAX_RESULTS (10) tables come back.
+    When no table meets the conditions they are relaxed one at a time (filters.filter_with_relaxation); the dropped
+    ones are in `last_relaxed`. T2-41 S2: the 시군구 dictionary is the `sigungu` field (default {}: 시군구 names are not
+    read); it used to be query.SIGUNGU, loaded from data/sigungu.json at import.
     """
-    if filtered is None:
-        filtered = table_filter is not None and not table_filter.is_empty()
-    if not filtered:
-        docs = retriever.invoke(query)[:k_each]
-        if table_filter is not None and records and table_filter.is_soft():
-            docs = soft_rank(docs, records, table_filter)  # soft signals only re-rank
-        return docs, {}
-    if not records:
-        raise ValueError("a condition needs records (tables.jsonl) to decide on")
-    removed: dict[str, str] = {}
-    if hasattr(retriever, "with_filter"):
-        scoped: Any = retriever.with_filter(table_filter, records)
-        docs = scoped.invoke(query)
-        removed.update(scoped.last_removed)
-    else:
-        docs = []
-        for d in retriever.invoke(query):
-            record = records.get(d.metadata["key"])
-            reason = why_excluded(record, table_filter) if record is not None else None
+
+    base: BaseRetriever
+    records: dict[str, TableRecord]
+    region_mode: Literal["hard", "soft"] = "hard"
+    k: int = MAX_RESULTS
+    sigungu: dict[str, list[str]] = Field(default_factory=dict)  # 시군구 -> 시도 names (adapters.files.load_sigungu)
+    last_query: ParsedQuery | None = None
+    last_removed: dict[str, str] = Field(default_factory=dict)
+    last_relaxed: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> list[Document]:
+        self.last_query = parsed = parse_query(query, sigungu=self.sigungu)
+        f = parsed.to_filter(self.region_mode)
+        _, self.last_relaxed, _ = filter_with_relaxation(self.records, f)
+        f = relax(f, self.last_relaxed)
+        if hasattr(self.base, "with_filter"):
+            filtered: Any = self.base.with_filter(f, self.records)
+            docs = filtered.invoke(query)
+            self.last_removed = dict(filtered.last_removed)
+            return docs[: min(self.k, MAX_RESULTS)]
+        docs, self.last_removed = [], {}
+        for doc in self.base.invoke(query):
+            record = self.records.get(doc.metadata["key"])
+            reason = why_excluded(record, f) if record is not None else None
             if reason is None:
-                docs.append(d)
+                docs.append(doc)
             else:
-                removed[d.metadata["key"]] = reason
-        docs = soft_rank(docs, records, table_filter)
-    return docs[:k_each], removed
-
-
-def rrf_fuse(lists: list[list[Document]], names: list[str] | None = None, *, k: int = 50, c: int = 60,
-             score_from: int = 0, weights: list[float] | None = None) -> list[Document]:
-    """Fuse ranked lists by weighted reciprocal rank over table keys (T2-06; weights T2-39).
-
-    In: lists = ranked lists (dense first); names = one label per list for rank_<name> (default r0, r1, ...);
-        k = tables returned; c = RRF constant; score_from = index of the list whose score stays in metadata["score"];
-        weights = one weight per list (default 1.0 each: RRF = sum of 1 / (c + rank)).
-    Out: at most k tables in fused order (ties keep first-seen order); each carries metadata score (the score_from
-        list's score, or that list's lowest score for a table only other lists found), score_from (its name or
-        "other"), rrf_score and rank_<name> per list it appeared in. The first list a table appears in gives its text.
-    Side effects: none.
-    Node: fuse (and hybrid_search).
-    """
-    names = names or [f"r{i}" for i in range(len(lists))]
-    weights = weights or [1.0] * len(lists)
-    rrf: dict[str, float] = {}
-    ranks: dict[str, dict[str, int]] = {}
-    first: dict[str, Document] = {}
-    for name, w, docs in zip(names, weights, lists):
-        for rank, d in enumerate(docs, 1):
-            key = d.metadata["key"]
-            rrf[key] = rrf.get(key, 0.0) + w / (c + rank)
-            ranks.setdefault(key, {})[name] = rank
-            first.setdefault(key, d)
-
-    # keep the score_from list's score (the no-answer threshold is calibrated on it, T2-09)
-    anchor = lists[score_from] if score_from < len(lists) else []
-    own = {d.metadata["key"]: d.metadata.get("score") for d in anchor}
-    floor = min((v for v in own.values() if v is not None), default=None)
-    order = sorted(rrf, key=lambda key: -rrf[key])  # stable: ties keep first-seen order
-    out = []
-    for key in order[:k]:
-        d = first[key]
-        score, source = (own[key], names[score_from]) if key in own else (floor, "other")
-        out.append(Document(page_content=d.page_content, id=d.id, metadata={
-            **d.metadata, "score": score, "score_from": source, "rrf_score": rrf[key],
-            **{f"rank_{n}": r for n, r in ranks[key].items()}}))
-    return out
+                self.last_removed[doc.metadata["key"]] = reason
+        return soft_rank(docs, self.records, f)[: min(self.k, MAX_RESULTS)]
 
 
 def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[str] | None = None,
@@ -271,7 +277,7 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
         no records to decide on. A filter no table meets is relaxed once here for both lists
         (filters.filter_with_relaxation, T2-29); a caller that wants the dropped conditions computes them first and
         passes the relaxed filter (HybridRetriever).
-    Node: not a node itself since T2-39: the graph runs its three parts as nodes (condition_filter in condition,
+    Node: not a node itself since T2-39: the graph runs its three parts as nodes (decide_condition in condition,
         search_list in retrieve_*, rrf_fuse in fuse); the old path (HybridRetriever) calls it.
     """
     # 1. one list per retriever: a retriever with with_filter (Chroma) filters before its search, the others after
@@ -280,8 +286,8 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
     lists: list[list[Document]] = []
     removed: dict[str, str] = {}
     for r in retrievers:
-        docs, dropped = search_list(query, r, table_filter=table_filter, records=records, k_each=k_each,
-                                    filtered=filtered)
+        docs, dropped, _, _ = search_list(query, r, table_filter=table_filter, records=records, k_each=k_each,
+                                          filtered=filtered)
         lists.append(docs)
         removed.update(dropped)
 
@@ -293,8 +299,9 @@ class HybridRetriever(BaseRetriever):
     """Reciprocal rank fusion of several retrievers by table key (T2-06): RRF = sum over lists of 1 / (c + rank).
 
     Each list is cut to its top `k_each` before fusing. With `condition` (question -> TableFilter, e.g.
-    `parse_query(q).to_filter()`), a retriever that has `with_filter` (Chroma) filters before its search and the others
-    are filtered after, so every list holds only tables that meet the question's conditions (give BM25 a large k).
+    `parse_query(q, sigungu=...).to_filter()`), a retriever that has `with_filter` (Chroma) filters before its search
+    and the others are filtered after, so every list holds only tables that meet the question's conditions (give BM25
+    a large k).
 
     Order comes from RRF, but metadata["score"] stays the score of `retrievers[score_from]` (the dense cosine), since
     RRF values sit in a narrow band (1/61..2/61) and the no-answer threshold (T2-09) needs a calibrated score.

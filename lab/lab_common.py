@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]  # repo root (lab/ sits directly under it)
-sys.path.insert(0, str(ROOT / "src"))  # kosis_rag.retriever.tokenize, the team's BM25 tokenizer
+sys.path.insert(0, str(ROOT / "src"))  # kosis_rag.shared.tokenize.tokenize, the team's BM25 tokenizer
 
 from normalize_text import RULES_VERSION, TABLES, build_doc, load_records, norm_query  # noqa: E402
 
@@ -113,9 +113,9 @@ def model_revision(name: str) -> str | None:
 
 
 def bm25_tokenize():
-    """The team's BM25 tokenizer (words + Korean bigrams), so lab numbers match src/kosis_rag/retriever.py."""
+    """The team's BM25 tokenizer (words + Korean bigrams), so lab numbers match src/kosis_rag/shared/tokenize.py."""
     try:
-        from kosis_rag.retriever import tokenize
+        from kosis_rag.shared.tokenize import tokenize
     except ImportError:  # langchain-core missing in this env: same rule, copied
         import re
 

@@ -16,12 +16,12 @@ from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
-from kosis_rag import query as query_rules  # noqa: E402
 from kosis_rag.graph import build_graph, run_search  # noqa: E402
 from kosis_rag.hcx import HcxResult  # noqa: E402
+from kosis_rag.legacy.retrievers import HybridRetriever, hybrid_search  # noqa: E402
+from kosis_rag.parse import node as parse_step  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
 from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, rerank_stage1, rerank_stage2  # noqa: E402
-from kosis_rag.retriever import HybridRetriever, hybrid_search  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.shared.catalog import to_document  # noqa: E402
@@ -281,13 +281,13 @@ def test_node_spans_mark_a_failing_node():
 
 def test_graph_parses_the_question_once(monkeypatch):
     calls = []
-    real = query_rules.parse_query
+    real = parse_step.parse_query
 
-    def counting(question):
+    def counting(question, **kw):
         calls.append(question)
-        return real(question)
+        return real(question, **kw)
 
-    monkeypatch.setattr(query_rules, "parse_query", counting)
+    monkeypatch.setattr(parse_step, "parse_query", counting)
     resources = load_resources(_settings(cond_filter=True), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
     run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "2023년 인구")
     assert calls == ["2023년 인구"]

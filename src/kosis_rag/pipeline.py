@@ -27,23 +27,26 @@ build_search, the nested-retriever path, ignores it so its behaviour stays as it
 
 from __future__ import annotations
 
+import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import BaseModel
 
-from kosis_rag.adapters.files import read_records
+from kosis_rag.adapters import files
+from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever, HqRetriever, HybridRetriever
+from kosis_rag.parse.node import parse_query
 from kosis_rag.rerank import LLM_RERANKERS, CrossEncoderReranker, LLMReranker, Score, Select, passage_scorer
-from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever, HybridRetriever
+from kosis_rag.retrieve import bm25 as table_bm25  # module access: pipeline re-exports none of its names
+from kosis_rag.retrieve import hq as question_index
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.shared import tabletext as text
-from kosis_rag.shared.catalog import to_document
 
 REPO = Path(__file__).resolve().parents[2]
 OFF = ("", "0", "off", "false", "no", "none")
+log = logging.getLogger(__name__)
 
 
 class SearchSettings(BaseModel):
@@ -97,21 +100,6 @@ class SearchSettings(BaseModel):
         return " -> ".join(parts)
 
 
-def bm25_text(records: list[TableRecord], k: int, fmt: str = text.DOC_FORMAT) -> BM25TableRetriever:
-    """BM25 over the full table text (every label) of `fmt`, questions with the same surface rules (lab F0).
-
-    In: records = every table; k = tables each search returns; fmt = the table text format (kosis_rag.shared.tabletext).
-    Out: a BM25TableRetriever whose documents carry the catalog metadata (key, ids, names, period, url).
-    Side effects: builds the BM25 index in memory. Node: none directly (built by load_resources; the retrieve
-    node searches it).
-    """
-    docs = []
-    for r in records:
-        catalog = to_document(r.info)
-        docs.append(Document(page_content=text.build_doc(r, fmt)["bm25_text"], metadata=catalog.metadata, id=catalog.id))
-    return BM25TableRetriever.from_documents(docs, k=k, query_text=text.norm_query)
-
-
 def text_format(s: SearchSettings, dense: BaseRetriever) -> str:
     """The table text the whole search uses: the dense collection's format; TEXT_FORMAT, when set, must agree.
 
@@ -143,36 +131,42 @@ class SearchResources:
     stage1_score: Score | None  # None = stage 1 off
     select: Select | None  # None = stage 2 off
     stage2_name: str
-    hq: BaseRetriever | None = None  # T2-39 question index, dense (kosis_rag.hq.index.HqRetriever); None = off
+    hq: BaseRetriever | None = None  # T2-39 question index, dense (kosis_rag.legacy.retrievers.HqRetriever); None = off
     hq_bm25: BaseRetriever | None = None  # T2-39 question index, BM25 over each table's questions; None = off
+    sigungu: dict[str, list[str]] = field(default_factory=dict)  # 시군구 -> 시도 names parse reads (P2-D9, T2-41 S2)
 
+
+_SIGUNGU_WARNED: list[bool] = []  # set by the first load_resources that finds no sigungu.json
 
 def load_resources(settings: SearchSettings | None = None, *, records: list[TableRecord] | None = None,
                    dense: BaseRetriever | None = None, stage1_score: Score | None = None,
                    select: Select | None = None, hq: BaseRetriever | None = None,
-                   hq_bm25: BaseRetriever | None = None) -> SearchResources:
+                   hq_bm25: BaseRetriever | None = None,
+                   sigungu: dict[str, list[str]] | None = None) -> SearchResources:
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
-    In: settings = search settings (default: .env); records, dense, stage1_score, select, hq, hq_bm25 = parts that
-        replace the loaded ones (tests pass fakes here so nothing real is touched).
+    In: settings = search settings (default: .env); records, dense, stage1_score, select, hq, hq_bm25, sigungu = parts
+        that replace the loaded ones (tests pass fakes here so nothing real is touched).
     Out: SearchResources. stage1_score is set when RERANK_CKPT is set or a scorer is given; select when STAGE2 names
         a known re-ranker or a selector is given. stage2_name = STAGE2, or "custom" for a given selector with STAGE2
         off. BM25 returns every table when the condition filter is on (it is filtered after the search), else `pool`.
         hq / hq_bm25 (T2-39) are set only when HQ_BUILD is set (hq_bm25 also needs HQ_BM25 on); otherwise None, even
-        when given. The question BM25 follows the BM25 `k` rule above.
-    Side effects: reads tables.jsonl, connects to Chroma and loads the query embedder, loads the cross-encoder, opens
-        the question collection (reusing the dense retriever's query embedder) and reads its questions.jsonl, unless
-        the matching part is given. Raises ValueError for a TEXT_FORMAT that disagrees with the collection or an
+        when given. The question BM25 follows the BM25 `k` rule above. sigungu = the 시군구 -> 시도 dictionary parse
+        reads (data/sigungu.json, {} when the file is missing; T2-41 S2: it was query.SIGUNGU, read at import).
+    Side effects: reads tables.jsonl and data/sigungu.json (one warning when it is missing), connects to Chroma and
+        loads the query embedder, loads the cross-encoder, opens the question collection (reusing the dense
+        retriever's query embedder) and reads its questions.jsonl, unless the matching part is given. Raises ValueError for a TEXT_FORMAT that disagrees with the collection or an
         unknown STAGE2, as build_search always did.
     Node: none (called once before build_search / build_graph).
     """
     s = settings or SearchSettings.from_env()
     # 1. registry, dense collection and the text format they agree on
-    records = records if records is not None else read_records(s.tables)
+    records = records if records is not None else files.read_records(s.tables)
     if dense is None:
         dense = ChromaTableRetriever.connect(s.collection, k=s.pool, device=s.device, embed_ckpt=s.embed_ckpt)
     fmt = text_format(s, dense)
-    bm25 = bm25_text(records, k=len(records) if s.cond_filter else s.pool, fmt=fmt)  # filtered after: score all
+    bm25 = BM25TableRetriever.from_index(  # filtered after: score all
+        table_bm25.bm25_text(records, k=len(records) if s.cond_filter else s.pool, fmt=fmt))
 
     # 2. stage 1 scorer (fine-tuned cross-encoder)
     text_of: dict[str, str] | None = None
@@ -195,25 +189,32 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
     if not s.hq_build:
         hq, hq_bm25 = None, None
     else:
-        from kosis_rag.hq import index as hq_index
-
         if hq is None or (s.hq_bm25 and hq_bm25 is None):
             text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
         if hq is None:
-            hq = hq_index.HqRetriever.connect(s.hq_build, dense, records=by_key, text_of=text_of, k=s.pool)
+            hq = HqRetriever.connect(s.hq_build, dense, records=by_key, text_of=text_of, k=s.pool)
         if not s.hq_bm25:
             hq_bm25 = None
         elif hq_bm25 is None:
-            hq_bm25 = hq_index.hq_bm25(hq_index.read_questions(s.hq_build), by_key, text_of,
-                                       k=len(records) if s.cond_filter else s.pool)
+            hq_bm25 = BM25TableRetriever.from_index(question_index.hq_bm25(
+                files.read_questions(s.hq_build), by_key, text_of, k=len(records) if s.cond_filter else s.pool))
+
+    # 5. 시군구 -> 시도 names for parse (P2-D9: read here once, not at import)
+    if sigungu is None:
+        sigungu = files.load_sigungu()
+        if not sigungu and not _SIGUNGU_WARNED:
+            _SIGUNGU_WARNED.append(True)  # once per process, as the old import-time read did
+            log.warning("data/sigungu.json not found: 시군구 names in questions are not read as 시도 "
+                        "(build it with `python -m kosis_rag.shared.vocab --data-dir <provided data>`)")
     return SearchResources(settings=s, records=by_key, dense=dense, bm25=bm25,
                            text_format=fmt, stage1_score=stage1_score, select=select,
-                           stage2_name=s.stage2 if s.stage2 not in OFF else "custom", hq=hq, hq_bm25=hq_bm25)
+                           stage2_name=s.stage2 if s.stage2 not in OFF else "custom", hq=hq, hq_bm25=hq_bm25,
+                           sigungu=sigungu)
 
 
 def build_search(settings: SearchSettings | None = None, *, records: list[TableRecord] | None = None,
                  dense: BaseRetriever | None = None, stage1_score: Score | None = None,
-                 select: Select | None = None) -> BaseRetriever:
+                 select: Select | None = None, sigungu: dict[str, str] | None = None) -> BaseRetriever:
     """The staged retriever for `settings` (default: .env). The keyword parts replace the loaded ones (tests).
 
     In: as load_resources. Out: HybridRetriever (with the T2-14 condition when COND_FILTER is on), wrapped by
@@ -222,14 +223,13 @@ def build_search(settings: SearchSettings | None = None, *, records: list[TableR
     path searches as it did before T2-39.
     Side effects: those of load_resources. Node: not used by the graph (build_graph uses load_resources directly).
     """
-    from kosis_rag.query import parse_query
-
     settings = (settings or SearchSettings.from_env()).model_copy(update={"hq_build": None, "hq_bm25": False})
-    r = load_resources(settings, records=records, dense=dense, stage1_score=stage1_score, select=select)
+    r = load_resources(settings, records=records, dense=dense, stage1_score=stage1_score, select=select,
+                       sigungu=sigungu)
     s = r.settings
     retriever: BaseRetriever = HybridRetriever(
         retrievers=[r.dense, r.bm25], names=["dense", "bm25"], k=s.pool, k_each=s.pool, score_from=0,
-        records=r.records, condition=(lambda q: parse_query(q).to_filter()) if s.cond_filter else None)
+        records=r.records, condition=(lambda q: parse_query(q, sigungu=r.sigungu).to_filter()) if s.cond_filter else None)
     if r.stage1_score is not None:
         retriever = CrossEncoderReranker(base=retriever, score=r.stage1_score, n=s.rerank_n, mode=s.rerank_mode)
     if r.select is not None:

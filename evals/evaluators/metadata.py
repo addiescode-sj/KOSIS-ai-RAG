@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from kosis_rag.shared.fields import TableFields, table_fields
 from kosis_rag.shared.filters import has_dimension
-from kosis_rag.query import DIMENSION_WORDS
+from kosis_rag.shared.vocab import DIMENSION_WORDS
 from kosis_rag.schemas.catalog import TableRecord
 
 FIELDS = tuple(f for f in TableFields.model_fields if f != "key")

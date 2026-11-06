@@ -24,13 +24,14 @@ from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
-from kosis_rag import query as query_rules  # noqa: E402
 from kosis_rag.graph import SearchState, build_graph, make_nodes, run_search  # noqa: E402
 from kosis_rag.hcx import HcxResult  # noqa: E402
-from kosis_rag.hq.index import HqRetriever  # noqa: E402
+from kosis_rag.legacy.retrievers import HqRetriever, HybridRetriever, hybrid_search  # noqa: E402
+from kosis_rag.parse import node as query_rules  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
 from kosis_rag.rerank import rerank_stage1, rerank_stage2  # noqa: E402
-from kosis_rag.retriever import HybridRetriever, condition_filter, hybrid_search, rrf_fuse, search_list  # noqa: E402
+from kosis_rag.retrieve.fuse import rrf_fuse  # noqa: E402
+from kosis_rag.retrieve.lists import condition_filter, search_list  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.shared.catalog import to_document  # noqa: E402
@@ -172,7 +173,7 @@ def _old_state(question, resources, client, k=5):
     filter, relax, one master hybrid_search over dense + BM25, frozen above), then the same stage and answer functions
     in order."""
     s = resources.settings
-    query = query_rules.parse_query(question)
+    query = query_rules.parse_query(question, sigungu=resources.sigungu)
     table_filter = query.to_filter() if s.cond_filter else None
     relaxed = []
     if table_filter is not None and not table_filter.is_empty():

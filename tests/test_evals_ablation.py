@@ -4,7 +4,8 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_rag.query import ConditionRetriever, parse_query
+from kosis_rag.legacy.retrievers import ConditionRetriever
+from kosis_rag.parse.node import parse_query
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared.filters import TableFilter

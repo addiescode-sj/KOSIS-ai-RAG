@@ -11,7 +11,7 @@ from kosis_rag.adapters.models import resolve_ckpt
 from kosis_rag.clova import WRAP, ClovaReranker, ClovaResult
 from kosis_rag.pipeline import SearchSettings, build_search
 from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, blend_order
-from kosis_rag.retriever import HybridRetriever
+from kosis_rag.legacy.retrievers import HybridRetriever
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared import tabletext as text

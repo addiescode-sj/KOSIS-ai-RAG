@@ -4,7 +4,8 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_rag.query import ConditionRetriever, parse_query
+from kosis_rag.legacy.retrievers import ConditionRetriever
+from kosis_rag.parse.node import parse_query
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared.filters import TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank, table_regions
@@ -170,13 +171,11 @@ def test_sigungu_names_give_their_sido(question, regions):
 
 
 @offline
-def test_sigungu_dictionary_can_be_patched(monkeypatch):
-    import kosis_rag.query as query_rules
-
-    monkeypatch.setattr(query_rules, "SIGUNGU", {"해운대구": ["부산광역시"]})
-    assert parse_query("해운대구 인구").regions == ["부산광역시"]
-    monkeypatch.setattr(query_rules, "SIGUNGU", {})  # no data/sigungu.json: the 시군구 is simply not read
-    assert parse_query("해운대구 인구").regions == []
+def test_sigungu_dictionary_is_passed_in():
+    """T2-41 S2 (P2-D9): the dictionary is an argument (it was the module global query.SIGUNGU)."""
+    assert parse_query("해운대구 인구", sigungu={"해운대구": ["부산광역시"]}).regions == ["부산광역시"]
+    assert parse_query("해운대구 인구", sigungu={}).regions == []  # no data/sigungu.json: the 시군구 is simply not read
+    assert parse_query("해운대구 인구").regions == []  # None reads no file
 
 
 def _record(key, labels):

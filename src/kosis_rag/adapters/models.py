@@ -23,7 +23,7 @@ from typing import Any
 
 # TODO(T2-05): placeholder embedding model (and its tokenizer, used for token counts in index.py). Not final: T2-05
 # compares candidates on the L1 golden set. Changing it means a new collection (reload) and queries embedded with the
-# same model; retriever.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
+# same model; legacy.retrievers.ChromaTableRetriever.connect refuses a collection whose embed_model differs from this value.
 EMBED_MODEL = "nlpai-lab/KURE-v1"
 EMBED_BASE = "BAAI/bge-m3"
 RERANK_BASE = "BAAI/bge-reranker-v2-m3"

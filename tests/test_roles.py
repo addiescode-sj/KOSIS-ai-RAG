@@ -50,7 +50,7 @@ def test_same_word_on_either_side_of_the_name():
 
 @offline
 def test_bundle_table_passes_the_counted_filter_for_each_listed_word():
-    from kosis_rag.query import parse_query
+    from kosis_rag.parse.node import parse_query
     from kosis_rag.shared.filters import TableFilter, lacks_role
 
     bundle = _record("시도/인구동태건수 및 동태율(출생,사망,혼인,이혼)", classes=("행정구역별",))

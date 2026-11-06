@@ -39,6 +39,43 @@
 
 ## S2. parse/ · retrieve/ · legacy/retrievers
 
+옛 모듈 파일 2개(`query.py retriever.py`)는 지웠어요. `hq/index.py`는 질문 색인 적재 CLI(`python -m kosis_rag.hq.index`, S6a에 `kosis_rag_build`로)만 남고 검색 쪽 이름은 모두 옮겼어요. 단계 폴더 `parse/`·`retrieve/`의 step 함수는 `(XxxInput, resources) -> XxxOutput`(BoundaryModel: strict, 모르는 필드 거절)이고, `self.last_*` 상태 없이 지운 표·푼 조건을 **반환값**으로 돌려줘요(P2-D17). LangChain `BaseRetriever` 클래스는 `kosis_rag.legacy.retrievers`로 옮겨 본문이 새 함수를 불러요(P2-D18) — 옛 호출자를 위해 `last_*`는 그대로 채워요. 그래프 노드 이름·간선·순위·점수·RRF는 그대로예요(패리티 fixture 33개 바이트 동일, `docs/openapi.json` 변경 0). 온라인 hq 읽기(`retrieve_hq`·`retrieve_hq_bm25`)는 그대로 있고 기본은 꺼져 있어요(`HQ_BUILD` 비어 있음).
+
+| 옛 import | 새 import | 바뀐 인자·반환 |
+|---|---|---|
+| `kosis_rag.query.parse_query(question, sigungu=None)` | `kosis_rag.parse.node.parse_query(question, *, sigungu=None)` | `sigungu`는 **키워드 전용**. `None`은 이제 **빈 사전**(시군구 이름을 읽지 않음) — 옛 `None`은 import 때 `data/sigungu.json`에서 읽은 전역 `query.SIGUNGU`였어요. 옛 결과가 필요하면 `sigungu=kosis_rag.adapters.files.load_sigungu()`를 넘기세요(그래프·`build_search`는 `SearchResources.sigungu`로 자동) |
+| `kosis_rag.query.SIGUNGU` (모듈 전역, import 때 파일 읽음 + 없으면 경고) | 삭제 → `kosis_rag.pipeline.SearchResources.sigungu` (`load_resources(..., sigungu=None)`가 `adapters.files.load_sigungu()`로 한 번 채움; 빈 사전이면 경고 1회) | `import kosis_rag.parse.node`는 파일을 읽지 않고 경고도 없어요(P2-D9). 테스트는 `load_resources(..., sigungu={...})` 또는 `parse_query(q, sigungu={...})` |
+| `kosis_rag.query.ParsedQuery` | `kosis_rag.parse.schemas.ParsedQuery` | 없음 (보통 `BaseModel` 그대로 — `SearchState.query` 필드이고 openapi 스키마가 같아야 해서 BoundaryModel로 바꾸지 않았어요) |
+| — (신규) | `kosis_rag.parse.schemas.ParseInput(question)` · `ConditionInput(query)` · `ConditionOutput(table_filter, relaxed)` | step In/Out (BoundaryModel) |
+| — (신규, `graph.py` parse 노드 본문) | `kosis_rag.parse.node.parse_question(ParseInput, resources) -> ParsedQuery` | `= parse_query(question, sigungu=resources.sigungu)` |
+| — (신규, `graph.py` condition 노드 본문) | `kosis_rag.parse.node.decide_condition(ConditionInput, resources) -> ConditionOutput` | 옛 노드 본문 그대로(`to_filter` → 완화 → hybrid의 `condition_filter` 단계). `resources.settings.cond_filter`·`resources.records`를 읽어요 |
+| `kosis_rag.query.MAX_RESULTS` · `HARD_MEASURE_WORDS` · `SOFT_MEASURE_WORDS` | `kosis_rag.parse.constants.<같은 이름>` | 없음 |
+| `kosis_rag.query.<정규식>` (`YEAR RANGE BETWEEN BIRTH CYCLES REGION DIMENSION MEASURES …`) | `kosis_rag.parse.patterns.<같은 이름>` | `_ONE_SIDO` → `ONE_SIDO`(다른 모듈이 씀). 나머지 이름 그대로 |
+| `kosis_rag.query.SIDO` · `REGION_WORDS` · `DIMENSION_WORDS` (재수출) | `kosis_rag.shared.vocab.<같은 이름>` | 없음 (재수출 제거) |
+| `kosis_rag.query.SIDO_ORDER` | `kosis_rag.shared.vocab.SIDO_ORDER` | 없음 (`list(SIDO)`) |
+| `kosis_rag.query.ConditionRetriever` | `kosis_rag.legacy.retrievers.ConditionRetriever` | 새 필드 `sigungu: dict = {}` — 옛 클래스는 전역 `SIGUNGU`(파일)를 썼어요. 같은 결과를 원하면 `ConditionRetriever(..., sigungu=load_sigungu())` |
+| `kosis_rag.retriever.tokenize` | `kosis_rag.shared.tokenize.tokenize` | 없음 |
+| `kosis_rag.retriever.BM25TableRetriever` · `ChromaTableRetriever` · `HybridRetriever` · `hybrid_search` | `kosis_rag.legacy.retrievers.<같은 이름>` | 없음 (필드·`connect`·`with_filter`·`last_*` 그대로; `connect`는 S4까지 지금처럼 `.env`·환경을 읽어요). 새 것: `BM25TableRetriever.from_index(Bm25Index)`, `.index` 속성(`Bm25Index` / `DenseIndex`) |
+| `kosis_rag.retriever.env_chroma_config` | `kosis_rag.legacy.retrievers.env_chroma_config` | 없음 (S4에 `backend/app/config.py`로) |
+| `kosis_rag.retriever.condition_filter` · `search_list` | `kosis_rag.retrieve.lists.<같은 이름>` | `search_list`는 **4-튜플** `(docs, removed, relaxed, missing)`을 돌려줘요(옛 `(docs, removed)`). 새 인자 `vector=None`(embed 노드의 벡터; 옛 그래프의 `model_copy(embed_query=…)` 우회를 여기로). 목록으로 `DenseIndex`·`HqIndex`·`Bm25Index`도 받아요 |
+| `kosis_rag.retriever.rrf_fuse` | `kosis_rag.retrieve.fuse.rrf_fuse` | 없음 (`c` 기본값 = `kosis_rag.shared.constants.RRF_C` = 60) |
+| `ChromaTableRetriever` 본문(`_get_relevant_documents`) | `kosis_rag.retrieve.dense.DenseIndex(collection, embed_query, k=20, doc_format=None).search(query, *, vector=None, table_filter=None, records=None)` | `-> (docs, removed, relaxed, missing)` (`missing`은 항상 0) — 계획의 `(docs, removed)`에 `relaxed`·`missing`을 더해 legacy 클래스가 `last_*`를 반환값에서 채워요. `== ChromaTableRetriever.with_filter(f, records).invoke(q)`(테스트). 컬렉션 열기·임베더 불러오기는 하지 않아요(S4 `adapters/loader`) |
+| `BM25TableRetriever` 본문 | `kosis_rag.retrieve.bm25.Bm25Index(docs, bm25, k=20, query_text=None).search(query)` · `bm25_index(docs, k, query_text)` · `bm25_search(index, query)` | 없음 (`== BM25TableRetriever.invoke`) |
+| `kosis_rag.pipeline.bm25_text(records, k, fmt)` | `kosis_rag.retrieve.bm25.bm25_text(records, k, fmt)` | **`Bm25Index`를 돌려줘요**(옛: `BM25TableRetriever`). retriever가 필요하면 `BM25TableRetriever.from_index(...)` (`load_resources`가 그렇게 해요) |
+| — (신규, `graph.py` embed · retrieve_<list> · fuse 노드 본문) | `kosis_rag.retrieve.node.embed(EmbedInput, resources) -> EmbedOutput(query_vecs, calls)` · `retrieve_list(name, ListInput(question, table_filter, vector), resources) -> ListOutput(docs, removed, relaxed, missing)` · `fuse(FuseInput(runs, run_removed), resources) -> FuseOutput(docs, removed)` · `search_lists(resources)` · `embedders(resources)` | 옛 노드 본문 그대로 (목록 순서 dense, bm25, [hq], [hq_bm25]; 가중치 1.0·`hq_weight`) |
+| `kosis_rag.hq.index.HqRetriever` | `kosis_rag.legacy.retrievers.HqRetriever` | 없음 (`connect`·`with_filter`·`last_removed/last_relaxed/last_missing` 그대로). 경고 로거 이름 `kosis_rag.hq.index` → `kosis_rag.retrieve.hq` |
+| `HqRetriever` 본문 | `kosis_rag.retrieve.hq.HqIndex(collection, embed_query, text_of={}, records={}, k=50, n_questions=200, n_docs=None).search(query, *, vector=None, table_filter=None, records=None)` | `-> (docs, removed, relaxed, missing)` (`records` 기본값 = `self.records`) |
+| `kosis_rag.hq.index.max_pool` · `ckpt8` · `collection_name` | `kosis_rag.retrieve.hq.<같은 이름>` | 없음 |
+| `kosis_rag.hq.index.hq_bm25(rows, records, text_of, k=50)` | `kosis_rag.retrieve.hq.hq_bm25(...)` | **`Bm25Index`를 돌려줘요**(옛: `BM25TableRetriever`) → `BM25TableRetriever.from_index(...)`. 경고 로거 `kosis_rag.retrieve.hq` |
+| `kosis_rag.hq.index.read_questions(build_id, root=HQ_DIR)` · `HQ_DIR` | `kosis_rag.adapters.files.read_questions` · `HQ_DIR` | 없음 (`load_resources`는 `adapters.files.read_questions`를 모듈 경유로 불러요 — 테스트 패치 대상도 `kosis_rag.adapters.files`) |
+| `kosis_rag.hq.index.COLLECTION_PREFIX` · `DOC_FORMAT` · `N_QUESTIONS` | `kosis_rag.retrieve.constants.HQ_COLLECTION_PREFIX` · `HQ_DOC_FORMAT` · `HQ_N_QUESTIONS` | **이름 바뀜**(같은 값 `"kosis_hq__"` · `"hq"` · `200`; `tabletext.DOC_FORMAT`·`index.COLLECTION_PREFIX`와 헷갈리지 않게) |
+| `kosis_rag.hq.index.DESC_SUFFIX` | `kosis_rag.shared.constants.DESC_SUFFIX` | 없음 (`adapters.files`·hq CLI가 같이 써요) |
+| `kosis_rag.index.COLLECTION_NAME` | `kosis_rag.shared.constants.COLLECTION_NAME` | 없음 (`index.py`는 `constants.COLLECTION_NAME`으로 써요) |
+| `kosis_rag.pipeline.SearchResources(...)` | 그대로 + 필드 `sigungu: dict[str, list[str]] = {}` | `load_resources(..., sigungu=None)` 새 키워드 (None = 파일에서) |
+| `from kosis_rag import query as query_rules` + `monkeypatch.setattr(query_rules, "parse_query", f)` (테스트) | `from kosis_rag.parse import node` + `monkeypatch.setattr(node, "parse_query", f)` | 그래프의 parse 노드는 `parse.node.parse_question`이 모듈 전역 `parse_query`를 `sigungu=` 키워드로 불러요 — 가짜 함수는 `**kw`를 받아야 해요 |
+
+**영향받는 진입점 (S2, 사용자 확인 필요)**: `parse_query(question)`를 `sigungu` 없이 부르는 곳은 이제 시군구 이름을 읽지 않아요. 그래프·`build_search`·backend·`scripts/parity_l1.py`는 `SearchResources.sigungu`(= 옛 전역과 같은 파일)를 쓰므로 영향이 없어요. **`python -m evals.run_eval --layer l2`와 `--layer ablation --slot-source pred`**(`evals/run_eval.py`의 `parse_query(item.question)`)는 PC에 `data/sigungu.json`이 있으면 시군구가 든 질문의 `regions`가 옛 결과와 달라질 수 있어요(evals는 이 단계에서 import 줄만 고쳤어요). 같은 값을 원하면 그 두 호출에 `sigungu=load_sigungu()`를 넘기는 한 줄 변경이 필요해요(S4 `backend/app/config.py` 때 함께 처리 권고).
+
 ## S3. rerank/ · gate/ · llm/ · legacy/rerankers
 
 ## S4. graph/ · 설정 객체 · adapters/loader · SearchModule

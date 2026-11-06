@@ -5,7 +5,10 @@ its own (OLD_PATHS grows with every moved module, STAGES / FRAME_ALLOWED are fil
 the langgraph rule narrows to src/kosis_rag/graph/ at S4). S1 adds: the old schemas/filters/fields/roles/vocab/text/
 loader/vectorstore/model paths, shared/ imports only schemas, Phase 1 only through the listed files, chromadb and
 sentence_transformers / torch in one adapter each, the Phase 1 copy headers, fields -> filters one way and an
-__init__ without side effects. Exceptions are listed with their reason and the step that removes them.
+__init__ without side effects. S2 adds: the old query / retriever paths and the names moved out of modules that stay
+(OLD_NAMES), the stage order for parse/ and retrieve/ (a stage imports schemas, shared and the stages before it only;
+never adapters, graph, legacy or the old top-level modules), and no self.last_* state in retrieve/.
+Exceptions are listed with their reason and the step that removes them.
 """
 
 from __future__ import annotations
@@ -24,14 +27,28 @@ BUILD = SRC / "kosis_rag_build"  # the offline DB build package (from S6a; absen
 CALLERS = tuple(ROOT / d for d in ("backend", "evals", "scripts", "tests", "lab"))
 
 # Stage folders of kosis_rag in data-flow order (a stage may import the ones before it, never the ones after it).
-# Placeholder until S2 creates them; the order rule is added then.
-STAGES = ("parse", "retrieve", "rerank", "gate")
+# S2: parse and retrieve; S3 adds rerank and gate.
+STAGES = ("parse", "retrieve")
+# What every stage may import from kosis_rag besides the stages before it (and itself).
+STAGE_BASE = ("kosis_rag.schemas", "kosis_rag.shared")
 # Old module paths nothing may import any more, added by the step that removes them (docs/migration.md).
 OLD_PATHS: tuple[str, ...] = (
     # S1: moved to schemas/ shared/ adapters/ (kosis_rag.schemas is now a package that re-exports nothing)
     "kosis_rag.schemas", "kosis_rag.filters", "kosis_rag.fields", "kosis_rag.roles", "kosis_rag.vocab",
     "kosis_rag.text", "kosis_rag.loader", "kosis_rag.vectorstore", "kosis_rag.model",
+    # S2: moved to parse/ retrieve/ legacy/retrievers.py shared/tokenize.py
+    "kosis_rag.query", "kosis_rag.retriever",
 )
+# Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
+# defines them at top level (docs/migration.md).
+OLD_NAMES: dict[str, tuple[str, ...]] = {
+    # S2: the online part of hq/index.py went to retrieve/hq.py, retrieve/constants.py, adapters/files.py,
+    # shared/constants.py and legacy/retrievers.py; its CLI main stays until S6a
+    "kosis_rag.hq.index": ("HqRetriever", "hq_bm25", "max_pool", "ckpt8", "collection_name", "read_questions",
+                           "HQ_DIR", "COLLECTION_PREFIX", "DOC_FORMAT", "DESC_SUFFIX", "N_QUESTIONS"),
+    "kosis_rag.index": ("COLLECTION_NAME",),  # S2: shared/constants.py
+    "kosis_rag.pipeline": ("bm25_text",),  # S2: retrieve/bm25.py
+}
 # Packages that took an old module's name: their own modules are new paths, not the old one (kosis_rag.schemas.io).
 REUSED_NAMES = ("kosis_rag.schemas",)
 # Files allowed to import pandas / pyarrow. Placeholder: not enforced at S0 (no rule for frame libraries yet).
@@ -123,8 +140,11 @@ NEW_MODULES = _new_modules()
 
 def _old(names: list[str]) -> list[str]:
     """Imported names on an old path. The bare name of a reused package (from kosis_rag.schemas import io) and its
-    new modules are fine; a name taken from the package itself (from kosis_rag.schemas import TableRecord) is not."""
-    return [n for n in names if _hits(n, OLD_PATHS) and n not in REUSED_NAMES and not _hits(n, NEW_MODULES)]
+    new modules are fine; a name taken from the package itself (from kosis_rag.schemas import TableRecord) is not.
+    A name in OLD_NAMES (from kosis_rag.hq.index import HqRetriever) is old too."""
+    moved = tuple(f"{module}.{name}" for module, names_ in OLD_NAMES.items() for name in names_)
+    return [n for n in names if (_hits(n, OLD_PATHS) and n not in REUSED_NAMES and not _hits(n, NEW_MODULES))
+            or n in moved]
 
 
 SRC_FILES = _py_files(MODULE, BUILD)
@@ -153,7 +173,49 @@ def test_src_import_rules(path: Path):
     for library, allowed in LIBRARY_ALLOWED.items():
         if rel not in allowed:
             problems += [n for n in names if _hits(n, (library,))]
+    stage = _stage_of(path)
+    if stage is not None:  # S2: schemas <- shared <- parse <- retrieve <- ...; nothing else of kosis_rag
+        allowed = STAGE_BASE + tuple(f"kosis_rag.{s}" for s in STAGES[: STAGES.index(stage) + 1])
+        problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, allowed)]
     assert not problems, f"{rel}: imports break the layout rules: {sorted(set(problems))}"
+
+
+def _stage_of(path: Path) -> str | None:
+    """The stage folder a src file is in (parse, retrieve, ...), or None."""
+    if not path.is_relative_to(MODULE):
+        return None
+    top = path.relative_to(MODULE).parts[0]
+    return top if top in STAGES else None
+
+
+def test_stage_folders_exist():
+    for stage in STAGES:
+        assert (MODULE / stage / "__init__.py").is_file(), stage
+
+
+def test_moved_names_are_gone_from_their_old_module():
+    """S2: a name moved out of a module that stays is no longer defined there (no re-export, P2-R6)."""
+    for module, moved in OLD_NAMES.items():
+        tree = ast.parse(SRC.joinpath(*module.split(".")).with_suffix(".py").read_text(encoding="utf-8"))
+        defined = set()
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                defined.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                defined |= {t.id for t in targets if isinstance(t, ast.Name)}
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                defined |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        assert not defined & set(moved), f"{module} still defines {sorted(defined & set(moved))}"
+
+
+def test_retrieve_keeps_no_last_state():
+    """S2 (P2-D17): retrieve/ returns what it removed / relaxed; no self.last_* (only legacy/retrievers.py keeps it)."""
+    for path in _py_files(MODULE / "retrieve"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        hits = [n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                and n.value.id == "self" and n.attr.startswith("last_")]
+        assert not hits, f"{_rel(path)}: self state {hits}"
 
 
 @pytest.mark.parametrize("path", CALLER_FILES, ids=_rel)

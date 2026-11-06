@@ -3,7 +3,7 @@
 import pytest
 
 from kosis_rag.chain import search
-from kosis_rag.retriever import ChromaTableRetriever
+from kosis_rag.legacy.retrievers import ChromaTableRetriever
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared.catalog import to_document

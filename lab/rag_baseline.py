@@ -167,7 +167,7 @@ def chroma_retriever(records, dense: dict, k: int):
 
     from kosis_rag import index
     from kosis_rag.adapters import models
-    from kosis_rag.retriever import ChromaTableRetriever
+    from kosis_rag.legacy.retrievers import ChromaTableRetriever
 
     models.EMBED_MODEL = dense["tag"]  # recorded in the collection metadata and checked below
     data_sha = hashlib.sha256(index.REPO.joinpath("data", "tables.jsonl").read_bytes()).hexdigest()

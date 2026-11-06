@@ -35,6 +35,7 @@ from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.resources import ChromaConfig
 from kosis_rag.shared.catalog import _META_FIELDS
+from kosis_rag.shared import constants
 from kosis_rag.shared.fields import table_fields
 from kosis_rag.shared.roles import table_roles
 from kosis_rag.shared.tabletext import region_summary
@@ -45,7 +46,6 @@ DOC_FORMAT = "meta-region-items-head-measure3"  # T2-30 KOS-109: names that list
 META_FORMAT = "fields2"  # fields1: A3 (KOS-101); fields2 adds f_implied, f_fixed, f_measure_keys (KOS-109)
 COLLECTION_PREFIX = "kosis_kure__"  # T2-30: content-named builds; before T2-30 "kosis_a_kure_<YYYYMMDDHHMM>" (kept on servers)
 FT_COLLECTION_PREFIX = "kosis_a_bgeft_"  # T2-06: fine-tuned bge-m3 over a kosis_rag.shared.tabletext format
-COLLECTION_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{1,510}[a-z0-9]$")  # Chroma: 3-512 chars, alphanumeric at both ends
 LABEL_CAP = 100  # per non-region class
 UNIT_SUFFIX = re.compile(r"\s*\(([^()]*)\)\s*$")
 
@@ -119,7 +119,7 @@ def collection_name(data_sha256: str) -> str:
     """The build name from what went into it: same tables.jsonl, document and metadata format -> same name."""
     digest = hashlib.sha256(f"{data_sha256}|{DOC_FORMAT}|{META_FORMAT}".encode()).hexdigest()[:8]
     name = f"{COLLECTION_PREFIX}{DOC_FORMAT}__{digest}"
-    if not COLLECTION_NAME.match(name) or ".." in name:
+    if not constants.COLLECTION_NAME.match(name) or ".." in name:
         raise ValueError(f"{name!r} is not a valid Chroma collection name; DOC_FORMAT must use a-z, 0-9, - and _ only")
     return name
 

@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 
 __all__ = ["SIDO", "SIDO_LABELS", "REGION_WORDS", "DIMENSION_KEYS", "DIMENSION_WORDS", "dimension_keys", "unit_key",
-           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "REGION_LEVELS"]
+           "LABEL_ALIASES", "measure_keys", "normalize_dimension", "build_sigungu", "REGION_LEVELS", "SIDO_ORDER"]
 
 REPO = Path(__file__).resolve().parents[3]
 SIGUNGU = REPO / "data" / "sigungu.json"
@@ -35,6 +35,7 @@ SIDO = {
     "충청북도": ["충북"], "충청남도": ["충남"], "전북특별자치도": ["전라북도", "전북"], "전라남도": ["전남"],
     "경상북도": ["경북"], "경상남도": ["경남"], "제주특별자치도": ["제주도", "제주"],
 }
+SIDO_ORDER = list(SIDO)  # official 시도 names in display order (from query.py, T2-41 S2)
 SIDO_LABELS = {name: name for name in SIDO} | {old: name for name, olds in SIDO.items() for old in olds}
 REGION_LEVELS = ["전국", "동읍면부", "시도", "시군구", "읍면동", "하위 지역"]  # display order of TableClass.levels (from metadata.py)
 _CAPITAL = ["서울특별시", "인천광역시", "경기도"]

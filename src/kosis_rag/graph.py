@@ -5,9 +5,11 @@
                                          +-> [retrieve_hq] ----+       -> refuse | guide -> END
                                          +-> [retrieve_hq_bm25]+
 
-Each node calls the same function the old nested retrievers call (the parts of retriever.hybrid_search:
-condition_filter, search_list, rrf_fuse; rerank.rerank_stage1 / rerank_stage2; chain.decide_route / refusal_answer /
-guide_answer), so the graph and `chain.answer(build_search(...))` give the same result. Stages that are off are left
+Each node calls the same function the old nested retrievers call (T2-41 S2: the parse / retrieve step functions
+parse.node.parse_question / decide_condition and retrieve.node.embed / retrieve_list / fuse, over the parts of
+legacy.retrievers.hybrid_search: condition_filter, search_list, rrf_fuse; rerank.rerank_stage1 / rerank_stage2;
+chain.decide_route / refusal_answer / guide_answer), so the graph and `chain.answer(build_search(...))` give the same
+result. Stages that are off are left
 out when the graph is built; only `gate` branches at run time. The question is parsed once (parse) and its filter
 decided once (condition) for every list, where the old path parsed inside the hybrid.
 
@@ -44,15 +46,16 @@ from pydantic import BaseModel, Field
 from kosis_chat.llm.model import LLMClient
 
 from kosis_rag import chain
-from kosis_rag import query as query_rules  # module access, so a test can patch query.parse_query
+from kosis_rag.parse import node as parse_step  # module access, so a test can patch parse.node.parse_query
+from kosis_rag.parse.schemas import ConditionInput, ParsedQuery, ParseInput
 from kosis_rag.pipeline import SearchResources
-from kosis_rag.query import ParsedQuery
 from kosis_rag.rerank import rerank_stage1, rerank_stage2
-from kosis_rag.retriever import condition_filter, rrf_fuse, search_list
+from kosis_rag.retrieve import node as retrieve_step
+from kosis_rag.retrieve.schemas import EmbedInput, FuseInput, ListInput
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.io import SearchResult
 from kosis_rag.shared.catalog import to_document
-from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax
+from kosis_rag.shared.filters import TableFilter
 
 
 def merge(old: dict, new: dict) -> dict:
@@ -110,10 +113,11 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
     def parse(state: SearchState) -> dict:
         """Read the question's search conditions once.
 
-        In: state.question. Out: {"query": ParsedQuery, "trace"}. Side effects: none (rules only). Node: parse.
+        In: state.question (resources.sigungu: the 시군구 dictionary). Out: {"query": ParsedQuery, "trace"}.
+        Side effects: none (rules only). Node: parse (step: parse.node.parse_question).
         """
         started = time.perf_counter()
-        parsed = query_rules.parse_query(state.question)
+        parsed = parse_step.parse_question(ParseInput(question=state.question), resources)
         return {"query": parsed, "trace": timed("parse", state, started)}
 
     def condition(state: SearchState) -> dict:
@@ -123,22 +127,17 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         Out: {"table_filter": the filter after relaxation (None when off or no condition), "relaxed": conditions
             dropped because no table met them (filters.RELAX_ORDER; years are never dropped), "trace" (with relaxed)}.
         Side effects: none (rules over the registry); ValueError for a condition without records, as before.
-        Node: condition.
+        Node: condition (step: parse.node.decide_condition).
         """
         started = time.perf_counter()
-        table_filter = state.query.to_filter() if s.cond_filter and state.query is not None else None
-        relaxed: list[str] = []
-        if table_filter is not None and not table_filter.is_empty():
-            _, relaxed, _ = filter_with_relaxation(resources.records, table_filter)
-            table_filter = relax(table_filter, relaxed)
-        table_filter = condition_filter(table_filter, resources.records)  # hybrid_search's own step, kept as it was
-        return {"table_filter": table_filter, "relaxed": relaxed,
-                "trace": timed("condition", state, started, relaxed=relaxed)}
+        out = parse_step.decide_condition(ConditionInput(query=state.query), resources)
+        return {"table_filter": out.table_filter, "relaxed": out.relaxed,
+                "trace": timed("condition", state, started, relaxed=out.relaxed)}
 
-    def retrieve(name: str, retriever: Any):
+    def retrieve(name: str):
         """The node that searches one list.
 
-        In: name = the list name (rank_<name> metadata, runs key); retriever = that list's retriever.
+        In: name = the list name (rank_<name> metadata, runs key; one of retrieve.node.search_lists).
         Out: the node function. Side effects: none when built. Node: none (it builds retrieve_<name>).
         """
         node = f"retrieve_{name}"
@@ -150,15 +149,12 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
                 the search then uses it instead of calling the embedder).
             Out: {"runs": {name: ranked docs (at most pool)}, "run_removed": {name: key -> why filtered out}, "trace"}.
             Side effects: the retriever's search (Chroma query or BM25 scoring); ValueError as hybrid_search.
-            Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25.
+            Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25 (step: retrieve.node.retrieve_list).
             """
             started = time.perf_counter()
-            searcher = retriever
-            vec = state.query_vecs.get(name)
-            if vec is not None:  # embedded once by the embed node: this copy returns it instead of embedding again
-                searcher = retriever.model_copy(update={"embed_query": lambda _question, v=vec: v})
-            docs, removed = search_list(state.question, searcher, table_filter=state.table_filter,
-                                        records=resources.records, k_each=s.pool)
+            out = retrieve_step.retrieve_list(name, ListInput(question=state.question, table_filter=state.table_filter,
+                                                              vector=state.query_vecs.get(name)), resources)
+            docs, removed = out.docs, out.removed
             return {"runs": {name: docs}, "run_removed": {name: removed},
                     "trace": timed(node, state, started, n_docs=len(docs), n_removed=len(removed),
                                    top_keys=[d.metadata.get("key") for d in docs[:5]])}
@@ -170,18 +166,13 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
 
         In: state.question. Out: {"query_vecs": list name -> vector (lists sharing one embed_query function share one
             call and one vector), "trace" (calls = embedder calls made)}.
-        Side effects: query embedder inference, one call per distinct embedder, in this one thread. Node: embed.
+        Side effects: query embedder inference, one call per distinct embedder, in this one thread.
+        Node: embed (step: retrieve.node.embed).
         """
         started = time.perf_counter()
-        done: list[tuple[Any, list[float]]] = []  # (embed_query function, its vector)
-        vecs: dict[str, list[float]] = {}
-        for name, fn in embedders:
-            vec = next((v for f, v in done if f is fn), None)
-            if vec is None:
-                vec = list(fn(state.question))
-                done.append((fn, vec))
-            vecs[name] = vec
-        return {"query_vecs": vecs, "trace": timed("embed", state, started, calls=len(done), lists=list(vecs))}
+        out = retrieve_step.embed(EmbedInput(question=state.question), resources)
+        vecs = out.query_vecs
+        return {"query_vecs": vecs, "trace": timed("embed", state, started, calls=out.calls, lists=list(vecs))}
 
     def fuse(state: SearchState) -> dict:
         """Fuse the lists by weighted RRF into the candidate pool (the old retrieve node's last step).
@@ -189,15 +180,12 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         In: state.runs, state.run_removed (one entry per retrieve_* node).
         Out: {"docs": the fused pool (at most `pool`; metadata as hybrid_search: score from dense, score_from,
             rrf_score, rank_<name>), "removed": key -> why filtered out (lists merged in fuse order), "trace"}.
-        Side effects: none. Node: fuse.
+        Side effects: none. Node: fuse (step: retrieve.node.fuse).
         """
         started = time.perf_counter()
         names = [name for name, _, _ in lists]
-        docs = rrf_fuse([state.runs.get(name, []) for name in names], names, k=s.pool, score_from=0,
-                        weights=[w for _, _, w in lists])
-        removed: dict[str, str] = {}
-        for name in names:
-            removed.update(state.run_removed.get(name, {}))
+        out = retrieve_step.fuse(FuseInput(runs=state.runs, run_removed=state.run_removed), resources)
+        docs, removed = out.docs, out.removed
         return {"docs": docs, "removed": removed,
                 "trace": timed("fuse", state, started, n_docs=len(docs), n_removed=len(removed),
                                lists=names, relaxed=state.relaxed)}
@@ -261,17 +249,12 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         return {"result": result, "trace": timed("guide", state, started, origin=result.answer_origin)}
 
     # Lists in fuse order (dense first: its score stays in metadata["score"]): dense and BM25 always, the question
-    # index when loaded (T2-39), with HQ_WEIGHT as its RRF weight
-    lists = [("dense", resources.dense, 1.0), ("bm25", resources.bm25, 1.0)]
-    if resources.hq is not None:
-        lists.append(("hq", resources.hq, s.hq_weight))
-    if resources.hq_bm25 is not None:
-        lists.append(("hq_bm25", resources.hq_bm25, s.hq_weight))
-    branches = [retrieve(name, retriever) for name, retriever, _ in lists]
+    # index when loaded (T2-39), with HQ_WEIGHT as its RRF weight (retrieve.node.search_lists)
+    lists = retrieve_step.search_lists(resources)
+    branches = [retrieve(name) for name, _, _ in lists]
     # Lists that embed the question themselves (Chroma dense, HqRetriever: an embed_query field). With two or more,
     # the embed node embeds once and hands each its vector; with one (HQ off) there is no embed node.
-    embedders = [(name, retriever.embed_query) for name, retriever, _ in lists
-                 if callable(getattr(retriever, "embed_query", None))]
+    embedders = retrieve_step.embedders(resources)
 
     # Nodes: parse and condition, [embed], the lists (run in parallel by build_graph), fuse, the stages that are on
     nodes: dict[str, Node] = {"parse": parse, "condition": condition}

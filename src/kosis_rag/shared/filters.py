@@ -4,7 +4,7 @@ what a table counts, decided on the registry.
 Filters are decided in Python on the registry (tables.jsonl, 2,364 records), not by Chroma range queries:
 a table passes only if its real periods contain the requested years, so a table whose listed range covers a year
 it does not actually hold (5-year censuses, collection gaps) is left out, and the reason is kept per table.
-`retriever.ChromaTableRetriever` then gives Chroma one condition, `key $in <passing keys>`.
+`retrieve.dense.DenseIndex` then gives Chroma one condition, `key $in <passing keys>`.
 When no table passes, `filter_with_relaxation` drops the conditions one at a time (T2-29, D1: measures, breakdowns,
 시도 hard -> soft, cycle) and keeps the years, so a wrong reading of the question lowers ranks instead of refusing.
 """

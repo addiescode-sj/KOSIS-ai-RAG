@@ -1,4 +1,4 @@
-"""T2-39: the question index (kosis_rag.hq.index): max-pool per table, the condition filter, the question BM25,
+"""T2-39: the question index (kosis_rag.retrieve.hq, legacy HqRetriever): max-pool per table, the condition filter, the question BM25,
 collection names, and how load_resources picks them up.
 
 No model, no server: the Chroma collection is a fake that returns fixed distances.
@@ -10,13 +10,15 @@ from pathlib import Path
 import pytest
 from langchain_core.retrievers import BaseRetriever
 
-from kosis_rag.hq import index as hq_index
-from kosis_rag.hq.index import HqRetriever, ckpt8, collection_name, hq_bm25, max_pool, read_questions
-from kosis_rag.index import COLLECTION_NAME
+from kosis_rag.adapters import files
+from kosis_rag.adapters.files import read_questions
+from kosis_rag.legacy.retrievers import BM25TableRetriever, HqRetriever
 from kosis_rag.pipeline import SearchSettings, load_resources
-from kosis_rag.retriever import BM25TableRetriever
+from kosis_rag.retrieve.bm25 import Bm25Index
+from kosis_rag.retrieve.hq import ckpt8, collection_name, hq_bm25, max_pool
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.constants import COLLECTION_NAME
 from kosis_rag.shared.filters import TableFilter
 
 pytestmark = pytest.mark.offline
@@ -103,7 +105,7 @@ def test_hits_and_questions_of_tables_outside_the_registry_are_skipped(caplog):
     hits = [(f"{gone}#q0", gone, "없는 표 질문", 0.05), *HITS]
     r = HqRetriever(collection=FakeCollection(hits), embed_query=lambda q: [0.0], text_of=TEXT_OF, records=BY_KEY,
                     n_docs=len(hits))
-    with caplog.at_level("WARNING", logger="kosis_rag.hq.index"):
+    with caplog.at_level("WARNING", logger="kosis_rag.retrieve.hq"):
         docs = r.invoke("q")
     assert [d.metadata["key"] for d in docs] == [A, B, C] and r.last_missing == 1
     assert all(d.metadata["table_name"] for d in docs) and "not in tables.jsonl" in caplog.text
@@ -111,7 +113,7 @@ def test_hits_and_questions_of_tables_outside_the_registry_are_skipped(caplog):
     assert [d.metadata["key"] for d in one.invoke("q")] == [A]  # the top k is taken after the skip
     rows = [{"id": f"{gone}#q0", "key": gone, "type": "concept", "text": "없는 표 질문"},
             {"id": f"{A}#q0", "key": A, "type": "concept", "text": "혼자 사는 사람"}]
-    with caplog.at_level("WARNING", logger="kosis_rag.hq.index"):
+    with caplog.at_level("WARNING", logger="kosis_rag.retrieve.hq"):
         bm25 = hq_bm25(rows, BY_KEY, TEXT_OF)
     assert [d.id for d in bm25.docs] == [A] and "question BM25" in caplog.text
 
@@ -122,8 +124,9 @@ def test_question_bm25_has_one_document_per_table_with_its_n2_text():
             {"id": f"{B}#q0", "key": B, "type": "concept", "text": "사망 원인"},
             {"id": f"{C}#q0", "key": C, "type": "concept", "text": "결혼 건수"}]
     bm25 = hq_bm25(rows, BY_KEY, TEXT_OF, k=10)
-    assert isinstance(bm25, BM25TableRetriever) and [d.id for d in bm25.docs] == [A, B, C]
-    docs = bm25.invoke("혼자 사는 사람이 많아")
+    assert isinstance(bm25, Bm25Index) and [d.id for d in bm25.docs] == [A, B, C]
+    docs = bm25.search("혼자 사는 사람이 많아")
+    assert BM25TableRetriever.from_index(bm25).invoke("혼자 사는 사람이 많아") == docs  # the legacy wrapper
     assert [d.metadata["key"] for d in docs] == [A] and docs[0].page_content == TEXT_OF[A]
     assert docs[0].metadata["table_name"] == "1인가구"
     assert [d.id for d in hq_bm25(rows[2:], BY_KEY, TEXT_OF).docs] == [B, C]  # a table without questions is left out
@@ -158,7 +161,7 @@ class ListDense(BaseRetriever):
 
 def test_load_resources_builds_the_question_bm25_only_when_asked(monkeypatch):
     rows = [{"id": f"{A}#q0", "key": A, "type": "concept", "text": "혼자 사는 사람"}]
-    monkeypatch.setattr(hq_index, "read_questions", lambda build, root=None: rows)
+    monkeypatch.setattr(files, "read_questions", lambda build, root=None: rows)
     fake_hq = _retriever()
 
     def settings(**kw):
