@@ -7,7 +7,10 @@ loader/vectorstore/model paths, shared/ imports only schemas, Phase 1 only throu
 sentence_transformers / torch in one adapter each, the Phase 1 copy headers, fields -> filters one way and an
 __init__ without side effects. S2 adds: the old query / retriever paths and the names moved out of modules that stay
 (OLD_NAMES), the stage order for parse/ and retrieve/ (a stage imports schemas, shared and the stages before it only;
-never adapters, graph, legacy or the old top-level modules), and no self.last_* state in retrieve/.
+never adapters, graph, legacy or the old top-level modules), and no self.last_* state in retrieve/. S3 adds: the old
+rerank / hcx / clova paths (kosis_rag.rerank is now a package), the names chain.py gave to gate/, the stages rerank and
+gate (rerank may also import llm/), llm/ importing only itself, no Phase 1 import anywhere in src (the llm/ copies),
+urllib.request / openai / langchain_naver only in llm/, and the rerank prompts as package data.
 Exceptions are listed with their reason and the step that removes them.
 """
 
@@ -28,9 +31,14 @@ CALLERS = tuple(ROOT / d for d in ("backend", "evals", "scripts", "tests", "lab"
 
 # Stage folders of kosis_rag in data-flow order (a stage may import the ones before it, never the ones after it).
 # S2: parse and retrieve; S3 adds rerank and gate.
-STAGES = ("parse", "retrieve")
+STAGES = ("parse", "retrieve", "rerank", "gate")
 # What every stage may import from kosis_rag besides the stages before it (and itself).
 STAGE_BASE = ("kosis_rag.schemas", "kosis_rag.shared")
+# S3: what a stage may import besides STAGE_BASE and the stages before it: rerank builds its LLM clients from llm/.
+STAGE_EXTRA = {"rerank": ("kosis_rag.llm",)}
+# S3: llm/ (transport and the Phase 1 client copies) imports only itself from kosis_rag.
+LLM = MODULE / "llm"
+LLM_ALLOWED = ("kosis_rag.llm",)
 # Old module paths nothing may import any more, added by the step that removes them (docs/migration.md).
 OLD_PATHS: tuple[str, ...] = (
     # S1: moved to schemas/ shared/ adapters/ (kosis_rag.schemas is now a package that re-exports nothing)
@@ -38,6 +46,8 @@ OLD_PATHS: tuple[str, ...] = (
     "kosis_rag.text", "kosis_rag.loader", "kosis_rag.vectorstore", "kosis_rag.model",
     # S2: moved to parse/ retrieve/ legacy/retrievers.py shared/tokenize.py
     "kosis_rag.query", "kosis_rag.retriever",
+    # S3: moved to rerank/ (a package now: stage1 stage2 selectors hcx node ...), llm/ and legacy/rerankers.py
+    "kosis_rag.rerank", "kosis_rag.hcx", "kosis_rag.clova",
 )
 # Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
 # defines them at top level (docs/migration.md).
@@ -48,9 +58,11 @@ OLD_NAMES: dict[str, tuple[str, ...]] = {
                            "HQ_DIR", "COLLECTION_PREFIX", "DOC_FORMAT", "DESC_SUFFIX", "N_QUESTIONS"),
     "kosis_rag.index": ("COLLECTION_NAME",),  # S2: shared/constants.py
     "kosis_rag.pipeline": ("bm25_text",),  # S2: retrieve/bm25.py
+    # S3: gate/node.py (decide_route, Route -> found | refuse) and gate/texts.py; chain.py uses them by module access
+    "kosis_rag.chain": ("decide_route", "Route", "NO_MATCH", "REFUSAL_TEXT", "REFUSALS"),
 }
 # Packages that took an old module's name: their own modules are new paths, not the old one (kosis_rag.schemas.io).
-REUSED_NAMES = ("kosis_rag.schemas",)
+REUSED_NAMES = ("kosis_rag.schemas", "kosis_rag.rerank")
 # Files allowed to import pandas / pyarrow. Placeholder: not enforced at S0 (no rule for frame libraries yet).
 FRAME_ALLOWED: tuple[str, ...] = ()
 
@@ -58,22 +70,31 @@ FRAME_ALLOWED: tuple[str, ...] = ()
 # they are made from: pipeline, retriever, rerank, query, chain ...).
 SHARED = MODULE / "shared"
 SHARED_ALLOWED = ("kosis_rag.schemas", "kosis_rag.shared")
-# S1: Phase 1 (kosis_ai, kosis_chat) only through these files; the S3 llm/ copies empty the list.
+# S1: Phase 1 (kosis_ai, kosis_chat) only through listed files; S3: the llm/ copies emptied the list (P2-D0: no Phase 1
+# import anywhere in src).
 PHASE1 = ("kosis_ai", "kosis_chat")
-PHASE1_ALLOWED = ("src/kosis_rag/chain.py", "src/kosis_rag/graph.py", "src/kosis_rag/hcx.py", "src/kosis_rag/clova.py",
-                  "src/kosis_rag/tools.py", "src/kosis_rag/hq/graph.py")
+PHASE1_ALLOWED: tuple[str, ...] = ()
 # S1: client libraries in one adapter each. chromadb: adapters/chroma.py (index.py and hq/index.py take a client as an
 # argument, so they need no exception); sentence_transformers / torch: adapters/models.py (kure_embedder moved there).
+# S3: the LLM transports in llm/ (an entry ending in "/" is a folder). chain.py builds its ChatClovaX through
+# llm.providers.clova_chat, so it needs no exception.
 LIBRARY_ALLOWED = {
     "chromadb": ("src/kosis_rag/adapters/chroma.py",),
     "sentence_transformers": ("src/kosis_rag/adapters/models.py",),
     "torch": ("src/kosis_rag/adapters/models.py",),
+    "urllib.request": ("src/kosis_rag/llm/",),
+    "openai": ("src/kosis_rag/llm/openai.py",),
+    "langchain_naver": ("src/kosis_rag/llm/providers.py",),
 }
 # Files that are copies of Phase 1 code (P2-D0): first line names the source at the pinned commit.
 PHASE1_COPIES = {
     "src/kosis_rag/schemas/common.py": "# copied from Phase 1 src/kosis_ai/schemas.py@e248a45",
     "src/kosis_rag/shared/units.py": "# copied from Phase 1 src/kosis_ai/normalize.py@e248a45",
+    "src/kosis_rag/llm/base.py": "# copied from Phase 1 kosis_chat/llm/model.py@e248a45",
+    "src/kosis_rag/llm/hcx.py": "# copied from Phase 1 kosis_chat/llm/model.py@e248a45",
 }
+# S3 (P2-D22): prompt files that must ship as package data: package -> glob in [tool.setuptools.package-data]
+PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"]}
 
 # langgraph: only the graph files (S4: src/kosis_rag/graph/ and, from S6a, src/kosis_rag_build/graph/).
 LANGGRAPH_ALLOWED = ("src/kosis_rag/graph.py", "src/kosis_rag/hq/graph.py")
@@ -168,14 +189,17 @@ def test_src_import_rules(path: Path):
     problems += _old(names)
     if path.is_relative_to(SHARED):
         problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, SHARED_ALLOWED)]
+    if path.is_relative_to(LLM):
+        problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, LLM_ALLOWED)]
     if rel not in PHASE1_ALLOWED:
         problems += [n for n in names if _hits(n, PHASE1)]
     for library, allowed in LIBRARY_ALLOWED.items():
-        if rel not in allowed:
+        if not any(rel.startswith(a) if a.endswith("/") else rel == a for a in allowed):
             problems += [n for n in names if _hits(n, (library,))]
     stage = _stage_of(path)
-    if stage is not None:  # S2: schemas <- shared <- parse <- retrieve <- ...; nothing else of kosis_rag
-        allowed = STAGE_BASE + tuple(f"kosis_rag.{s}" for s in STAGES[: STAGES.index(stage) + 1])
+    if stage is not None:  # S2: schemas <- shared <- parse <- retrieve <- rerank <- gate; nothing else of kosis_rag
+        allowed = (STAGE_BASE + tuple(f"kosis_rag.{s}" for s in STAGES[: STAGES.index(stage) + 1])
+                   + STAGE_EXTRA.get(stage, ()))
         problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, allowed)]
     assert not problems, f"{rel}: imports break the layout rules: {sorted(set(problems))}"
 
@@ -273,3 +297,17 @@ def test_every_package_is_in_pyproject():
     listed = set(tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["setuptools"]["packages"])
     found = {_module_of(p) for p in SRC_FILES if p.name == "__init__.py"}
     assert found == listed, f"missing in pyproject: {sorted(found - listed)}, not a package: {sorted(listed - found)}"
+
+
+def test_rerank_prompts_are_package_data():
+    """S3 (P2-D22): every prompt .md under a package is declared as package data, so a wheel ships it."""
+    declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["setuptools"].get(
+        "package-data", {})
+    assert {k: sorted(v) for k, v in declared.items()} == {k: sorted(v) for k, v in PACKAGE_DATA.items()}
+    for package, globs in PACKAGE_DATA.items():
+        folder = SRC.joinpath(*package.split("."))
+        assert all(list(folder.glob(g)) for g in globs), f"{package}: no file matches {globs}"
+    found = {p.relative_to(SRC).as_posix() for p in SRC.rglob("prompts/*.md")}
+    covered = {p.relative_to(SRC).as_posix() for package, globs in PACKAGE_DATA.items()
+               for g in globs for p in SRC.joinpath(*package.split(".")).glob(g)}
+    assert found == covered, f"prompt files not declared as package data: {sorted(found - covered)}"

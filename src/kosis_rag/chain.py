@@ -1,4 +1,4 @@
-"""RAG answer: retrieve candidate tables -> prompt -> LLM (ChatClovaX or Phase 1 LLMClient) -> verify -> add citations by code.
+"""RAG answer: retrieve candidate tables -> prompt -> LLM (ChatClovaX or an LLMClient) -> verify -> add citations by code.
 
 The model only writes a guide sentence over the candidates. Table ids, periods and citations come from the catalog;
 a reply that names an id or year not in the candidates, or a failed model call, falls back to a code template.
@@ -6,9 +6,10 @@ a reply that names an id or year not in the candidates, or a failed model call, 
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable
 
 from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
@@ -16,33 +17,30 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from kosis_chat.config import get_secret, load_env, load_settings
-from kosis_chat.llm.model import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
-
+from kosis_rag.gate import node as gate_step  # module access: chain re-exports none of gate's names (T2-41 S3)
+from kosis_rag.gate import texts
+from kosis_rag.llm import providers
+from kosis_rag.llm.base import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
+from kosis_rag.llm.config import LLMConfig
 from kosis_rag.schemas.io import SearchResult, TableCandidate
 from kosis_rag.shared.catalog import to_candidate
 
-NO_MATCH = "NO_MATCH"
-REFUSAL_TEXT = "제공된 KOSIS 통계표 중에서 이 질문에 맞는 표를 찾지 못했습니다. 다른 표현으로 다시 질문해 주세요."
-# Why the stage 2 LLM re-ranker picked nothing (kosis_rag.hcx.REASONS) -> the guide sentence; code picks it, not the LLM.
-# Only out_of_scope gets its own sentence: on the T2-09 golden set HCX-007 labelled 9 of 13 out-of-scope refusals
-# "no_item", so a "related tables exist" sentence would mislead; no_item falls back to REFUSAL_TEXT.
-REFUSALS = {
-    "out_of_scope": "이 질문은 제공된 KOSIS 인구 통계표가 다루는 범위 밖입니다. 다른 통계(예: 지역·경제·보건 통계)는 KOSIS에서 직접 찾아 주세요.",
-}
-# ponytail: no score threshold in the service yet (tau is calibrated only in evals); refusals are "no candidates" and
-# the stage 2 LLM's empty pick (T2-09). A filter that removes every table refuses with the generic text.
+# The guide model's settings: Phase 1 configs/model.yaml @e248a45, which clova_chat read through Phase 1 until
+# T2-41 S3 (tests/test_phase1_contract.py checks they still match). S4 moves them to backend/app/config.py.
+GUIDE_MODEL = "HCX-DASH-002"
+GUIDE_TEMPERATURE = 0.0
+GUIDE_MAX_TOKENS = 1024
+GUIDE_TIMEOUT = 60.0
+GUIDE_KEY_ENV = "HCX_API_KEY"
 
 PROMPT = ChatPromptTemplate.from_messages([
     ("system",
      "당신은 KOSIS 통계표 안내 도우미입니다. 아래 후보 통계표 목록만 근거로, 질문에 맞는 표를 1~3개 골라 왜 맞는지 짧게 설명하세요.\n"
      "규칙: 목록에 없는 표·기간·숫자를 지어내지 마세요. 통계 수치는 말하지 마세요. 표를 가리킬 때는 [번호]와 표 ID를 쓰세요.\n"
      "고른 표만 [번호]와 표 ID로 가리키고, 고르지 않은 표는 언급하지 마세요.\n"
-     f"맞는 표가 하나도 없으면 다른 말 없이 {NO_MATCH} 만 출력하세요."),
+     f"맞는 표가 하나도 없으면 다른 말 없이 {texts.NO_MATCH} 만 출력하세요."),
     ("human", "후보 통계표:\n{context}\n\n질문: {question}"),
 ])
-
-Route = Literal["refuse", "guide"]
 
 _TBL_ID = re.compile(r"(?<![0-9A-Za-z_])DT_[0-9A-Za-z_]+")  # not \b: Korean letters count as \w ("표DT_X", T2-38)
 _YEAR = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
@@ -63,22 +61,22 @@ def format_context(candidates: list[TableCandidate]) -> str:
     )
 
 
-def clova_chat(settings=None) -> BaseChatModel:
-    """HCX through langchain-naver's ChatClovaX; model and limits from configs/model.yaml.
+def clova_chat(config: LLMConfig | None = None) -> BaseChatModel:
+    """HCX through langchain-naver's ChatClovaX (llm.providers.clova_chat): the guide LLM.
 
-    Key: HCX_API_KEY from this repo's .env (Phase 1 load_env() alone reads vendor/phase1/.env),
-    else ChatClovaX's own CLOVASTUDIO_API_KEY.
+    In: config = provider clova_chat settings; None = GUIDE_MODEL, GUIDE_TEMPERATURE, GUIDE_MAX_TOKENS and
+        GUIDE_TIMEOUT (Phase 1 configs/model.yaml) with HCX_API_KEY from this repo's .env (T2-41 S3: still read here;
+        S4 moves it to backend/app/config.py), else ChatClovaX's own CLOVASTUDIO_API_KEY.
+    Out: the chat model. Side effects: with no config, loads this repo's .env into the environment (existing
+        variables kept). Node: guide (built once by the backend).
     """
-    from langchain_naver import ChatClovaX
+    if config is None:
+        from dotenv import load_dotenv
 
-    load_env(Path(__file__).resolve().parents[2] / ".env")
-    settings = settings or load_settings()
-    key = get_secret(settings.api_key_env)
-    return ChatClovaX(
-        model=settings.model_name, temperature=settings.temperature, max_tokens=settings.max_tokens,
-        timeout=settings.timeout_seconds, **({"api_key": key} if key else {}),
-        stream_usage=True,  # off by default for a non-OpenAI base URL: streamed chunks would carry no token usage (T2-38)
-    )
+        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
+        config = LLMConfig(provider="clova_chat", api_key=os.environ.get(GUIDE_KEY_ENV) or None, model=GUIDE_MODEL,
+                           temperature=GUIDE_TEMPERATURE, max_tokens=GUIDE_MAX_TOKENS, timeout=GUIDE_TIMEOUT)
+    return providers.clova_chat(config)
 
 
 def llm_runnable(client: LLMClient | BaseChatModel, on_chunk: Callable[[str], None] | None = None) -> Runnable:
@@ -199,7 +197,7 @@ def streamable_prefix(text: str, question: str, candidates: list[TableCandidate]
     Node: guide (through guide_answer).
     """
     head = text.lstrip()
-    if NO_MATCH.startswith(head) or head.startswith(NO_MATCH):
+    if texts.NO_MATCH.startswith(head) or head.startswith(texts.NO_MATCH):
         return ""
     words = re.match(r"[\s\S]*\s", text)
     prefix = words.group(0) if words else ""
@@ -230,29 +228,11 @@ def search(retriever: BaseRetriever, question: str, k: int = 5) -> list[TableCan
     return [to_candidate(d) for d in retriever.invoke(question)[:k]]
 
 
-def decide_route(docs: list[Document]) -> tuple[Route, str | None]:
-    """Decide whether the answer refuses before calling the guide LLM.
-
-    In: docs = the tables shown to the answer (already cut to k), in rank order, with the search metadata.
-    Out: (route, refusal reason). "refuse" when there are no docs, or when stage 2 ran without error and picked
-        nothing (T2-09; the reason is its stage2_reason, possibly None); otherwise ("guide", None).
-        A stage 2 error is not a refusal: the answer keeps the stage 1 order.
-    Side effects: none.
-    Node: gate.
-    """
-    if not docs:
-        return "refuse", None
-    meta = docs[0].metadata
-    if meta.get("stage2_picked_n") == 0 and not meta.get("stage2_error"):  # the LLM re-ranker picked nothing (T2-09)
-        return "refuse", meta.get("stage2_reason")
-    return "guide", None
-
-
 def refusal_answer(question: str, docs: list[Document], reason: str | None) -> SearchResult:
     """The refusal answer: no table fits the question, said in a sentence code picks (no LLM call).
 
     In: question = the user question; docs = the tables shown (cut to k; empty when nothing was found);
-        reason = why stage 2 picked nothing (kosis_rag.hcx.REASONS) or None.
+        reason = why stage 2 picked nothing (kosis_rag.rerank.hcx.REASONS) or None.
     Out: SearchResult with no_answer=True and answer_origin="refusal". With no docs: no candidates and REFUSAL_TEXT.
         Otherwise the candidates are kept, no_answer_reason=reason and the sentence is REFUSALS[reason] or
         REFUSAL_TEXT.
@@ -260,9 +240,10 @@ def refusal_answer(question: str, docs: list[Document], reason: str | None) -> S
     Node: refuse.
     """
     if not docs:
-        return SearchResult(question=question, no_answer=True, answer=REFUSAL_TEXT, answer_origin="refusal")
+        return SearchResult(question=question, no_answer=True, answer=texts.REFUSAL_TEXT, answer_origin="refusal")
     return SearchResult(question=question, candidates=[to_candidate(d) for d in docs], no_answer=True,
-                        no_answer_reason=reason, answer=REFUSALS.get(reason, REFUSAL_TEXT), answer_origin="refusal")
+                        no_answer_reason=reason, answer=texts.REFUSALS.get(reason, texts.REFUSAL_TEXT),
+                        answer_origin="refusal")
 
 
 def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseChatModel,
@@ -298,8 +279,8 @@ def guide_answer(question: str, docs: list[Document], client: LLMClient | BaseCh
     )
     text = result.text.strip()
     # 2. the LLM says nothing fits
-    if result.status == STATUS_OK and text == NO_MATCH:
-        return SearchResult(question=question, candidates=candidates, no_answer=True, answer=REFUSAL_TEXT,
+    if result.status == STATUS_OK and text == texts.NO_MATCH:
+        return SearchResult(question=question, candidates=candidates, no_answer=True, answer=texts.REFUSAL_TEXT,
                             answer_origin="refusal", llm_status=result.status)
     # 3. verify the reply and read which tables it recommends; fall back to the code template (its top 3)
     picked = picked_from_reply(text, candidates) if result.status == STATUS_OK and text else []
@@ -317,10 +298,11 @@ def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question
         k = tables shown to the answer.
     Out: SearchResult from refusal_answer or guide_answer on the top k.
     Side effects: runs the retriever (Chroma, models, stage 2 LLM in production) and at most one guide LLM call.
-    Node: not used by the graph (the graph runs decide_route / refusal_answer / guide_answer as gate / refuse / guide).
+    Node: not used by the graph (the graph runs gate.node.decide_route / refusal_answer / guide_answer as gate / refuse /
+        guide).
     """
     docs = retriever.invoke(question)[:k]
-    route, reason = decide_route(docs)
-    if route == "refuse":
-        return refusal_answer(question, docs, reason)
+    gate = gate_step.decide_route(gate_step.GateInput(docs=docs))
+    if gate.route == "refuse":
+        return refusal_answer(question, docs, gate.refusal_reason)
     return guide_answer(question, docs, client)

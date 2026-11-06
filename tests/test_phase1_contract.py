@@ -2,7 +2,8 @@
 
 schemas/common.py (TableInfo, Source, MAX_DIMS) and shared/units.py (meta_unit) are copies, so tables.jsonl and
 TableCandidate.to_source() JSON stay what Phase 1 would write. Skipped when vendor/phase1/src/kosis_ai is absent.
-(S3 adds ⑤: llm.base.LLMResult fields and STATUS_* values.)
+S3 adds ⑤: llm/base.py and llm/hcx.py (copies of kosis_chat/llm/model.py) keep LLMResult's fields, the STATUS_*
+values, MockClient's replies and HCXClient's request; the guide model defaults are Phase 1's configs/model.yaml.
 """
 
 import csv
@@ -79,3 +80,73 @@ def test_4_meta_unit_reads_the_same_unit(tmp_path: Path):
     assert got == [p1_normalize._meta_unit(t, tmp_path) for t in ids]
     assert got[0] == "명" and got[5] == "천명" and got[-1] is None  # the sample reads real units, not only None
     assert units.KNOWN_UNITS == p1_normalize.KNOWN_UNITS
+
+
+# --- ⑤ (S3) llm/base.py and llm/hcx.py: copies of Phase 1 kosis_chat/llm/model.py @e248a45 ---
+
+def test_5_llm_result_fields_and_statuses_are_the_same():
+    import dataclasses
+
+    from kosis_chat.llm import model as p1_model
+
+    from kosis_rag.llm import base
+
+    ours = [(f.name, str(f.type), repr(f.default)) for f in dataclasses.fields(base.LLMResult)]
+    assert ours == [(f.name, str(f.type), repr(f.default)) for f in dataclasses.fields(p1_model.LLMResult)]
+    names = sorted(n for n in dir(p1_model) if n.startswith("STATUS_"))
+    assert names == sorted(n for n in dir(base) if n.startswith("STATUS_"))
+    assert {n: getattr(base, n) for n in names} == {n: getattr(p1_model, n) for n in names}
+    assert (base.LLMClient.name, base.MockClient.name) == (p1_model.LLMClient.name, p1_model.MockClient.name)
+
+
+@pytest.mark.parametrize("response", ["[mock] answer", ["a", "b"], ("x",)])
+def test_5_mock_client_replies_the_same(response):
+    from kosis_chat.llm import model as p1_model
+
+    from kosis_rag.llm import base
+
+    ours, theirs = base.MockClient(response), p1_model.MockClient(response)
+    for _ in range(3):  # the queue runs out on the third call
+        a, b = ours.generate("s", "u"), theirs.generate("s", "u")
+        assert dataclasses_dict(a) == dataclasses_dict(b)
+    assert ours.calls == theirs.calls
+
+
+def dataclasses_dict(result) -> dict:
+    import dataclasses
+
+    return dataclasses.asdict(result)
+
+
+@pytest.mark.parametrize("model, thinking, max_tokens", [("HCX-007", "none", 512), ("HCX-007", "low", 5120),
+                                                         ("HCX-DASH-002", None, 1024)])
+def test_5_hcx_client_sends_the_same_request(monkeypatch, model, thinking, max_tokens):
+    from kosis_chat.config import load_settings
+    from kosis_chat.llm import model as p1_model
+
+    from kosis_rag.llm.config import LLMConfig
+    from kosis_rag.llm.hcx import HCXClient
+
+    monkeypatch.setenv("HCX_API_KEY", "nv-dummy")
+    theirs = p1_model.HCXClient(load_settings(backend="hcx", model_name=model, thinking_level=thinking,
+                                              max_tokens=max_tokens, temperature=0.0))
+    ours = HCXClient(LLMConfig(provider="hcx", api_key="nv-dummy", model=model, thinking=thinking or "none",
+                               max_tokens=max_tokens, temperature=0.0))
+    assert ours.url == theirs.url and ours.is_reasoning == theirs.is_reasoning
+    assert json.dumps(ours._body("sys", "질문")) == json.dumps(theirs._body("sys", "질문"))
+    assert ours.timeout == theirs.settings.timeout_seconds
+    assert (ours.RETRY_DELAYS, ours.MAX_RETRY_WAIT, ours.RETRY_HTTP_CODES, ours.CONTEXT_EXCEEDED_CODE) == (
+        theirs.RETRY_DELAYS, theirs.MAX_RETRY_WAIT, theirs.RETRY_HTTP_CODES, theirs.CONTEXT_EXCEEDED_CODE)
+
+
+def test_5_guide_model_defaults_are_phase1_model_yaml():
+    """chain.clova_chat read Phase 1 load_settings() (configs/model.yaml) until S3; its constants must match."""
+    from kosis_chat.config import DEFAULT_BASE_URL, load_settings
+
+    from kosis_rag import chain
+    from kosis_rag.llm import hcx
+
+    s = load_settings()
+    assert (chain.GUIDE_MODEL, chain.GUIDE_TEMPERATURE, chain.GUIDE_MAX_TOKENS, chain.GUIDE_TIMEOUT,
+            chain.GUIDE_KEY_ENV) == (s.model_name, s.temperature, s.max_tokens, s.timeout_seconds, s.api_key_env)
+    assert hcx.DEFAULT_BASE_URL == DEFAULT_BASE_URL == s.base_url

@@ -9,8 +9,9 @@ from langchain_core.retrievers import BaseRetriever
 
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
 from kosis_rag import chain
-from kosis_rag.hcx import HcxSelector, parse
-from kosis_rag.rerank import LLMReranker
+from kosis_rag.gate import texts
+from kosis_rag.legacy.rerankers import LLMReranker
+from kosis_rag.rerank.hcx import HcxSelector, parse
 
 from evals.evaluators.retrieval import no_answer_rules
 
@@ -79,8 +80,8 @@ def test_no_answer_rules_tau_llm_either():
     assert r["llm_reason_match"] == [1, 1] and r["llm_errors"] == 1
 
 
-@pytest.mark.parametrize("reason, text", [("out_of_scope", chain.REFUSALS["out_of_scope"]),
-                                          ("no_item", chain.REFUSAL_TEXT)])  # no_item is unreliable: generic text
+@pytest.mark.parametrize("reason, text", [("out_of_scope", texts.REFUSALS["out_of_scope"]),
+                                          ("no_item", texts.REFUSAL_TEXT)])  # no_item is unreliable: generic text
 def test_service_refuses_on_empty_pick_and_skips_answer_model(reason, text):
     reply = f'{{"picked": [], "reason": "{reason}"}}'
     select = HcxSelector(text_of={"a": "표 a"}, thinking="none", client=MockClient(reply))

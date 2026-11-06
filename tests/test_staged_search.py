@@ -8,10 +8,11 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 from kosis_rag.adapters.models import resolve_ckpt
-from kosis_rag.clova import WRAP, ClovaReranker, ClovaResult
+from kosis_rag.llm.clova_rerank import WRAP, ClovaReranker, ClovaResult
 from kosis_rag.pipeline import SearchSettings, build_search
-from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, blend_order
+from kosis_rag.legacy.rerankers import CrossEncoderReranker, LLMReranker
 from kosis_rag.legacy.retrievers import HybridRetriever
+from kosis_rag.rerank.stage1 import blend_order
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared import tabletext as text

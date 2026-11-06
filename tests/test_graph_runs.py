@@ -24,12 +24,14 @@ from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
+from kosis_rag.gate.node import GateInput, decide_route  # noqa: E402
 from kosis_rag.graph import SearchState, build_graph, make_nodes, run_search  # noqa: E402
-from kosis_rag.hcx import HcxResult  # noqa: E402
 from kosis_rag.legacy.retrievers import HqRetriever, HybridRetriever, hybrid_search  # noqa: E402
 from kosis_rag.parse import node as query_rules  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
-from kosis_rag.rerank import rerank_stage1, rerank_stage2  # noqa: E402
+from kosis_rag.rerank.hcx import HcxResult  # noqa: E402
+from kosis_rag.rerank.stage1 import rerank_stage1  # noqa: E402
+from kosis_rag.rerank.stage2 import rerank_stage2  # noqa: E402
 from kosis_rag.retrieve.fuse import rrf_fuse  # noqa: E402
 from kosis_rag.retrieve.lists import condition_filter, search_list  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
@@ -186,7 +188,8 @@ def _old_state(question, resources, client, k=5):
         docs = rerank_stage1(question, docs, resources.stage1_score, n=s.rerank_n, mode=s.rerank_mode)
     if resources.select is not None:
         docs = rerank_stage2(question, docs, resources.select, k_in=s.stage2_k, name=resources.stage2_name)
-    route, reason = chain.decide_route(docs[:k])
+    gate = decide_route(GateInput(docs=docs[:k]))  # T2-41 S3: chain.decide_route -> gate.node (found = guide)
+    route, reason = ("guide" if gate.route == "found" else gate.route), gate.refusal_reason
     result = (chain.refusal_answer(question, docs[:k], reason) if route == "refuse"
               else chain.guide_answer(question, docs[:k], client))
     return {"docs": docs, "removed": removed, "relaxed": relaxed, "route": route, "refusal_reason": reason,

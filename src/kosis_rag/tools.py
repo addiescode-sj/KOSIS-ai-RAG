@@ -10,9 +10,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool, StructuredTool
 
-from kosis_chat.llm.model import LLMClient
-
 from kosis_rag import chain
+from kosis_rag.llm.base import LLMClient
 from kosis_rag.schemas.io import SearchArgs
 
 

@@ -106,3 +106,14 @@ def test_openapi_lists_every_node_endpoint():
     paths = main.app.openapi()["paths"]
     assert {f"/nodes/{n}" for n in ("parse", "retrieve", "rerank1", "rerank2", "gate", "answer")} <= set(paths)
     assert {"/nodes", "/search", "/search/stream", "/health"} <= set(paths)
+
+
+def test_a_missing_llm_key_is_a_503_not_a_500(client):
+    from kosis_rag.llm.config import LLMKeyMissing
+
+    def no_key():
+        raise LLMKeyMissing("LLMConfig.api_key is required for provider='hcx'")
+
+    main.app.dependency_overrides[main.get_runtime] = no_key
+    r = client.post("/search", json={"question": "출생아 수"})
+    assert r.status_code == 503 and "LLM key missing" in r.json()["detail"]

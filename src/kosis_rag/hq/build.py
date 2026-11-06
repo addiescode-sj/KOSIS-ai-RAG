@@ -31,7 +31,7 @@ def pair_scorer(ckpt: str, records: list, fmt: str, device: str | None = None) -
     Side effects: loads the cross-encoder (GPU memory). Node: score (built here, called there).
     """
     from kosis_rag.adapters.models import load_cross_encoder
-    from kosis_rag.rerank import passage_scorer
+    from kosis_rag.rerank.stage1 import passage_scorer
 
     text_of = {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
     scorer = load_cross_encoder(ckpt, device=device, doc_format=fmt)
@@ -77,7 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     from dotenv import load_dotenv
 
     from kosis_rag.adapters.files import read_records
-    from kosis_rag.hcx import OpenAIClient
+    from kosis_rag.llm.config import LLMConfig
+    from kosis_rag.llm.openai import OpenAIClient
 
     load_dotenv(REPO / ".env")
     if not os.getenv("OPENAI_API_KEY"):
@@ -90,8 +91,9 @@ def main(argv: list[str] | None = None) -> int:
         if not ckpt:
             raise SystemExit("set --rerank-ckpt (or RERANK_CKPT in .env), or pass --no-score")
         scorer = pair_scorer(ckpt, records, args.text_format, args.device)
-    client = OpenAIClient(model=args.model, temperature=hq_prompt.TEMPERATURE, max_tokens=hq_prompt.MAX_TOKENS,
-                          seed=hq_prompt.SEED)
+    client = OpenAIClient(LLMConfig(provider="openai", api_key=os.getenv("OPENAI_API_KEY") or None, model=args.model,
+                                    temperature=hq_prompt.TEMPERATURE, max_tokens=hq_prompt.MAX_TOKENS,
+                                    seed=hq_prompt.SEED))
     n = min(args.limit or len(records), len(records))
     print(f"prompt {hq_prompt.PROMPT_VERSION} ({hq_prompt.prompt_hash()[:8]}), model {args.model}, "
           f"{n} tables, concurrency {args.concurrency}, cache {hq_graph.CACHE_DIR / hq_prompt.prompt_hash()[:8]}")

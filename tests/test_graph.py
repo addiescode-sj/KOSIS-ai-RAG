@@ -16,12 +16,15 @@ from langchain_core.retrievers import BaseRetriever  # noqa: E402
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
+from kosis_rag.gate import texts  # noqa: E402
 from kosis_rag.graph import build_graph, run_search  # noqa: E402
-from kosis_rag.hcx import HcxResult  # noqa: E402
+from kosis_rag.legacy.rerankers import CrossEncoderReranker, LLMReranker  # noqa: E402
 from kosis_rag.legacy.retrievers import HybridRetriever, hybrid_search  # noqa: E402
 from kosis_rag.parse import node as parse_step  # noqa: E402
 from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
-from kosis_rag.rerank import CrossEncoderReranker, LLMReranker, rerank_stage1, rerank_stage2  # noqa: E402
+from kosis_rag.rerank.hcx import HcxResult  # noqa: E402
+from kosis_rag.rerank.stage1 import rerank_stage1  # noqa: E402
+from kosis_rag.rerank.stage2 import rerank_stage2  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.shared.catalog import to_document  # noqa: E402
@@ -151,7 +154,7 @@ def _both(question, reply="", *, settings=None, dense_keys=KEYS, stage1=_stage1,
 
 @pytest.mark.parametrize("case, question, reply, kw", [
     ("a: guide answer", "출생아 수", "[1] DT_A 표가 출생아 수를 담고 있습니다.", {}),
-    ("e: LLM says NO_MATCH", "출생아 수", chain.NO_MATCH, {}),
+    ("e: LLM says NO_MATCH", "출생아 수", texts.NO_MATCH, {}),
     ("f: unknown table id -> template", "출생아 수", "DT_ZZZ 표를 보세요.", {}),
     ("d: stage 2 raised -> guide", "출생아 수", "[1] DT_C 표입니다.", {"select": _boom}),
     ("g: stage 1 off", "출생아 수", "[1] DT_A 표입니다.", {"stage1": None}),
@@ -172,7 +175,7 @@ def test_graph_refuses_without_candidates_and_without_calling_the_llm():  # b
 
 def test_graph_refuses_on_empty_stage2_pick_with_reason():  # c
     old, old_client, state, new_client = _both("자동차 등록 대수", "안내", select=_pick(reason="out_of_scope"))
-    assert state.result == old and old.no_answer_reason == "out_of_scope" and old.answer == chain.REFUSALS["out_of_scope"]
+    assert state.result == old and old.no_answer_reason == "out_of_scope" and old.answer == texts.REFUSALS["out_of_scope"]
     assert state.refusal_reason == "out_of_scope" and old_client.calls == new_client.calls == []
 
 

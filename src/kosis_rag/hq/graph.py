@@ -46,6 +46,7 @@ from pydantic import BaseModel, Field, ValidationError
 from kosis_rag.hq import prompt as hq_prompt
 from kosis_rag.hq.rules import check_positions
 from kosis_rag.hq.schemas import TYPES, HqState, TableQuestions
+from kosis_rag.llm.base import STATUS_OK
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.fields import table_fields
@@ -133,14 +134,12 @@ def build_table_graph(records: dict[str, TableRecord], client: Any, *, model: st
     """Compile the per-table generation graph.
 
     In: records = key -> TableRecord; client = an object with generate(system, user, history) returning
-        .status/.text/.usage (hcx.OpenAIClient; tests pass a fake); model = the model name the cache is kept under;
+        .status/.text/.usage (llm.openai.OpenAIClient; tests pass a fake); model = the model name the cache is kept under;
         cache_dir = cache root; scorer = (key, questions) -> scores (None: no score node); fmt = table text format.
     Out: a compiled graph over HqState; invoke({"key": key}).
     Side effects: none when built; running it calls the LLM (cache misses only), writes the cache, runs the scorer.
     Node: none (it builds them).
     """
-    from kosis_chat.llm.model import STATUS_OK
-
     lock = threading.Lock()
 
     def timed(name: str, state: HqState, started: float, **extra: Any) -> dict[str, dict[str, Any]]:

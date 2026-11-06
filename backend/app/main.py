@@ -16,13 +16,15 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Iterator
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from kosis_rag.graph import Node, SearchState, build_graph, ground_docs, make_nodes, run_search, stream_search
 from kosis_rag.pipeline import SearchResources
+from kosis_rag.llm.config import LLMKeyMissing
 from kosis_rag.schemas.io import AskArgs, SearchResult
 
 LOG_DIR = Path("logs/api")  # gitignored; one JSON line per search, written after the response (BackgroundTasks)
@@ -47,6 +49,12 @@ app = FastAPI(
         {"name": "ops", "description": "상태 확인."},
     ],
 )
+
+
+@app.exception_handler(LLMKeyMissing)
+async def llm_key_missing(request: Request, exc: LLMKeyMissing) -> JSONResponse:
+    """A configured LLM node has no API key (T2-41 S3: raised at the node's entry): 503, not an unhandled 500."""
+    return JSONResponse(status_code=503, content={"detail": f"LLM key missing: {exc}"})
 
 
 @dataclass

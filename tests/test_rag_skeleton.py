@@ -4,6 +4,7 @@ import pytest
 
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
 from kosis_rag import chain
+from kosis_rag.gate import texts
 from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever
 from kosis_rag.shared.catalog import load_catalog, to_document
 from kosis_rag.tools import build_tools
@@ -32,7 +33,7 @@ def test_no_token_overlap_refuses_without_calling_model(retriever):
 
 
 def test_model_no_match_is_a_refusal(retriever):
-    result = chain.answer(retriever, MockClient(chain.NO_MATCH), "주민등록세대수 알려줘")
+    result = chain.answer(retriever, MockClient(texts.NO_MATCH), "주민등록세대수 알려줘")
     assert result.no_answer and result.candidates
 
 

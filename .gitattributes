@@ -1,2 +1,5 @@
 # T2-41 parity fixtures are compared byte for byte: never convert line endings (core.autocrlf on Windows)
 tests/fixtures/parity/*.json -text
+# T2-41 S3: prompt files and the old-prompt snapshot are compared byte for byte (tests/test_prompts_bytes.py)
+src/kosis_rag/rerank/prompts/*.md -text
+tests/fixtures/prompts/* -text

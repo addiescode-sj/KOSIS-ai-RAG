@@ -10,6 +10,7 @@ from kosis_chat.llm.model import MockClient
 from langchain_core.documents import Document
 
 from kosis_rag import chain
+from kosis_rag.gate import texts
 from kosis_rag.schemas.io import TableCandidate
 from kosis_rag.shared.catalog import to_candidate
 
@@ -78,7 +79,7 @@ def test_reply_naming_no_table_falls_back_to_the_template_and_its_top_3():
 
 
 def test_refusals_pick_nothing():
-    assert _answer(chain.NO_MATCH).picked == []
+    assert _answer(texts.NO_MATCH).picked == []
     assert chain.refusal_answer("q", DOCS, None).picked == []
     assert chain.refusal_answer("q", [], None).picked == []
 

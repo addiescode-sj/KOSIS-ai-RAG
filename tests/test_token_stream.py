@@ -16,6 +16,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 
 from backend.app import main  # noqa: E402
 from kosis_rag import chain  # noqa: E402
+from kosis_rag.gate import texts  # noqa: E402
 from kosis_rag.graph import build_graph, run_search, stream_search  # noqa: E402
 from kosis_rag.schemas.io import TableCandidate  # noqa: E402
 from test_api_nodes import _resources  # noqa: E402
@@ -71,7 +72,7 @@ def test_stream_sends_the_checked_reply_and_ends_with_the_run_search_result():
 
 
 def test_no_match_streams_nothing_and_refuses():
-    pieces, final, expected = _streamed(chain.NO_MATCH + "\n")
+    pieces, final, expected = _streamed(texts.NO_MATCH + "\n")
     assert pieces == [] and final.result == expected.result and final.result.no_answer
 
 

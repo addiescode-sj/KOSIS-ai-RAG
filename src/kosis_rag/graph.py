@@ -7,8 +7,9 @@
 
 Each node calls the same function the old nested retrievers call (T2-41 S2: the parse / retrieve step functions
 parse.node.parse_question / decide_condition and retrieve.node.embed / retrieve_list / fuse, over the parts of
-legacy.retrievers.hybrid_search: condition_filter, search_list, rrf_fuse; rerank.rerank_stage1 / rerank_stage2;
-chain.decide_route / refusal_answer / guide_answer), so the graph and `chain.answer(build_search(...))` give the same
+legacy.retrievers.hybrid_search: condition_filter, search_list, rrf_fuse; T2-41 S3: the rerank / gate step functions
+rerank.node.rerank1 / rerank2 over rerank.stage1.rerank_stage1 / rerank.stage2.rerank_stage2, gate.node.decide_route;
+chain.refusal_answer / guide_answer), so the graph and `chain.answer(build_search(...))` give the same
 result. Stages that are off are left
 out when the graph is built; only `gate` branches at run time. The question is parsed once (parse) and its filter
 decided once (condition) for every list, where the old path parsed inside the hybrid.
@@ -43,13 +44,15 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from kosis_chat.llm.model import LLMClient
-
 from kosis_rag import chain
+from kosis_rag.gate import node as gate_step
+from kosis_rag.gate.node import GateInput
+from kosis_rag.llm.base import LLMClient
 from kosis_rag.parse import node as parse_step  # module access, so a test can patch parse.node.parse_query
 from kosis_rag.parse.schemas import ConditionInput, ParsedQuery, ParseInput
 from kosis_rag.pipeline import SearchResources
-from kosis_rag.rerank import rerank_stage1, rerank_stage2
+from kosis_rag.rerank import node as rerank_step
+from kosis_rag.rerank.schemas import Stage1Input, Stage2Input
 from kosis_rag.retrieve import node as retrieve_step
 from kosis_rag.retrieve.schemas import EmbedInput, FuseInput, ListInput
 from kosis_rag.schemas.catalog import TableRecord
@@ -100,8 +103,6 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         resources.stage1_score is set, rerank2 only when resources.select is set.
     Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
     """
-    s = resources.settings
-
     def timed(name: str, state: SearchState, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
         """The trace with this node's entry added.
 
@@ -194,10 +195,11 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         """Re-order the top rerank_n by the stage 1 cross-encoder.
 
         In: state.question, state.docs. Out: {"docs": re-ordered with stage1_* metadata, "trace"}.
-        Side effects: cross-encoder inference; ValueError for an unknown RERANK_MODE. Node: rerank1.
+        Side effects: cross-encoder inference; ValueError for an unknown RERANK_MODE. Node: rerank1 (step:
+        rerank.node.rerank1).
         """
         started = time.perf_counter()
-        docs = rerank_stage1(state.question, state.docs, resources.stage1_score, n=s.rerank_n, mode=s.rerank_mode)
+        docs = rerank_step.rerank1(Stage1Input(question=state.question, docs=state.docs), resources).docs
         return {"docs": docs, "trace": timed("rerank1", state, started)}
 
     def rerank2(state: SearchState) -> dict:
@@ -205,22 +207,26 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
 
         In: state.question, state.docs.
         Out: {"docs": picked first with stage2_* metadata, "trace": with the top doc's stage2_* fields}.
-        Side effects: one LLM re-ranker call (CLOVA / HCX); its errors are stored in stage2_error. Node: rerank2.
+        Side effects: LLMKeyMissing on entry when resources.stage2_llm has no key (T2-41 S3); one LLM re-ranker call
+        (CLOVA / HCX / OpenAI); its errors are stored in stage2_error. Node: rerank2 (step: rerank.node.rerank2).
         """
         started = time.perf_counter()
-        docs = rerank_stage2(state.question, state.docs, resources.select, k_in=s.stage2_k,
-                             name=resources.stage2_name)
+        docs = rerank_step.rerank2(Stage2Input(question=state.question, docs=state.docs), resources).docs
         stage2 = {key: v for key, v in docs[0].metadata.items() if key.startswith("stage2")} if docs else {}
         return {"docs": docs, "trace": timed("rerank2", state, started, **stage2)}
 
     def gate(state: SearchState) -> dict:
         """Decide refuse or guide on the top k.
 
-        In: state.docs. Out: {"route", "refusal_reason", "trace"}. Side effects: none. Node: gate.
+        In: state.docs. Out: {"route" (refuse | guide), "refusal_reason", "trace"}. Side effects: none.
+        Node: gate (step: gate.node.decide_route; its "found" is written as "guide" until S5, the state's route
+        stays refuse | guide).
         """
         started = time.perf_counter()
-        route, reason = chain.decide_route(state.docs[:k])
-        return {"route": route, "refusal_reason": reason, "trace": timed("gate", state, started, route=route)}
+        out = gate_step.decide_route(GateInput(docs=state.docs[:k]), resources)
+        route = "guide" if out.route == "found" else out.route
+        return {"route": route, "refusal_reason": out.refusal_reason,
+                "trace": timed("gate", state, started, route=route)}
 
     def refuse(state: SearchState) -> dict:
         """Build the refusal answer on the top k.
@@ -327,7 +333,7 @@ def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *
     """Compile the search graph for these resources. Returns the compiled graph (call .invoke({"question": q})).
 
     In: resources = load_resources(...) (records, dense, BM25, stage 1 scorer, stage 2 selector, settings);
-        client = the guide LLM (ChatClovaX, or a Phase 1 client such as MockClient); k = tables shown to the answer
+        client = the guide LLM (ChatClovaX, or an LLMClient such as MockClient); k = tables shown to the answer
         (gate / refuse / guide see docs[:k]; the search stages see the whole pool), same default as chain.answer.
     Out: a compiled LangGraph graph over SearchState with graph_nodes' nodes: retrieve_hq is added only when
         resources.hq is set, retrieve_hq_bm25 only when resources.hq_bm25 is set (T2-39, HQ_BUILD / HQ_BM25), embed

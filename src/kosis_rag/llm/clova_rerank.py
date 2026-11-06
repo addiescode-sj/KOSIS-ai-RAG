@@ -1,12 +1,12 @@
-"""CLOVA Studio reranker API as a stage 2 LLM re-ranker (T2-07).
+"""CLOVA Studio reranker API as a stage 2 LLM re-ranker (T2-07; T2-41 S3: from clova.py).
 
 `/v1/api-tools/reranker` gets the question and up to K table texts, answers, and lists the documents it cited
-(`citedDocuments`). It gives no scores, so stage 2 only says which tables to put first (rerank.LLMReranker).
+(`citedDocuments`). It gives no scores, so stage 2 only says which tables to put first (rerank.stage2.rerank_stage2).
 The question is wrapped as "다음 질문의 수치를 찾을 수 있는 통계표: {q}" (lab plan 42: the plain question made the
 model answer the question instead of picking tables). The table text is the n2 passage (kosis_rag.shared.tabletext).
 
-Key: HCX_API_KEY from this repo's .env, read the same way as chain.clova_chat; it is never printed or logged.
-Plain urllib, so LangChain callbacks do not see the call: calls, seconds and tokens go into the result instead.
+Key: `key`, or else LLMConfig.api_key (provider clova_rerank; the caller reads HCX_API_KEY); it is never printed or
+logged. Plain urllib, so LangChain callbacks do not see the call: calls, seconds and tokens go into the result instead.
 """
 
 from __future__ import annotations
@@ -18,20 +18,15 @@ import urllib.request
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
+
+from kosis_rag.llm.config import LLMConfig, require_key
 
 HOST = "https://clovastudio.stream.ntruss.com"
 PATH = "/v1/api-tools/reranker"
 WRAP = "다음 질문의 수치를 찾을 수 있는 통계표: {q}"
 RETRY_CODES = ("429", "5")  # rate limit and server errors are retried; anything else fails at once
-
-
-def api_key() -> str | None:
-    from kosis_chat.config import get_secret, load_env, load_settings
-
-    load_env(Path(__file__).resolve().parents[2] / ".env")
-    return get_secret(load_settings().api_key_env)
+DEFAULT_TIMEOUT = 60.0
 
 
 def post(body: dict, key: str, timeout: float) -> dict:
@@ -55,22 +50,35 @@ class ClovaResult:
 
 @dataclass
 class ClovaReranker:
-    """select(question, keys) -> ClovaResult. `text_of` maps a table key to the passage sent for it."""
+    """select(question, keys) -> ClovaResult. `text_of` maps a table key to the passage sent for it.
+
+    The key is `key` when given, else config.api_key (read at the first call; LLMKeyMissing when neither is set).
+    timeout: config.timeout when set, else 60 s.
+    """
 
     text_of: dict[str, str]
     wrap: bool = True
     max_tokens: int = 512  # answer length the API may use
     waits: tuple[float, ...] = (5, 15, 30)  # seconds before each retry
-    timeout: float = 60
+    timeout: float | None = None
     key: str | None = None
     send: Callable[[dict, str, float], dict] = post  # replaced by a fake in tests
+    config: LLMConfig | None = None
+
+    def __post_init__(self) -> None:
+        if self.timeout is None:
+            self.timeout = (self.config.timeout if self.config is not None and self.config.timeout is not None
+                            else DEFAULT_TIMEOUT)
 
     def __call__(self, question: str, keys: list[str]) -> ClovaResult:
         if not keys:
             return ClovaResult(keys=[], calls=0)
-        self.key = self.key or api_key()
         if not self.key:
-            raise RuntimeError("HCX_API_KEY is not set (.env)")
+            if self.config is None:
+                raise RuntimeError("ClovaReranker needs key= or config= (LLMConfig with api_key)")
+            self.key = require_key(self.config)
+        if not self.key:
+            raise RuntimeError("the CLOVA reranker key is empty")
         body = {"query": WRAP.format(q=question) if self.wrap else question, "maxTokens": self.max_tokens,
                 "documents": [{"id": str(n), "doc": self.text_of[k]} for n, k in enumerate(keys, 1)]}
         calls = 0

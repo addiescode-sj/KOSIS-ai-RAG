@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from kosis_chat.llm.model import MockClient
 
-from kosis_rag.chain import NO_MATCH, REFUSAL_TEXT, REFUSALS
+from kosis_rag.gate.texts import NO_MATCH, REFUSAL_TEXT, REFUSALS
 from kosis_rag.graph import SearchState, build_graph, run_search
 from kosis_rag.pipeline import load_resources
 from kosis_rag.shared.catalog import to_candidate

@@ -14,12 +14,15 @@ doc_format, which TEXT_FORMAT (when set) must match; weights trained on another 
     EMBED_CKPT=data/models/bge-m3-seen-e2.pt
     RERANK_CKPT=data/models/bge-reranker-unseen-e2.pt   # empty = no stage 1
     RERANK_MODE=blend                                   # blend | score
-    STAGE2=clova                                        # clova | hcx | none (HCX_THINKING=none | low for hcx)
+    STAGE2=clova                                        # clova | hcx | gpt | none (HCX_THINKING=none | low for hcx)
     COND_FILTER=on                                      # on | off: T2-14 conditions before the hybrid
     TEXT_FORMAT=n2-L60                                  # optional check: n2-L60 (n3-L60 deprecated)
     HQ_BUILD=hq-<prompt8>-<tables8>-<model>-f30-k2      # T2-39 question index (kosis_rag.hq); empty = off
     HQ_WEIGHT=1.0                                       # RRF weight of the question lists
     HQ_BM25=off                                         # on: also BM25 over each table's questions
+
+The stage 2 LLM's key (HCX_API_KEY for clova / hcx, OPENAI_API_KEY for gpt) and HCX_THINKING are read here too
+(env_stage2_llm -> LLMConfig, T2-41 S3; S4 moves them to backend/app/config.py): the selectors take an LLMConfig.
 
 The question index (T2-39) is read by the graph only (graph.build_graph adds retrieve_hq / retrieve_hq_bm25);
 build_search, the nested-retriever path, ignores it so its behaviour stays as it was.
@@ -36,9 +39,13 @@ from langchain_core.retrievers import BaseRetriever
 from pydantic import BaseModel
 
 from kosis_rag.adapters import files
+from kosis_rag.legacy.rerankers import CrossEncoderReranker, LLMReranker
 from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever, HqRetriever, HybridRetriever
+from kosis_rag.llm.config import LLMConfig
 from kosis_rag.parse.node import parse_query
-from kosis_rag.rerank import LLM_RERANKERS, CrossEncoderReranker, LLMReranker, Score, Select, passage_scorer
+from kosis_rag.rerank import selectors
+from kosis_rag.rerank.stage1 import passage_scorer
+from kosis_rag.rerank.stage2 import Score, Select
 from kosis_rag.retrieve import bm25 as table_bm25  # module access: pipeline re-exports none of its names
 from kosis_rag.retrieve import hq as question_index
 from kosis_rag.schemas.catalog import TableRecord
@@ -46,6 +53,8 @@ from kosis_rag.shared import tabletext as text
 
 REPO = Path(__file__).resolve().parents[2]
 OFF = ("", "0", "off", "false", "no", "none")
+# The environment variable holding each stage 2 LLM's key (T2-41 S3: read by env_stage2_llm until S4)
+STAGE2_KEY_ENV = {"clova": "HCX_API_KEY", "hcx": "HCX_API_KEY", "gpt": "OPENAI_API_KEY"}
 log = logging.getLogger(__name__)
 
 
@@ -134,6 +143,22 @@ class SearchResources:
     hq: BaseRetriever | None = None  # T2-39 question index, dense (kosis_rag.legacy.retrievers.HqRetriever); None = off
     hq_bm25: BaseRetriever | None = None  # T2-39 question index, BM25 over each table's questions; None = off
     sigungu: dict[str, list[str]] = field(default_factory=dict)  # 시군구 -> 시도 names parse reads (P2-D9, T2-41 S2)
+    stage2_llm: LLMConfig | None = None  # the config `select` was built from (T2-41 S3); None = a given selector
+
+
+def env_stage2_llm(name: str) -> LLMConfig:
+    """The stage 2 LLM's config from this repo's .env and the environment (T2-41 S3; S4: backend/app/config.py).
+
+    In: name = a selectors.LLM_RERANKERS key (clova | hcx | gpt). Out: selectors.default_config(name) with api_key =
+        STAGE2_KEY_ENV[name] (None when unset: rerank2 raises LLMKeyMissing) and thinking = HCX_THINKING (default
+        none) — the variables the selectors used to read themselves (Phase 1 load_env + get_secret, os.getenv).
+    Side effects: loads this repo's .env into the environment (existing variables kept). Node: none.
+    """
+    from dotenv import load_dotenv
+
+    load_dotenv(REPO / ".env", override=False)
+    return selectors.default_config(name, api_key=os.environ.get(STAGE2_KEY_ENV[name]) or None,
+                                    thinking=(os.getenv("HCX_THINKING") or "none").strip().lower())
 
 
 _SIGUNGU_WARNED: list[bool] = []  # set by the first load_resources that finds no sigungu.json
@@ -142,7 +167,8 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
                    dense: BaseRetriever | None = None, stage1_score: Score | None = None,
                    select: Select | None = None, hq: BaseRetriever | None = None,
                    hq_bm25: BaseRetriever | None = None,
-                   sigungu: dict[str, list[str]] | None = None) -> SearchResources:
+                   sigungu: dict[str, list[str]] | None = None,
+                   stage2_llm: LLMConfig | None = None) -> SearchResources:
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
     In: settings = search settings (default: .env); records, dense, stage1_score, select, hq, hq_bm25, sigungu = parts
@@ -153,6 +179,9 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
         hq / hq_bm25 (T2-39) are set only when HQ_BUILD is set (hq_bm25 also needs HQ_BM25 on); otherwise None, even
         when given. The question BM25 follows the BM25 `k` rule above. sigungu = the 시군구 -> 시도 dictionary parse
         reads (data/sigungu.json, {} when the file is missing; T2-41 S2: it was query.SIGUNGU, read at import).
+        stage2_llm = the stage 2 LLM's config when the selector is built here (T2-41 S3): the given one, else
+        env_stage2_llm(STAGE2); with a given selector, the given stage2_llm (default None: rerank2 checks no key);
+        None when stage 2 is off.
     Side effects: reads tables.jsonl and data/sigungu.json (one warning when it is missing), connects to Chroma and
         loads the query embedder, loads the cross-encoder, opens the question collection (reusing the dense
         retriever's query embedder) and reads its questions.jsonl, unless the matching part is given. Raises ValueError for a TEXT_FORMAT that disagrees with the collection or an
@@ -179,10 +208,13 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
 
     # 3. stage 2 selector (LLM re-ranker)
     if select is None and s.stage2 not in OFF:
-        if s.stage2 not in LLM_RERANKERS:
-            raise ValueError(f"unknown STAGE2 {s.stage2!r}; known: none, {', '.join(LLM_RERANKERS)}")
+        if s.stage2 not in selectors.LLM_RERANKERS:
+            raise ValueError(f"unknown STAGE2 {s.stage2!r}; known: none, {', '.join(selectors.LLM_RERANKERS)}")
         text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
-        select = LLM_RERANKERS[s.stage2](text_of, {})
+        stage2_llm = stage2_llm or env_stage2_llm(s.stage2)
+        select = selectors.LLM_RERANKERS[s.stage2](text_of, stage2_llm)
+    elif select is None:
+        stage2_llm = None  # stage 2 off
 
     # 4. question index (T2-39): the tables' hypothetical questions, searched as their own lists
     by_key = {r.info.key: r for r in records}
@@ -209,12 +241,13 @@ def load_resources(settings: SearchSettings | None = None, *, records: list[Tabl
     return SearchResources(settings=s, records=by_key, dense=dense, bm25=bm25,
                            text_format=fmt, stage1_score=stage1_score, select=select,
                            stage2_name=s.stage2 if s.stage2 not in OFF else "custom", hq=hq, hq_bm25=hq_bm25,
-                           sigungu=sigungu)
+                           sigungu=sigungu, stage2_llm=stage2_llm)
 
 
 def build_search(settings: SearchSettings | None = None, *, records: list[TableRecord] | None = None,
                  dense: BaseRetriever | None = None, stage1_score: Score | None = None,
-                 select: Select | None = None, sigungu: dict[str, str] | None = None) -> BaseRetriever:
+                 select: Select | None = None, sigungu: dict[str, str] | None = None,
+                 stage2_llm: LLMConfig | None = None) -> BaseRetriever:
     """The staged retriever for `settings` (default: .env). The keyword parts replace the loaded ones (tests).
 
     In: as load_resources. Out: HybridRetriever (with the T2-14 condition when COND_FILTER is on), wrapped by
@@ -225,7 +258,7 @@ def build_search(settings: SearchSettings | None = None, *, records: list[TableR
     """
     settings = (settings or SearchSettings.from_env()).model_copy(update={"hq_build": None, "hq_bm25": False})
     r = load_resources(settings, records=records, dense=dense, stage1_score=stage1_score, select=select,
-                       sigungu=sigungu)
+                       sigungu=sigungu, stage2_llm=stage2_llm)
     s = r.settings
     retriever: BaseRetriever = HybridRetriever(
         retrievers=[r.dense, r.bm25], names=["dense", "bm25"], k=s.pool, k_each=s.pool, score_from=0,
