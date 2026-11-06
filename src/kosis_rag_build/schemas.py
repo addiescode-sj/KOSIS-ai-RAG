@@ -13,6 +13,7 @@ Each node sets the fields named after it; `trace` holds node -> {"seconds": floa
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +28,11 @@ Trace = dict[str, dict[str, Any]]
 
 
 # --- table registry, 시군구 dictionary, Chroma table index, question index ---
+
+
+def index_version_now() -> str:
+    """When a load happens, as the old CLIs stamped it: local time YYYYMMDDHHMM (T2-41 S6b: the states' default)."""
+    return datetime.now().strftime("%Y%m%d%H%M")
 
 class TablesBuildState(BaseModel):
     """data/tables.jsonl from the provided data (tables.py). data_dir / out are the input."""
@@ -60,7 +66,7 @@ class IndexBuildState(BaseModel):
     device: str | None = None
     export: Path | None = None  # write the build to this .npz instead of Chroma
     chroma: ChromaConfig = Field(default_factory=ChromaConfig)  # server for load
-    index_version: str = ""  # YYYYMMDDHHMM of this load (the CLI sets it)
+    index_version: str = Field(default_factory=index_version_now)  # YYYYMMDDHHMM of this load
     data_sha256: str = ""  # read_records
     name: str = ""  # read_records: the collection name
     ids: list[str] = Field(default_factory=list)  # read_records: table keys
@@ -84,7 +90,7 @@ class QuestionsIndexState(BaseModel):
     hq_root: Path | None = None  # data/hq (None: kosis_rag.adapters.files.HQ_DIR)
     chroma: ChromaConfig = Field(default_factory=ChromaConfig)
     dry_run: bool = False  # read_questions only: data_sha256, name and count, no embedding, no Chroma
-    index_version: str = ""  # YYYYMMDDHHMM (the CLI sets it)
+    index_version: str = Field(default_factory=index_version_now)  # YYYYMMDDHHMM of this load
     rows: list[dict[str, Any]] = Field(default_factory=list)  # read_questions
     texts: list[str] = Field(default_factory=list)  # read_questions: norm_query(text)
     data_sha256: str = ""  # read_questions: questions_index.data_sha256(rows)

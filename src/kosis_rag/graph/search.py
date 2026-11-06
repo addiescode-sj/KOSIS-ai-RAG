@@ -272,17 +272,17 @@ def run_search(graph, question: str, config: dict | None = None) -> SearchState:
     return SearchState.model_validate(graph.invoke({"question": question}, config=config))
 
 
-def stream_search(graph, question: str, config: dict | None = None, *, k: int = 5) -> Iterator[tuple[str, Any]]:
-    """Run the graph and yield each node as it finishes, then the module's output (T2-37; T2-41 S5).
+def stream_search(graph, question: str, config: dict | None = None) -> Iterator[tuple[str, Any]]:
+    """Run the graph and yield each node as it finishes, then the final state (T2-37; T2-41 S5, S6b).
 
-    In: as run_search; k = the budget the graph was built with (build_graph's k), for SearchOutput.candidates.
+    In: as run_search.
     Out: ("<node>", that node's own trace entry) per finished node in run order (trace is cumulative, so only the
         node's key is sent; the parallel retrieve_<list> nodes come in the order they finish, T2-39), then
-        ("output", SearchOutput) — kosis_rag.api.to_output of the final state, what SearchModule.search returns.
+        ("state", SearchState) — the final state, what run_search returns. The projection to SearchOutput is the
+        caller's (kosis_rag.api.SearchModule.stream: ("output", to_output(state, k)) with the k the graph was built
+        with), so this package does not import kosis_rag.api and holds no second copy of k.
     Side effects: as run_search. Node: none (it runs them).
     """
-    from kosis_rag.api import to_output  # api imports this module: read the projection when the stream ends
-
     final: dict = {}
     for mode, chunk in graph.stream({"question": question}, config=config, stream_mode=["updates", "values"]):
         if mode == "updates":
@@ -290,4 +290,4 @@ def stream_search(graph, question: str, config: dict | None = None, *, k: int = 
                 yield name, update["trace"][name]
         else:
             final = chunk
-    yield "output", to_output(SearchState.model_validate(final), k)
+    yield "state", SearchState.model_validate(final)

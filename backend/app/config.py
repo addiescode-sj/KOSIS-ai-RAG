@@ -12,7 +12,7 @@ is read (set the variables in the shell, docker-compose `environment:`, or a scr
     GUIDE_MODEL GUIDE_TEMPERATURE GUIDE_MAX_TOKENS GUIDE_TIMEOUT   the guide LLM (ChatClovaX)
     HCX_API_KEY, else CLOVASTUDIO_API_KEY           the guide LLM's key (None: the guide node answers 503)
 
-The keys and defaults are the ones SearchSettings.from_env read (tests/test_config_from_env.py compares them field by
+The keys and defaults are the ones the old pipeline settings read from the environment (tests/test_config_from_shell.py compares them field by
 field). The guide defaults are Phase 1 configs/model.yaml @e248a45 written as constants (that file is no longer read).
 """
 
@@ -33,11 +33,11 @@ GUIDE_TIMEOUT = 60.0
 GUIDE_KEY_ENV = ("HCX_API_KEY", "CLOVASTUDIO_API_KEY")  # first set one wins (ChatClovaX's own fallback, now explicit)
 # The environment variable holding each stage 2 LLM's key
 STAGE2_KEY_ENV = {"clova": "HCX_API_KEY", "hcx": "HCX_API_KEY", "gpt": "OPENAI_API_KEY"}
-CHROMA_FIELDS = {"collection": "collection"}  # override name -> ChromaConfig field (SearchSettings had `collection`)
+CHROMA_FIELDS = {"collection": "collection"}  # override name -> ChromaConfig field (the old settings had `collection`)
 
 
 class SearchConfig(NamedTuple):
-    """What search_config_from_env gives. Read it by name (cfg.spec, cfg.options): the order is options first."""
+    """What search_config_from_shell gives. Read it by name (cfg.spec, cfg.options): the order is options first."""
 
     options: SearchOptions
     spec: IndexSpec
@@ -49,7 +49,7 @@ def _env(name: str) -> str | None:
     return os.environ.get(name) or None
 
 
-def stage2_llm_from_env(name: str) -> LLMConfig | None:
+def stage2_llm_from_shell(name: str) -> LLMConfig | None:
     """The stage 2 LLM's config: selectors.default_config(name) with its key (STAGE2_KEY_ENV) and HCX_THINKING.
 
     In: name = options.stage2. Out: the config, or None for none / an unknown name (load_resources then raises).
@@ -61,7 +61,7 @@ def stage2_llm_from_env(name: str) -> LLMConfig | None:
                                     thinking=(_env("HCX_THINKING") or "none").strip().lower())
 
 
-def guide_llm_from_env() -> LLMConfig:
+def guide_llm_from_shell() -> LLMConfig:
     """The guide LLM (ChatClovaX) config: GUIDE_* or the model.yaml defaults; key HCX_API_KEY, else
     CLOVASTUDIO_API_KEY, else None (respond.node.GuideClient raises LLMKeyMissing when guide runs). Side effects: reads os.environ."""
     key = next((value for value in map(_env, GUIDE_KEY_ENV) if value), None)
@@ -71,8 +71,8 @@ def guide_llm_from_env() -> LLMConfig:
                      timeout=float(_env("GUIDE_TIMEOUT") or GUIDE_TIMEOUT))
 
 
-def search_config_from_env(**overrides: Any) -> SearchConfig:
-    """The search settings from the shell environment, with overrides (the old SearchSettings.from_env(**overrides)).
+def search_config_from_shell(**overrides: Any) -> SearchConfig:
+    """The search settings from the shell environment, with overrides (as the old pipeline settings read it, with overrides).
 
     In: overrides = any SearchOptions or IndexSpec field (a whole `chroma` replaces CHROMA_HOST / CHROMA_PORT /
         CHROMA_COLLECTION), or `collection` (the Chroma collection), given by name;
@@ -104,5 +104,5 @@ def search_config_from_env(**overrides: Any) -> SearchConfig:
         **{CHROMA_FIELDS[k]: v for k, v in values.items() if k in CHROMA_FIELDS})
     options = SearchOptions(**{k: v for k, v in values.items() if k in SearchOptions.model_fields})
     spec = IndexSpec(chroma=chroma, **{k: v for k, v in values.items() if k in IndexSpec.model_fields})
-    return SearchConfig(options=options, spec=spec, stage2_llm=stage2_llm_from_env(options.stage2),
-                        guide_llm=guide_llm_from_env())
+    return SearchConfig(options=options, spec=spec, stage2_llm=stage2_llm_from_shell(options.stage2),
+                        guide_llm=guide_llm_from_shell())

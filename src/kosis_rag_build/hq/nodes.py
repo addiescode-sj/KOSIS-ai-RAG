@@ -39,6 +39,7 @@ from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.fields import table_fields
 from kosis_rag_build.hq import prompt as hq_prompt
 from kosis_rag_build.hq.constants import CONCURRENCY, FILTER_FRAC, MAX_ATTEMPTS, MIN_KEEP, PROMPT_VERSION
+from kosis_rag_build.hq.reply import parse_reply
 from kosis_rag_build.hq.report import report
 from kosis_rag_build.hq.rules import check_positions
 from kosis_rag_build.schemas import HqBuildState, HqState, TableQuestions
@@ -48,24 +49,6 @@ HQ_DIR = REPO / "data" / "hq"
 CACHE_DIR = HQ_DIR / "cache"
 
 PairScore = Callable[[str, list[str]], list[float]]  # (table key, questions) -> one relevance per question
-
-
-def parse_reply(raw: str) -> dict:
-    """The first JSON object in a reply.
-
-    In: raw = the reply text. Out: the decoded object. Side effects: raises ValueError when there is no JSON object.
-    Node: validate.
-    """
-    start = raw.find("{")
-    if start < 0:
-        raise ValueError(f"no JSON object in reply: {raw[:80]!r}")
-    try:
-        data, _ = json.JSONDecoder().raw_decode(raw, start)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"broken JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("the reply is not a JSON object")
-    return data
 
 
 def model_slug(model: str) -> str:

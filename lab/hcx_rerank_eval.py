@@ -11,7 +11,7 @@ rows against F0 (table-level bootstrap, as in plans 32/33/35). Also reported: by
 are cited, how often nothing is cited on answerable vs no-answer rows, tokens and seconds per question.
 
 Every response is cached in data/lab/hcx_rerank/<tag>/<qid>.json, so a rerun calls nothing and a stopped run
-resumes. The key is HCX_API_KEY from the repo root .env (or vendor/phase1/.env); it is never printed.
+resumes. The key is HCX_API_KEY from the shell environment (docs/config.md); it is never printed.
 
     python lab/hcx_rerank_eval.py --limit 5        # first 5 questions only, to check the calls
     python lab/hcx_rerank_eval.py

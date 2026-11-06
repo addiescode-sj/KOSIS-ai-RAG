@@ -2,7 +2,7 @@
 SearchResources from pipeline.py — plans/T2-41.md 입출력 계약).
 
 The caller declares them (§0.6): nothing here reads .env or the environment. SearchOptions is how the search behaves,
-IndexSpec is where its data and models are; their defaults are the old SearchSettings defaults. SearchResources is
+IndexSpec is where its data and models are; their defaults are the old settings object's defaults. SearchResources is
 what adapters.loader.load_resources opens from them once (records, dense, BM25, scorers, question index).
 """
 
@@ -32,7 +32,7 @@ class ChromaConfig(BaseModel):
 class IndexSpec(BaseModel):
     """Paths, connection and weights of one search setup (T2-41 S4). Fake-resource tests leave it empty.
 
-    A None path means the repo default the old SearchSettings used (data/tables.jsonl, data/sigungu.json, data/hq);
+    A None path means the repo default the old settings object used (data/tables.jsonl, data/sigungu.json, data/hq);
     a None checkpoint means that stage is off (rerank_ckpt) or the collection's own (embed_ckpt is checked against it).
     """
 
@@ -48,7 +48,7 @@ class IndexSpec(BaseModel):
 
 
 class SearchOptions(BaseModel):
-    """How the search behaves (T2-41 S4). Defaults = the old SearchSettings defaults."""
+    """How the search behaves (T2-41 S4). Defaults = the old settings object's defaults."""
 
     cond_filter: bool = True  # T2-14 conditions before the lists (COND_FILTER)
     pool: int = 50  # tables each list keeps before RRF, and the fusion hands on
@@ -61,7 +61,7 @@ class SearchOptions(BaseModel):
     hq_bm25: bool = False  # also BM25 over each table's questions (HQ_BM25)
 
     def label(self, spec: IndexSpec) -> str:
-        """The setup's short name, as SearchSettings.label() gave it: "hybrid+cond+hq -> stage1-blend -> hcx"."""
+        """The setup's short name, as the old settings' label() gave it: "hybrid+cond+hq -> stage1-blend -> hcx"."""
         hq = ""
         if spec.hq_build:
             hq = "+hq" + ("+hqbm25" if self.hq_bm25 else "") + (f"(w{self.hq_weight:g})" if self.hq_weight != 1.0 else "")

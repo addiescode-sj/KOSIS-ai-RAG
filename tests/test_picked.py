@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from backend.app.respond import verify
 from backend.app.respond.node import GuideInput, RefuseInput, guide, refuse
 from kosis_rag.gate import texts
+from backend.app.respond.texts import NO_MATCH
 from kosis_rag.schemas.io import TableCandidate
 from kosis_rag.shared.catalog import to_candidate
 
@@ -91,7 +92,7 @@ def test_reply_naming_no_table_falls_back_to_the_template_and_its_top_3():
 
 
 def test_refusals_pick_nothing():
-    assert _answer(texts.NO_MATCH).picked == []
+    assert _answer(NO_MATCH).picked == []
     assert _refuse("q", DOCS, None).picked == []
     assert _refuse("q", [], None).picked == []
 

@@ -1,5 +1,5 @@
 """The old staged retriever (T2-06, T2-07) over loaded resources (T2-41 S4: from pipeline.build_search, which took
-SearchSettings and loaded the resources itself).
+the old settings object and loaded the resources itself).
 
     HybridRetriever (dense + BM25, RRF, T2-14 condition) -> [CrossEncoderReranker] -> [LLMReranker]
 

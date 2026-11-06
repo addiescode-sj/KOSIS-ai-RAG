@@ -17,6 +17,7 @@ from backend.app.respond import legacy as respond_legacy  # noqa: E402
 from backend.app.respond.graph import build_answer_graph, run_answer  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag.gate import texts  # noqa: E402
+from backend.app.respond.texts import NO_MATCH  # noqa: E402
 from kosis_rag.adapters.loader import load_resources  # noqa: E402
 from kosis_rag.graph.search import build_graph, run_search  # noqa: E402
 from kosis_rag.legacy.rerankers import CrossEncoderReranker, LLMReranker  # noqa: E402
@@ -163,7 +164,7 @@ def _both(question, reply="", *, settings=None, dense_keys=KEYS, stage1=_stage1,
 
 @pytest.mark.parametrize("case, question, reply, kw", [
     ("a: guide answer", "출생아 수", "[1] DT_A 표가 출생아 수를 담고 있습니다.", {}),
-    ("e: LLM says NO_MATCH", "출생아 수", texts.NO_MATCH, {}),
+    ("e: LLM says NO_MATCH", "출생아 수", NO_MATCH, {}),
     ("f: unknown table id -> template", "출생아 수", "DT_ZZZ 표를 보세요.", {}),
     ("d: stage 2 raised -> guide", "출생아 수", "[1] DT_C 표입니다.", {"select": _boom}),
     ("g: stage 1 off", "출생아 수", "[1] DT_A 표입니다.", {"stage1": None}),

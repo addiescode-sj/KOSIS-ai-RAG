@@ -97,9 +97,11 @@ class SearchModule:
 
     def stream(self, inp: SearchInput) -> Iterator[tuple[str, Any]]:
         """Run the search and yield ("<node>", its trace entry) per finished search node, then ("output", SearchOutput)
-        — the same value search() returns (graph.search.stream_search)."""
+        — the same value search() returns. graph.search.stream_search ends with ("state", SearchState); this method
+        projects it here with the k its graph was built with (T2-41 S6b: graph/ does not import api)."""
         k = self.k(inp.k)
-        yield from stream_search(self.graph(k), inp.question, k=k)
+        for name, value in stream_search(self.graph(k), inp.question):
+            yield ("output", to_output(value, k)) if name == "state" else (name, value)
 
     def search_tables(self, question: str, k: int | None = None) -> list[TableCandidate]:
         """The candidate tables for a question (= search(...).candidates)."""

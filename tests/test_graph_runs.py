@@ -111,7 +111,7 @@ def _plain(docs):
 
 
 def _settings(**kw) -> tuple[IndexSpec, SearchOptions]:
-    """(spec, options) of these tests (T2-41 S4: the SearchSettings fields split by where they now live)."""
+    """(spec, options) of these tests (T2-41 S4: the old settings fields split by where they now live)."""
     kw = {"cond_filter": False, "stage2": "none", **kw}
     spec = {k: v for k, v in kw.items() if k in IndexSpec.model_fields}
     return IndexSpec(**spec), SearchOptions(**{k: v for k, v in kw.items() if k not in spec})

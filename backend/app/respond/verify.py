@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from kosis_rag.gate import texts
+from backend.app.respond.texts import NO_MATCH
 from kosis_rag.schemas.io import TableCandidate
 
 from backend.app.respond.patterns import REF, REF_RANGE, TBL_ID, YEAR
@@ -93,7 +93,7 @@ def streamable_prefix(text: str, question: str, candidates: list[TableCandidate]
     Node: guide (through node.guide).
     """
     head = text.lstrip()
-    if texts.NO_MATCH.startswith(head) or head.startswith(texts.NO_MATCH):
+    if NO_MATCH.startswith(head) or head.startswith(NO_MATCH):
         return ""
     words = re.match(r"[\s\S]*\s", text)
     prefix = words.group(0) if words else ""

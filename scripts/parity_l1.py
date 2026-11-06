@@ -75,11 +75,11 @@ def preset_overrides(preset: str) -> dict[str, Any]:
 def build_preset_graph(preset: str):
     """(graph, resources) of a STAGED preset, built as the L1 runner's graph:<preset> built it at S0 (T2-41 S4: from
     the new settings objects directly — shell environment + the preset's overrides — not through evals)."""
-    from backend.app.config import search_config_from_env
+    from backend.app.config import search_config_from_shell
     from kosis_rag.adapters.loader import load_resources
     from kosis_rag.graph.search import build_graph
 
-    cfg = search_config_from_env(**preset_overrides(preset))
+    cfg = search_config_from_shell(**preset_overrides(preset))
     resources = load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm)
     return build_graph(resources), resources  # T2-41 S5: the module graph ends at gate, no guide client
 
@@ -99,8 +99,8 @@ def _collection(retriever: Any) -> tuple[str | None, dict[str, Any]]:
 def config_fingerprint(preset: str, resources: Any) -> dict[str, Any]:
     """The effective search configuration, read off the built resources (never from .env).
 
-    S0 form read resources.settings (SearchSettings); S4 reads the same values off resources.options /
-    resources.spec (tables None = the default data/tables.jsonl, as SearchSettings.tables); the keys and the values
+    S0 form read resources.settings (the old settings object); S4 reads the same values off resources.options /
+    resources.spec (tables None = the default data/tables.jsonl, as the old settings' tables); the keys and the values
     for the same setup stay equal (tests/test_parity_l1_tool.py). The list order and weights are the ones
     kosis_rag.graph.search.graph_nodes fuses with (dense 1.0, bm25 1.0, hq and hq_bm25 HQ_WEIGHT, each only when its
     retriever is loaded).

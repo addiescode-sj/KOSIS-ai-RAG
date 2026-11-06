@@ -18,6 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from backend.app.respond import prompts as guide_prompts
 from kosis_rag.gate import texts
+from backend.app.respond.texts import NO_MATCH
 from kosis_rag.rerank import constants, hcx
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +113,7 @@ def test_loader_reads_the_same_text_through_importlib_resources():
 
 
 def test_refusal_texts_moved_unchanged():
-    assert texts.NO_MATCH == OLD_NO_MATCH
+    assert NO_MATCH == OLD_NO_MATCH
     assert texts.REFUSAL_TEXT == OLD_REFUSAL_TEXT
     assert texts.REFUSALS == OLD_REFUSALS
 
@@ -133,4 +134,4 @@ def test_guide_loader_gives_the_old_messages_and_template():
     assert new == old and new.input_variables == ["context", "question"]
     values = {"question": "q", "context": "[1] DT_A | 표"}
     assert new.invoke(values).to_messages() == old.invoke(values).to_messages()
-    assert texts.NO_MATCH in OLD_GUIDE_SYSTEM  # the prompt asks for the sentinel the guide reads
+    assert NO_MATCH in OLD_GUIDE_SYSTEM  # the prompt asks for the sentinel the guide reads

@@ -160,3 +160,32 @@ KOSIS에서는 통계표 이름을 정확히 모르는 사용자가 질문의 �
 ## 7. 기대 효과와 다음 단계 연계
 
 사용자는 통계표명을 정확히 모르더라도 자연어 질문으로 적합한 표의 경로와 선택 이유를 확인할 수 있다. 연구 결과는 종합 프로젝트의 **통계표 검색 → 수치 조회·계산 → 요약·시각화** 흐름에서 검색 단계로 재사용한다. 다만 통계표 안내의 정확도는 제공된 메타데이터의 범위와 품질에 달려 있으므로, 평가 결과에도 그 범위를 명시한다.
+
+## 8. 실행 방법 (T2-41 이후)
+
+설정은 **셸 환경변수**로 둬요(코드는 `.env`를 읽지 않아요). 값 목록과 뜻은 [docs/config.md](docs/config.md), 옛 이름 → 새 이름은 [docs/migration.md](docs/migration.md)예요. 아래는 Windows cmd(레포 루트, conda env `kosis` 또는 `uv run`) 기준이고, bash는 `set X=` 대신 `export X=`, 경로 구분자 `;` 대신 `:`를 써요.
+
+```bat
+set PYTHONPATH=.;src;vendor\phase1;vendor\phase1\src
+set KOSIS_WORKSPACE=%CD%
+set CHROMA_HOST=localhost
+set CHROMA_PORT=8001
+set CHROMA_COLLECTION=<빌드가 출력한 컬렉션 이름>
+set EMBED_CKPT=data\models\<임베더>.pt
+set RERANK_CKPT=data\models\<리랭커>.pt
+set HCX_API_KEY=<안내 LLM·2차 리랭커를 쓸 때>
+
+REM 오프라인 DB 준비 (한 번): 표 등록부 -> 시군구 사전 -> Chroma 색인 [-> hq 질문 생성 -> 질문 색인]
+docker compose up -d chroma
+python scripts\kosis_build.py tables --data-dir <제공 데이터 폴더>
+python scripts\kosis_build.py sigungu --data-dir <제공 데이터 폴더>
+python scripts\kosis_build.py chroma --model bge-m3-ft
+python scripts\kosis_build.py hq-build --model gpt-4o-mini        & REM 선택, OPENAI_API_KEY 필요
+python scripts\kosis_build.py hq-index --build <build_id>          & REM 선택, 뒤에 set HQ_BUILD=<build_id>
+
+REM 백엔드 데모 · 테스트
+uvicorn backend.app.main:app --reload
+python -m pytest -q
+```
+
+`python scripts\kosis_build.py`는 `python -m kosis_rag_build.cli`와 같은 명령·인자에 셸 환경을 기본값으로 넘겨요(`--help`로 확인). Docker로 띄울 때(`docker compose up --build`)는 compose가 `.env`를 컨테이너 환경으로 넣어요(`env_file`, Docker가 읽음). 코드에서 검색 모듈을 쓰는 법은 `docs/migration.md` 맨 끝 "종합 레포가 할 일"을 보세요.

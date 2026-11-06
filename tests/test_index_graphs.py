@@ -1,7 +1,7 @@
 """T2-41 S6a: the four offline index graphs (kosis_rag_build.graph.index_build) write what the old CLIs wrote.
 
 The old CLI functions are frozen below (bodies copied from the S5 tree: kosis_rag.metadata.main / build_records,
-kosis_rag.shared.vocab.build_sigungu / main, kosis_rag.index.main (the --export path) and kosis_rag.hq.index.main),
+kosis_rag.shared.vocab.build_sigungu / main, kosis_rag.index.main (the --export path) and the old hq/index.py main),
 with the model and the Chroma client passed in instead of loaded, and the time stamp passed in instead of read. Each
 graph runs on fake Parquet files, a fake embedder and a fake Chroma client, and its output is compared byte for byte
 (or value for value, for what goes to Chroma) with the frozen function's. Kept for the moving step only.
@@ -182,7 +182,7 @@ def old_index_export(tables_path: Path, export: Path, *, ft: bool, embedder, ind
 
 
 def old_hq_index_main(build: str, root: Path, embedder, client, index_version: str) -> int:
-    """kosis_rag.hq.index.main (S5) with the embedder, Chroma client, build root and time stamp passed in."""
+    """The old hq/index.py main (S5) with the embedder, Chroma client, build root and time stamp passed in."""
     rows = files.read_questions(build, root)
     texts = [text.norm_query(r["text"]) for r in rows]
     vectors = embedder.embed_documents(texts)
@@ -374,6 +374,22 @@ def test_cli_settings_come_from_arguments_then_the_environment():
     assert (spec.embed_ckpt, spec.text_format, spec.chroma.host, spec.chroma.port) == ("a.pt", "n3-L60", "h", 1)
     spec = cli.index_spec(cli.parser().parse_args(["chroma"]), {})
     assert (spec.chroma.host, spec.chroma.port, spec.chroma.collection, spec.embed_ckpt) == ("localhost", 8001, None, None)
+
+
+def test_cli_names_a_bad_chroma_port():
+    """T2-41 S6b: a non-numeric CHROMA_PORT stops the CLI with the variable's name, not a bare int() error."""
+    with pytest.raises(SystemExit, match="CHROMA_PORT"):
+        cli.index_spec(cli.parser().parse_args(["chroma"]), {**ENV, "CHROMA_PORT": "80o1"})
+
+
+def test_index_version_defaults_to_the_load_time():
+    """T2-41 S6b: index_version is stamped by the states (YYYYMMDDHHMM, the old CLIs' format), not by the CLI."""
+    import re as _re
+    from kosis_rag_build.schemas import IndexBuildState, QuestionsIndexState, index_version_now
+
+    for state in (IndexBuildState(tables=Path("t.jsonl")), QuestionsIndexState(build="hq-x")):
+        assert _re.fullmatch(r"\d{12}", state.index_version)
+    assert _re.fullmatch(r"20\d{10}", index_version_now())
 
 
 def test_cli_hq_build_llm_config():

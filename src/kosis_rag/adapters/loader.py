@@ -1,12 +1,12 @@
 """Open every heavy part of the staged search once (T2-41 S4: pipeline.load_resources, now over IndexSpec and
-SearchOptions instead of SearchSettings).
+SearchOptions instead of the old settings object).
 
     question -> [T2-14 conditions] -> fine-tuned bge-m3 (Chroma) top 50 + BM25 top 50 [+ question index] -> RRF
              -> stage 1: fine-tuned bge-reranker-v2-m3 over the top 50 (when spec.rerank_ckpt is set)
              -> stage 2: LLM re-ranker over the top 20 (options.stage2 = clova | hcx | gpt | none)
 
 Nothing here reads .env or the environment (§0.6): the caller declares the spec, the options and the stage 2 LLM
-(backend.app.config.search_config_from_env reads the shell environment for the backend and the scripts). BM25, the
+(backend.app.config.search_config_from_shell reads the shell environment for the backend and the scripts). BM25, the
 re-ranker and the collection use one table text format (shared.tabletext.text_format): the collection's own
 doc_format, which spec.text_format (when set) must match; weights trained on another format are refused
 (adapters.models).
@@ -42,7 +42,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
                    hq_bm25: Any | None = None, sigungu: dict[str, list[str]] | None = None) -> SearchResources:
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
-    In (keyword only, so spec and options cannot be swapped — search_config_from_env returns options first):
+    In (keyword only, so spec and options cannot be swapped — search_config_from_shell returns options first):
         spec = paths, Chroma and checkpoints; options = how the search behaves; llm = the stage 2 LLM's config
         (None: selectors.default_config(options.stage2), no key — rerank2 raises LLMKeyMissing on entry);
         records, dense, bm25, stage1_score, select, hq, hq_bm25, sigungu = parts that replace the loaded ones

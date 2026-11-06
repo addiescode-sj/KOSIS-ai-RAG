@@ -1,6 +1,6 @@
 """T2-41 S6a: the hq prompt moved to src/kosis_rag_build/hq/prompts/hq-v1.md is the bytes of the old string constants.
 
-OLD_SYSTEM / OLD_USER / OLD_REASK are the old kosis_rag.hq.prompt expressions copied verbatim (with the old COUNTS),
+OLD_SYSTEM / OLD_USER / OLD_REASK are the old kosis_rag hq/prompt.py expressions copied verbatim (with the old COUNTS),
 and OLD_SHA256 the sha256 of the values that module produced, taken before it was deleted. prompt_hash() names the
 reply cache folder and goes into every build id: its first 8 characters must stay "cb0b3c5b" (the PC builds
 data/hq/hq-cb0b3c5b-*), or a replay refuses to start and a rebuild calls the API for every table.

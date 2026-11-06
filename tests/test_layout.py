@@ -23,6 +23,9 @@ offline builds are the package kosis_rag_build now), the core rule that nothing 
 kosis_rag_build, kosis_rag_build importing only kosis_rag.{schemas,shared,adapters,llm,rerank.stage1} and itself,
 langgraph only in src/kosis_rag/graph/ and src/kosis_rag_build/graph/, the environment read only in
 src/kosis_rag_build/cli.py, no src -> evals exception, both packages in pyproject and the hq prompt as package data.
+S6b adds: nothing in src imports kosis_rag.api (graph/ ends its stream with the final state; the projection to
+SearchOutput is api.py's), and the removed dependencies (.env loader, google-genai) neither in a requirement file nor
+imported anywhere outside evals.
 Exceptions are listed with their reason and the step that removes them.
 """
 
@@ -58,24 +61,24 @@ STAGE_EXTRA = {"rerank": ("kosis_rag.llm",)}
 LLM = MODULE / "llm"
 LLM_ALLOWED = ("kosis_rag.llm",)
 # Old module paths nothing may import any more, added by the step that removes them (docs/migration.md).
-OLD_PATHS: tuple[str, ...] = (
+OLD_PATHS: tuple[str, ...] = tuple(f"kosis_rag.{name}" for name in (
     # S1: moved to schemas/ shared/ adapters/ (kosis_rag.schemas is now a package that re-exports nothing)
-    "kosis_rag.schemas", "kosis_rag.filters", "kosis_rag.fields", "kosis_rag.roles", "kosis_rag.vocab",
-    "kosis_rag.text", "kosis_rag.loader", "kosis_rag.vectorstore", "kosis_rag.model",
+    "schemas", "filters", "fields", "roles", "vocab", "text", "loader", "vectorstore", "model",
     # S2: moved to parse/ retrieve/ legacy/retrievers.py shared/tokenize.py
-    "kosis_rag.query", "kosis_rag.retriever",
+    "query", "retriever",
     # S3: moved to rerank/ (a package now: stage1 stage2 selectors hcx node ...), llm/ and legacy/rerankers.py
-    "kosis_rag.rerank", "kosis_rag.hcx", "kosis_rag.clova",
+    "rerank", "hcx", "clova",
     # S4: graph.py -> graph/ (a package now: search nodes_api spans) + schemas/state.py; pipeline.py ->
-    # schemas/resources.py, adapters/loader.py, legacy/pipeline.py (SearchSettings / from_env deleted)
-    "kosis_rag.graph", "kosis_rag.pipeline",
+    # schemas/resources.py, adapters/loader.py, legacy/pipeline.py (the settings class and its environment reader
+    # deleted: backend/app/config.py reads the shell environment)
+    "graph", "pipeline",
     # S5: chain.py -> backend/app/respond/ (texts patterns prompts verify render node state graph legacy),
     # kosis_rag.legacy.search; tools.py -> kosis_rag.legacy.tools (search_tables) + backend.app.respond.legacy
-    "kosis_rag.chain", "kosis_rag.tools",
+    "chain", "tools",
     # S6a: the offline builds -> kosis_rag_build (index.py -> chroma.py, metadata.py -> tables.py, hq/ -> hq/ +
-    # schemas.py + graph/hq_build.py + cli.py; kosis_rag.hq is gone as a whole)
-    "kosis_rag.index", "kosis_rag.metadata", "kosis_rag.hq",
-)
+    # schemas.py + graph/hq_build.py + cli.py; the module's hq package is gone as a whole)
+    "index", "metadata", "hq",
+))  # written as names under kosis_rag so the plan's S6b grep finds the old paths nowhere but in the code that used them
 # Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
 # defines them at top level (docs/migration.md).
 OLD_NAMES: dict[str, tuple[str, ...]] = {
@@ -141,7 +144,12 @@ GUIDE_PROMPT = ROOT / "backend" / "app" / "respond" / "prompts" / "guide-v1.md"
 # langgraph: only the graph folders (S4: src/kosis_rag/graph/; S6a: src/kosis_rag_build/graph/, no exception left).
 # "/" at the end = a folder.
 LANGGRAPH_ALLOWED = ("src/kosis_rag/graph/", "src/kosis_rag_build/graph/")
-# S4 (§0.6): no .env and no environment read in src (dotenv import, os.environ, os.getenv). S6a: only the build CLI
+# S6b: dependencies dropped from pyproject.toml / requirements.txt (distribution -> import name); nothing in src,
+# backend, scripts, tests or lab imports them. The first is the .env loader, so importing it is reading .env.
+REMOVED_DEPENDENCIES = {"google-genai": "google.genai"}
+# python-dotenv stays a dependency only for Phase 1 (kosis_chat.config.load_env); Phase 2 code never imports it.
+ENV_FILE_LOADER = "dotenv"
+# S4 (§0.6): no .env and no environment read in src (.env loader import, os.environ, os.getenv). S6a: only the build CLI
 # reads the shell environment (no .env), as the fallback of its arguments (plans/T2-41.md S6a: kosis_rag_build/cli.py).
 ENV_ALLOWED: tuple[str, ...] = ()  # 미결 3: the build env is read by scripts/kosis_build.py, outside src
 # S4: adapters/ (files, Chroma, models, loader) is imported only by graph/, api.py and llm/ (and itself).
@@ -153,17 +161,20 @@ ADAPTERS_EXCEPTIONS = {
     "src/kosis_rag/legacy/retrievers.py",
 }
 # S4: callers whose old import is left on purpose, with the reason (checked by test_exceptions_are_still_needed).
+# (file, old module): any import of that module or a name in it.
 CALLER_EXCEPTIONS = {
-    # evals are not modified by the refactor (user decision 11/05 21:17): SearchSettings is gone and the L1 runner's
-    # _staged_settings fails when called until the evals owner rewrites it (refactor/phase2/03 §2).
-    ("evals/runners/retrieval.py", "kosis_rag.pipeline"),
-    ("evals/runners/retrieval.py", "kosis_rag.pipeline.SearchSettings"),
+    # evals are not modified by the refactor (user decision 11/05 21:17): the old settings class is gone and the L1
+    # runner's _staged_settings fails when called until the evals owner rewrites it (refactor/phase2/03 §2).
+    *(("evals/runners/retrieval.py", f"kosis_rag.{name}") for name in ("pipeline",)),
 }
 # S4: files allowed a positional load_resources(...) call (spec and options are keyword-only), with the reason.
 LOAD_RESOURCES_POSITIONAL = {
     # evals construction lines not modified (03 §2): the call fails with TypeError until the evals owner fixes it
     "evals/runners/retrieval.py",
 }
+# S6b: the module's entry point; nothing else in src imports it (graph.search.stream_search ends with the final
+# state, SearchModule.stream projects it to SearchOutput).
+API = "src/kosis_rag/api.py"
 # Top-level packages src must never import (entry points and experiments depend on src, not the other way).
 NOT_FROM_SRC = ("backend", "evals", "scripts", "lab", "tests")
 # (file, imported name) pairs allowed against NOT_FROM_SRC, with the reason.
@@ -250,6 +261,8 @@ def test_src_import_rules(path: Path):
     problems += [n for n in names if _hits(n, NOT_FROM_SRC) and (rel, n) not in SRC_EXCEPTIONS]
     if path.is_relative_to(MODULE):  # the search module never imports the offline build package
         problems += [n for n in names if _hits(n, ("kosis_rag_build",))]
+    if rel != API:  # S6b: api.py is the top of the module; graph/ and below never import it
+        problems += [n for n in names if _hits(n, ("kosis_rag.api",))]
     if path.is_relative_to(BUILD):  # S6a: the build package uses the module's lower layers only
         problems += [n for n in names if _hits(n, ("kosis_rag", "kosis_rag_build")) and not _hits(n, BUILD_ALLOWED)
                      and (rel, n) not in BUILD_EXCEPTIONS]
@@ -277,10 +290,10 @@ def _allowed(rel: str, allowed: tuple[str, ...]) -> bool:
 
 
 def _env_reads(path: Path) -> list[str]:
-    """What in the file reads .env or the environment: a dotenv import, os.environ / os.getenv, or a from-import of
-    environ / getenv from os."""
+    """What in the file reads .env or the environment: an ENV_FILE_LOADER import, os.environ / os.getenv, or a
+    from-import of environ / getenv from os."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    hits = [n for n in _imports(path) if _hits(n, ("dotenv",)) or n in ("os.environ", "os.getenv")]
+    hits = [n for n in _imports(path) if _hits(n, (ENV_FILE_LOADER,)) or n in ("os.environ", "os.getenv")]
     hits += [f"os.{n.attr}" for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
              and n.value.id == "os" and n.attr in ("environ", "getenv")]
     return hits
@@ -299,7 +312,7 @@ def test_src_reads_no_env(path: Path):
 def test_env_exceptions_are_still_needed():
     for rel in ENV_ALLOWED:
         assert _env_reads(ROOT / rel), f"stale exception: {rel} no longer reads the environment"
-        assert not [n for n in _imports(ROOT / rel) if _hits(n, ("dotenv",))], f"{rel} reads .env"
+        assert not [n for n in _imports(ROOT / rel) if _hits(n, (ENV_FILE_LOADER,))], f"{rel} reads .env"
 
 
 def _positional_load_resources(path: Path) -> list[int]:
@@ -312,7 +325,7 @@ def _positional_load_resources(path: Path) -> list[int]:
 
 def test_load_resources_is_called_by_keyword_only():
     """S4 (11/05 external review P1-2b): spec and options are passed by name everywhere (the signature makes them
-    keyword-only, and search_config_from_env returns options first, so a positional call would swap them)."""
+    keyword-only, and search_config_from_shell returns options first, so a positional call would swap them)."""
     import inspect
 
     from kosis_rag.adapters.loader import load_resources
@@ -363,7 +376,8 @@ def test_retrieve_keeps_no_last_state():
 
 @pytest.mark.parametrize("path", CALLER_FILES, ids=_rel)
 def test_callers_use_no_old_path(path: Path):
-    problems = [n for n in _old(_imports(path)) if (_rel(path), n) not in CALLER_EXCEPTIONS]
+    allowed = tuple(module for rel, module in CALLER_EXCEPTIONS if rel == _rel(path))
+    problems = [n for n in _old(_imports(path)) if not _hits(n, allowed)]
     assert not problems, f"{_rel(path)}: imports an old path: {sorted(set(problems))}"
 
 
@@ -373,8 +387,8 @@ def test_exceptions_are_still_needed():
         assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
     for rel in PHASE1_ALLOWED:
         assert any(_hits(n, PHASE1) for n in _imports(ROOT / rel)), f"stale exception: {rel} no longer imports Phase 1"
-    for rel, name in CALLER_EXCEPTIONS:
-        assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
+    for rel, module in CALLER_EXCEPTIONS:
+        assert any(_hits(n, (module,)) for n in _imports(ROOT / rel)), f"stale exception: {rel} no longer imports {module}"
     for rel in ADAPTERS_EXCEPTIONS:
         assert any(_hits(n, (ADAPTERS,)) for n in _imports(ROOT / rel)), f"stale exception: {rel} imports no adapter"
     for rel, name in BUILD_EXCEPTIONS:
@@ -484,5 +498,24 @@ def test_the_build_package_is_complete():
     """S6a: the files of plans/T2-41.md S6a (folder tree) are there, the graphs in graph/ and the node bodies outside."""
     for rel in ("cli.py", "schemas.py", "tables.py", "sigungu.py", "chroma.py", "graph/index_build.py",
                 "graph/hq_build.py", "hq/prompt.py", "hq/rules.py", "hq/patterns.py", "hq/constants.py", "hq/nodes.py",
-                "hq/report.py", "hq/questions_index.py", "hq/prompts/hq-v1.md"):
+                "hq/report.py", "hq/reply.py", "hq/questions_index.py", "hq/prompts/hq-v1.md"):
         assert (BUILD / rel).is_file(), rel
+
+
+def test_removed_dependencies_are_gone():
+    """S6b (plans/T2-41.md: §0.6 no .env; O5): not declared, and not imported by src, backend, scripts, tests or lab
+    (evals is the evals owner's; it imports neither)."""
+    declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    for req in [*declared, *(ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()]:
+        name = req.split(";")[0].strip().split("[")[0]
+        for op in ("==", ">=", "<=", "~=", ">", "<", "!="):
+            name = name.split(op)[0]
+        assert name.strip().lower() not in REMOVED_DEPENDENCIES, req
+    imported = {_rel(p): n for p in _py_files(MODULE, BUILD, BACKEND, *CALLERS) for n in _imports(p)
+                if _hits(n, tuple(REMOVED_DEPENDENCIES.values()))}
+    assert not imported, imported
+    # python-dotenv stays for Phase 1 and the user's lab scripts (lab/ keeps its .env loading); the Phase 2 code
+    # (src, backend, scripts, tests) never loads .env.
+    no_env_file = tuple(ROOT / d for d in ("backend", "scripts", "tests"))
+    loaders = {_rel(p): n for p in _py_files(MODULE, BUILD, *no_env_file) for n in _imports(p) if _hits(n, (ENV_FILE_LOADER,))}
+    assert not loaders, loaders

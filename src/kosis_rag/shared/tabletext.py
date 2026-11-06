@@ -229,7 +229,7 @@ def build_doc(record: TableRecord | dict[str, Any], fmt: str = DOC_FORMAT, max_i
 
 def text_format(spec: IndexSpec, dense: Any) -> str:
     """The table text the whole search uses: the dense collection's format; spec.text_format, when set, must agree
-    (T2-41 S4: from pipeline.text_format, which took SearchSettings).
+    (T2-41 S4: from pipeline.text_format, which took the old settings object).
 
     In: spec = the index spec (text_format = TEXT_FORMAT or None); dense = the dense list (its doc_format, if any).
     Out: the format name used for BM25, the re-ranker passages and stage 2 passages.

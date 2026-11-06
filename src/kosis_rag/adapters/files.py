@@ -14,7 +14,7 @@ from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.shared.constants import DESC_SUFFIX
 from kosis_rag.shared.vocab import REPO, SIGUNGU
 
-TABLES = REPO / "data" / "tables.jsonl"  # the table registry (IndexSpec.tables None; was SearchSettings.tables)
+TABLES = REPO / "data" / "tables.jsonl"  # the table registry (IndexSpec.tables None; the old settings' tables)
 HQ_DIR = REPO / "data" / "hq"  # question index builds (the offline build writes them; the search only reads them)
 
 

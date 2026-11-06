@@ -23,6 +23,7 @@ from pydantic import Field
 
 from kosis_rag.api import to_output
 from kosis_rag.gate import texts
+from backend.app.respond.texts import NO_MATCH
 from kosis_rag.graph.spans import timed
 from kosis_rag.llm.base import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
 from kosis_rag.llm.config import LLMConfig, LLMKeyMissing
@@ -136,7 +137,7 @@ def guide(inp: GuideInput, llm: LLMClient | BaseChatModel,
     )
     text = result.text.strip()
     # 2. the LLM says nothing fits
-    if result.status == STATUS_OK and text == texts.NO_MATCH:
+    if result.status == STATUS_OK and text == NO_MATCH:
         return SearchResult(question=question, candidates=candidates, no_answer=True, answer=texts.REFUSAL_TEXT,
                             answer_origin="refusal", llm_status=result.status)
     # 3. verify the reply and read which tables it recommends; fall back to the code template (its top 3)

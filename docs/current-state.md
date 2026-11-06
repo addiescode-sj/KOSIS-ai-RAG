@@ -6,8 +6,26 @@
 ## Project
 
 KOSIS statistics AI chatbot, **Phase 2 (실전 2): table-guide RAG chatbot**, due 2026-11-04.
-Phase 1 repo is the `vendor/phase1` submodule (pinned commit); its `kosis_ai.schemas`,
-`normalize`, `eval/` harness are imported, not copied.
+Phase 1 repo is the `vendor/phase1` submodule (pinned commit). Since T2-41 the Phase 2 module (`src/kosis_rag`) does
+not import Phase 1: the shared schemas and LLM client code are copies checked by `tests/test_phase1_contract.py`
+(evals, scripts and tests still use Phase 1 directly).
+
+## T2-41 module refactor (2026-11-06, branch `T2-41-refactor`, uncommitted)
+
+- Plan: `plans/T2-41.md` (Result section has the stage list and what remains). Rename table for the composite repo:
+  `docs/migration.md` (its last section is the composite repo's to-do list). Settings: `docs/config.md` (`.env.example`
+  is gone; nothing in the code reads `.env`).
+- Cloud stages S0–S6b are done as uncommitted changes (one commit at the end, on the user's request). Cloud checks:
+  pytest 1055 passed, 1 skipped; `tests/fixtures/parity` (33 cases) and `docs/openapi.json` byte-identical; wheel
+  install reads both prompt files (`prompt_hash()[:8] == cb0b3c5b`).
+- **PC still to do**: S0 baselines and the per-stage PC parity ① L1 compare (hybrid+cond, staged), ①hq, ③ hq replay
+  (`scripts/parity_hq.py replay`, new `--out-dir` per stage), ④ openapi; `uv lock` (google-genai was dropped
+  from `pyproject.toml`); `docker compose build`; the wheel check on Windows; the single commit; the
+  `vendor/phase1` pin update after Phase 1 S6 lands. Commands: `plans/T2-41.md` "단계 공통 명령".
+- Entry points: `kosis_rag.api.SearchModule(IndexSpec, SearchOptions, LLMConfig).search(SearchInput) -> SearchOutput`;
+  offline builds `python scripts/kosis_build.py {tables|sigungu|chroma|text|hq-build|hq-index}`; backend demo reads
+  the shell environment (`backend/app/config.py`). evals were not modified (its L1 runner's settings lines are broken
+  since S4 until the evals owner rewrites them).
 
 ## T2-09 prompt update (2026-11-03)
 
@@ -51,5 +69,5 @@ Phase 1 repo is the `vendor/phase1` submodule (pinned commit); its `kosis_ai.sch
 
 - `docker compose build` not yet run (needs `uv.lock` committed, Docker daemon). Covered by T2-17.
 - Backend has no CORS / frontend→backend wiring yet (T2-11).
-- `.env.example` is the Phase 1 copy; add `LINEAR_API_KEY`, `LINEAR_TEAM_KEY` lines by hand if using Linear sync.
+- `.env.example` was removed in T2-41 S6b; the settings are listed in `docs/config.md` (add your own lines, e.g. Linear sync keys, to your local `.env` or shell).
 - Phase 1 repo TASK.md also lists T2 tasks; both repos sync the same Linear issues by ID — edit T2 status only here.

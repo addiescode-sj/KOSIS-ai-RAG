@@ -27,7 +27,6 @@ import argparse
 import os
 import time
 from collections.abc import Mapping
-from datetime import datetime
 from pathlib import Path
 
 from kosis_rag.llm.config import LLMConfig
@@ -35,11 +34,11 @@ from kosis_rag.schemas.resources import ChromaConfig, IndexSpec
 from kosis_rag.shared import constants
 from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.vocab import SIGUNGU
-from kosis_rag_build import chroma, tables
+from kosis_rag_build import chroma  # stdlib + pydantic only; tables (pyarrow) is imported by its command
 from kosis_rag_build.hq import constants as hq_constants
 
 REPO = Path(__file__).resolve().parents[2]
-DATA = REPO / "data"
+DATA = REPO / "data"  # = kosis_rag_build.tables.DATA_DIR (not imported here: pyarrow loads only for `tables`)
 
 
 # --- settings from the arguments and the shell environment ---
@@ -52,9 +51,14 @@ def _env(env: Mapping[str, str], name: str) -> str | None:
 def chroma_config(args: argparse.Namespace, env: Mapping[str, str]) -> ChromaConfig:
     """--chroma-host / --chroma-port, else CHROMA_HOST / CHROMA_PORT, else localhost:8001 (as the old CLIs read them
     from the environment or .env); collection = CHROMA_COLLECTION, the table build the search uses (chroma --list
-    marks it). The collection a command writes is its own --collection argument, not this."""
-    return ChromaConfig(host=args.chroma_host or _env(env, "CHROMA_HOST") or "localhost",
-                        port=int(args.chroma_port or _env(env, "CHROMA_PORT") or 8001),
+    marks it). The collection a command writes is its own --collection argument, not this.
+    SystemExit naming CHROMA_PORT when it is set but not a whole number (T2-41 S6b)."""
+    port = args.chroma_port or _env(env, "CHROMA_PORT") or 8001
+    try:
+        port = int(port)
+    except ValueError:
+        raise SystemExit(f"CHROMA_PORT must be a port number, got {port!r}") from None
+    return ChromaConfig(host=args.chroma_host or _env(env, "CHROMA_HOST") or "localhost", port=port,
                         collection=_env(env, "CHROMA_COLLECTION"))
 
 
@@ -89,8 +93,8 @@ def parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("tables", help="build data/tables.jsonl from the provided data (T2-01)")
-    p.add_argument("--data-dir", type=Path, default=tables.DATA_DIR)
-    p.add_argument("--out", type=Path, default=tables.DATA_DIR / "tables.jsonl")
+    p.add_argument("--data-dir", type=Path, default=DATA)
+    p.add_argument("--out", type=Path, default=DATA / "tables.jsonl")
 
     p = sub.add_parser("sigungu", help="build data/sigungu.json (시군구 -> 시도) from the provided data")
     p.add_argument("--data-dir", type=Path, required=True)
@@ -189,8 +193,7 @@ def run_chroma(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     from kosis_rag_build.schemas import IndexBuildState
 
     state = IndexBuildState(tables=spec.tables, model=args.model, ckpt=spec.embed_ckpt, text_format=spec.text_format,
-                            collection=args.collection, device=spec.device, export=args.export, chroma=spec.chroma,
-                            index_version=datetime.now().strftime("%Y%m%d%H%M"))
+                            collection=args.collection, device=spec.device, export=args.export, chroma=spec.chroma)
     state = IndexBuildState.model_validate(build_chroma_graph().invoke(state))
     if args.export:
         print(f"wrote {args.export}; load it with: python -m kosis_rag_build.cli chroma --import {args.export.name}")
@@ -288,8 +291,7 @@ def run_hq_index(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     spec = index_spec(args, env)
     build = args.build + (constants.DESC_SUFFIX if args.desc and not args.build.endswith(constants.DESC_SUFFIX) else "")
     state = QuestionsIndexState(build=build, ckpt=spec.embed_ckpt, device=spec.device, collection=args.collection,
-                                hq_root=args.hq_root, chroma=spec.chroma, dry_run=args.dry_run,
-                                index_version=datetime.now().strftime("%Y%m%d%H%M"))
+                                hq_root=args.hq_root, chroma=spec.chroma, dry_run=args.dry_run)
     state = QuestionsIndexState.model_validate(build_questions_graph().invoke(state))
     questions_index.summary(state)
     return 0 if state.dry_run or state.count == len(state.rows) else 1

@@ -20,7 +20,7 @@ from backend.app.respond import verify  # noqa: E402
 from backend.app.respond.graph import build_answer_graph, run_answer, stream_answer  # noqa: E402
 from backend.app.respond.node import GuideInput  # noqa: E402
 from backend.app.respond.prompts import guide_prompt  # noqa: E402
-from kosis_rag.gate import texts  # noqa: E402
+from backend.app.respond.texts import NO_MATCH  # noqa: E402
 from kosis_rag.shared.catalog import to_candidate  # noqa: E402
 from kosis_rag.schemas.io import TableCandidate  # noqa: E402
 from test_api_nodes import _resources  # noqa: E402
@@ -76,7 +76,7 @@ def test_stream_sends_the_checked_reply_and_ends_with_the_run_search_result():
 
 
 def test_no_match_streams_nothing_and_refuses():
-    pieces, final, expected = _streamed(texts.NO_MATCH + "\n")
+    pieces, final, expected = _streamed(NO_MATCH + "\n")
     assert pieces == [] and final.result == expected.result and final.result.no_answer
 
 

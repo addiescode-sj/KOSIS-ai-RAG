@@ -1,7 +1,7 @@
 """T2-41 S4: scripts/parity_l1.py builds its preset graph from the new settings objects (not through evals), and its
 config fingerprint keeps the S0 keys and values (compare refuses dumps whose fingerprints differ).
 
-The S0 fingerprint function is copied below verbatim (it read resources.settings, a SearchSettings); it runs on an
+The S0 fingerprint function is copied below verbatim (it read resources.settings, the old settings object); it runs on an
 old-shaped object holding the same fakes, and must give what the S4 function gives on the new resources.
 No Chroma, no model: the fakes of tests/test_graph.py.
 """
@@ -32,7 +32,7 @@ TOOL = _tool()
 
 
 def s0_config_fingerprint(preset: str, resources: Any) -> dict[str, Any]:
-    """scripts/parity_l1.py config_fingerprint at S0 (resources.settings = SearchSettings), copied verbatim."""
+    """scripts/parity_l1.py config_fingerprint at S0 (resources.settings = the old settings object), copied verbatim."""
     file_sha256, _collection = TOOL.file_sha256, TOOL._collection
     s = resources.settings
     dense_name, dense_meta = _collection(resources.dense)
@@ -78,7 +78,7 @@ class NamedDense(CatalogRetriever):
 
 
 def _old_shaped(resources) -> SimpleNamespace:
-    """The same resources as the S0 code saw them: one `settings` object with the SearchSettings fields."""
+    """The same resources as the S0 code saw them: one `settings` object with the old settings fields."""
     o, spec = resources.options, resources.spec
     settings = SimpleNamespace(**o.model_dump(), tables=spec.tables or TOOL_TABLES, collection=spec.chroma.collection,
                                text_format=spec.text_format, embed_ckpt=spec.embed_ckpt, rerank_ckpt=spec.rerank_ckpt,
@@ -87,7 +87,7 @@ def _old_shaped(resources) -> SimpleNamespace:
         "dense", "hq", "hq_bm25", "stage1_score", "select", "text_format", "stage2_name")})
 
 
-TOOL_TABLES = ROOT / "data" / "tables.jsonl"  # SearchSettings.tables default (= adapters.files.TABLES)
+TOOL_TABLES = ROOT / "data" / "tables.jsonl"  # the old settings' tables default (= adapters.files.TABLES)
 
 
 @pytest.mark.parametrize("hq", [False, True])
@@ -116,7 +116,7 @@ def test_fingerprint_keys_and_values_stay_the_s0_ones(tmp_path, hq, stages, tabl
 
 
 def test_preset_graph_is_built_from_the_new_settings_objects(monkeypatch):
-    """build_preset_graph: search_config_from_env(**STAGED[preset]) -> load_resources(spec=, options=, llm=) -> graph;
+    """build_preset_graph: search_config_from_shell(**STAGED[preset]) -> load_resources(spec=, options=, llm=) -> graph;
     the empty rerank_ckpt of a preset means stage 1 off, as the runner's _staged_settings read it at S0."""
     import kosis_rag.adapters.loader as loader
 

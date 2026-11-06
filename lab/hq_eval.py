@@ -44,7 +44,7 @@ import numpy as np
 
 from evals.schemas import GOLDEN
 from evals.trace import NodeSpans
-from backend.app.config import search_config_from_env
+from backend.app.config import search_config_from_shell
 from kosis_rag.adapters.files import TABLES, read_records
 from kosis_rag.adapters.loader import load_resources
 from kosis_rag.graph.search import build_graph, run_search
@@ -308,7 +308,7 @@ def main() -> None:
         raise SystemExit("S0 needs the stage 1 re-ranker: set RERANK_CKPT in .env or pass --rerank-ckpt")
     items = read_golden(args.golden)
     s0 = dict(cond_filter=True, stage2="none", rerank_ckpt=ckpt, hq_build=None, hq_bm25=False, hq_weight=1.0)
-    cfg = search_config_from_env(**s0)  # the shell environment (filled from .env by load_dotenv above)
+    cfg = search_config_from_shell(**s0)  # the shell environment (filled from .env by load_dotenv above)
     records_list = read_records(cfg.spec.tables or TABLES)
     base = load_resources(spec=cfg.spec, options=cfg.options, records=records_list)
     records = base.records
@@ -318,7 +318,7 @@ def main() -> None:
         variants["S1-nofilter"] = {"hq_build": args.nofilter_build}
     if args.desc:
         variants["S1-desc"] = {"hq_build": args.build + "-desc"}
-    configs = {name: search_config_from_env(**{**s0, **kw}) for name, kw in variants.items()}
+    configs = {name: search_config_from_shell(**{**s0, **kw}) for name, kw in variants.items()}
     resources = {name: base if not kw else load_resources(spec=configs[name].spec, options=configs[name].options,
                                                           records=records_list, dense=base.dense,
                                                           stage1_score=base.stage1_score)

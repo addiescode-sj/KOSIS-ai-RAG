@@ -113,16 +113,16 @@ def test_stage2_defaults_and_selector_settings():
     assert gpt.client.temperature == 0.0 and gpt.client.seed is None
 
 
-def test_stage2_llm_from_env_reads_the_old_variables(monkeypatch):
+def test_stage2_llm_from_shell_reads_the_old_variables(monkeypatch):
     """T2-41 S4: pipeline.env_stage2_llm moved to backend/app/config.py (shell environment only, no .env)."""
     monkeypatch.setenv("HCX_API_KEY", SECRET)
     monkeypatch.setenv("HCX_THINKING", " LOW ")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    hcx = app_config.stage2_llm_from_env("hcx")
+    hcx = app_config.stage2_llm_from_shell("hcx")
     assert (hcx.provider, hcx.model, hcx.thinking, require_key(hcx)) == ("hcx", "HCX-007", "low", SECRET)
-    assert app_config.stage2_llm_from_env("clova").provider == "clova_rerank"
-    assert app_config.stage2_llm_from_env("gpt").api_key is None  # OPENAI_API_KEY unset: LLMKeyMissing at rerank2
-    assert app_config.stage2_llm_from_env("none") is None and app_config.stage2_llm_from_env("nope") is None
+    assert app_config.stage2_llm_from_shell("clova").provider == "clova_rerank"
+    assert app_config.stage2_llm_from_shell("gpt").api_key is None  # OPENAI_API_KEY unset: LLMKeyMissing at rerank2
+    assert app_config.stage2_llm_from_shell("none") is None and app_config.stage2_llm_from_shell("nope") is None
 
 
 def test_stage2_on_without_a_given_config_uses_the_keyless_default():

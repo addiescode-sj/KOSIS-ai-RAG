@@ -25,7 +25,7 @@ from backend.app.respond.graph import build_answer_graph, run_answer
 from backend.app.respond.state import SearchState
 from kosis_rag.adapters.loader import load_resources
 from kosis_rag.api import SearchModule
-from kosis_rag.gate.texts import NO_MATCH
+from backend.app.respond.texts import NO_MATCH
 from kosis_rag.schemas.io import SearchInput, SearchOutput
 from kosis_rag.schemas.resources import IndexSpec, SearchResources
 

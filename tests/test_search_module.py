@@ -14,7 +14,8 @@ from pydantic import ValidationError
 pytest.importorskip("langgraph")
 
 from kosis_rag.api import SearchModule, to_output  # noqa: E402
-from kosis_rag.graph.search import run_search  # noqa: E402
+from kosis_rag.graph.search import run_search, stream_search  # noqa: E402
+from kosis_rag.schemas.state import SearchState  # noqa: E402
 from kosis_rag.schemas.io import SearchInput, SearchOutput  # noqa: E402
 from tests.parity_cases import CASES, case_resources, case_texts, dumps, module_output  # noqa: E402
 from tests.test_graph import KEYS, RECORDS, CatalogRetriever, _load, _pick, _settings, _stage1  # noqa: E402
@@ -83,6 +84,18 @@ def test_stream_ends_with_the_search_output():
     assert names[-1] == "output" and names[:2] == ["parse", "condition"] and "gate" in names
     assert not {"refuse", "guide", "token", "result"} & set(names)
     assert _projected(events[-1][1]) == _projected(module.search(inp))
+
+
+def test_stream_search_ends_with_the_final_state_and_the_module_projects_it():
+    """T2-41 S6b: graph/ does not import api; stream_search takes no k and ends with ("state", SearchState)."""
+    module = _module()
+    events = list(stream_search(module.graph(3), "출생아 수"))
+    assert events[-1][0] == "state" and isinstance(events[-1][1], SearchState)
+    final, ran = events[-1][1], run_search(module.graph(3), "출생아 수")
+    assert final.route == ran.route and [d.metadata["key"] for d in final.docs] == [d.metadata["key"] for d in ran.docs]
+    assert list(final.trace) == [name for name, _ in events[:-1]] or set(final.trace) == {n for n, _ in events[:-1]}
+    streamed = list(module.stream(SearchInput(question="출생아 수", k=3)))[-1][1]
+    assert _projected(streamed) == _projected(to_output(events[-1][1], 3)) and len(streamed.candidates) == 3
 
 
 def test_search_tables_is_the_candidates():

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from kosis_rag_build.hq import prompt as hq_prompt
 from kosis_rag_build.hq.constants import EXAMPLES, PROMPT_VERSION
+from kosis_rag_build.hq.reply import parse_reply
 from kosis_rag_build.schemas import TYPES, TableQuestions
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ def report(state: HqBuildState, bid: str, totals: dict[str, Any]) -> str:
         if not r.dropped or not r.raw:
             continue
         try:
-            reply = TableQuestions.model_validate({**_parse_reply(r.raw), "key": r.key})
+            reply = TableQuestions.model_validate({**parse_reply(r.raw), "key": r.key})
         except (ValueError, ValidationError):
             continue
         kept_at = set(r.positions)
@@ -81,9 +82,3 @@ def report(state: HqBuildState, bid: str, totals: dict[str, Any]) -> str:
         lines += ["", f"## 점수로 뺀 질문 예시 {len(ssample)}개", "", "| 표 | 유형 | 질문 | 점수 |", "| --- | --- | --- | --- |"]
         lines += [f"| {names.get(it['key'], it['key'])} | {it['type']} | {it['text']} | {it['score']:.3f} |" for it in ssample]
     return "\n".join(lines) + "\n"
-
-
-def _parse_reply(raw: str) -> dict:
-    from kosis_rag_build.hq.nodes import parse_reply  # nodes imports this module for the write node
-
-    return parse_reply(raw)

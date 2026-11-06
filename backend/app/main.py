@@ -74,7 +74,7 @@ class Runtime:
 
     resources: SearchResources
     _: KW_ONLY
-    guide_llm: LLMConfig | None = None  # backend.app.config.guide_llm_from_env(); None = no guide LLM
+    guide_llm: LLMConfig | None = None  # backend.app.config.guide_llm_from_shell(); None = no guide LLM
     client: Any = None  # a ready guide client (LLMClient | BaseChatModel); None = make one from guide_llm
     graphs: dict[int, Any] = field(default_factory=dict)
     guide: GuideClient = field(init=False)
@@ -114,11 +114,11 @@ def get_runtime() -> Runtime:
     global _runtime
     with _lock:
         if _runtime is None:
-            from backend.app.config import search_config_from_env
+            from backend.app.config import search_config_from_shell
             from kosis_rag.adapters.loader import load_resources
 
             try:
-                cfg = search_config_from_env()
+                cfg = search_config_from_shell()
                 resources = load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm)
                 _runtime = Runtime(resources=resources, guide_llm=cfg.guide_llm)
             except Exception as e:  # noqa: BLE001 - any load failure means the search is unavailable
