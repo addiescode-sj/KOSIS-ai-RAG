@@ -76,7 +76,7 @@ def test_stream_result_event_holds_the_search_result_and_each_node_its_own_trace
 
 def test_search_logs_each_node_after_the_response(client, tmp_path):
     client.post("/search", json={"question": "출생아 수"})
-    [line] = [json.loads(x) for f in tmp_path.glob("*.jsonl") for x in f.read_text().splitlines()]
+    [line] = [json.loads(x) for f in tmp_path.glob("*.jsonl") for x in f.read_text(encoding="utf-8").splitlines()]
     assert set(line["seconds"]) == {"parse", "condition", "retrieve_dense", "retrieve_bm25", "fuse", "rerank1",
                                     "rerank2", "gate", "guide"}  # the graph's nodes (T2-39 split of retrieve)
     assert line["route"] == "guide" and line["top"][0] == "101_DT_A"

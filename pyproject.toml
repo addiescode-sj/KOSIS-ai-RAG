@@ -31,5 +31,11 @@ embed = [
     "sentence-transformers",
 ]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+# T2-41: every package under src, added by the step that creates it (tests/test_layout.py checks the list)
+packages = ["kosis_rag", "kosis_rag.hq"]

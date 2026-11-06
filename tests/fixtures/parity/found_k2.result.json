@@ -1,0 +1,45 @@
+{
+ "answer": "[1] DT_A 표가 출생아 수를 담고 있습니다.\n\n출처:\n- KOSIS / 인구동향조사 / 출생아수 (http://kosis.kr/101_DT_A)",
+ "answer_origin": "llm",
+ "candidates": [
+  {
+   "key": "101_DT_A",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.9,
+   "survey_name": "인구동향조사",
+   "table_name": "출생아수",
+   "tbl_id": "DT_A",
+   "url": "http://kosis.kr/101_DT_A"
+  },
+  {
+   "key": "101_DT_C",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.7,
+   "survey_name": "인구동향조사",
+   "table_name": "혼인건수",
+   "tbl_id": "DT_C",
+   "url": "http://kosis.kr/101_DT_C"
+  }
+ ],
+ "llm_status": "ok",
+ "no_answer": false,
+ "no_answer_reason": null,
+ "picked": [
+  {
+   "key": "101_DT_A",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.9,
+   "survey_name": "인구동향조사",
+   "table_name": "출생아수",
+   "tbl_id": "DT_A",
+   "url": "http://kosis.kr/101_DT_A"
+  }
+ ],
+ "question": "출생아 수"
+}

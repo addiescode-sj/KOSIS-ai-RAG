@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "KOSIS RAG API",
-    "description": "국가데이터처(KOSIS) 통계표 안내 검색 API.\n\n검색은 LangGraph 노드 `parse → retrieve → [rerank1] → [rerank2] → gate → refuse | guide` 로 돈다.\n- **nodes**: 노드 하나씩 부른다. 요청·응답 모두 `SearchState`라 앞 노드의 응답을 다음 노드에 그대로 보낸다.\n- **search**: 전체 그래프를 한 번에 (`/search` JSON, `/search/stream` SSE 노드 이벤트).\n\n표 ID·출처는 서버의 통계표 레지스트리에서만 나온다. 맞는 표가 없으면 거절 답(`no_answer=true`)을 준다.",
+    "description": "국가데이터처(KOSIS) 통계표 안내 검색 API.\n\n검색은 LangGraph 노드 `parse → retrieve → [rerank1] → [rerank2] → gate → refuse | guide` 로 돈다.\n그래프 안에서 retrieve는 `condition → [embed] → retrieve_dense ∥ retrieve_bm25 ∥ [retrieve_hq] ∥ [retrieve_hq_bm25] → fuse` 병렬 노드로 나뉘고(T2-39), `/nodes/retrieve`는 이 단계를 한 번에 돈다. `/search/stream`의 노드 이벤트는 그래프 노드 이름으로 온다.\n- **nodes**: 노드 하나씩 부른다. 요청·응답 모두 `SearchState`라 앞 노드의 응답을 다음 노드에 그대로 보낸다.\n- **search**: 전체 그래프를 한 번에 (`/search` JSON, `/search/stream` SSE 노드 이벤트).\n\n표 ID·출처는 서버의 통계표 레지스트리에서만 나온다. 맞는 표가 없으면 거절 답(`no_answer=true`)을 준다.",
     "version": "0.2.0"
   },
   "paths": {
@@ -122,7 +122,7 @@
           "nodes"
         ],
         "summary": "하이브리드 검색",
-        "description": "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25를 RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다.",
+        "description": "질문 조건(연도·주기 등)으로 거른 뒤 dense + BM25(+ 켜져 있으면 가상 질문 색인 HQ, T2-39)를 RRF로 합친다. `docs`·`removed`·`relaxed`를 쓴다. 그래프의 condition → [embed] → retrieve_* → fuse를 한 번에 돌리며, 목록별 결과 `runs`·`run_removed`와 `table_filter`도 쓴다. 요청의 이 필드들과 `query_vecs`는 무시한다.",
         "operationId": "node_retrieve",
         "parameters": [
           {
@@ -820,12 +820,25 @@
               }
             ]
           },
-          "removed": {
+          "table_filter": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TableFilter"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query_vecs": {
             "additionalProperties": {
-              "type": "string"
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
             },
             "type": "object",
-            "title": "Removed"
+            "title": "Query Vecs"
           },
           "relaxed": {
             "items": {
@@ -833,6 +846,33 @@
             },
             "type": "array",
             "title": "Relaxed"
+          },
+          "runs": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/Document"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Runs"
+          },
+          "run_removed": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Run Removed"
+          },
+          "removed": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Removed"
           },
           "docs": {
             "items": {
@@ -891,7 +931,7 @@
           "question"
         ],
         "title": "SearchState",
-        "description": "What the nodes share. Every field has one writer, except docs (overwritten by each search stage) and trace."
+        "description": "What the nodes share. Every field has one writer, except docs (overwritten by each search stage) and the\nmerged fields (runs, run_removed, trace), which each node adds its own key to."
       },
       "TableCandidate": {
         "properties": {
@@ -952,6 +992,110 @@
         ],
         "title": "TableCandidate",
         "description": "One table proposed for a question. tbl_id is kept from load to answer so Hit@k can be graded on it."
+      },
+      "TableFilter": {
+        "properties": {
+          "years": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Years"
+          },
+          "cycle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cycle"
+          },
+          "organization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "partial"
+            ],
+            "title": "Mode",
+            "default": "strict"
+          },
+          "period_from": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period From"
+          },
+          "period_to": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period To"
+          },
+          "regions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Regions"
+          },
+          "region_mode": {
+            "type": "string",
+            "enum": [
+              "hard",
+              "soft"
+            ],
+            "title": "Region Mode",
+            "default": "hard"
+          },
+          "dimensions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Dimensions"
+          },
+          "measures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Measures"
+          },
+          "soft_measures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Soft Measures"
+          }
+        },
+        "type": "object",
+        "title": "TableFilter",
+        "description": "Conditions taken from the question (T2-14 fills these); empty means no filtering."
       },
       "ValidationError": {
         "properties": {
