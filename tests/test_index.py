@@ -2,11 +2,12 @@
 
 import pytest
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag import index
-from kosis_rag.index import LABEL_CAP, collection_name, load, region_summary, sido_names, to_document, to_metadata
-from kosis_rag.loader import _META_FIELDS
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag_build import chroma as index
+from kosis_rag_build.chroma import LABEL_CAP, collection_name, load, to_document, to_metadata
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.catalog import _META_FIELDS
+from kosis_rag.shared.tabletext import region_summary, sido_names
 
 offline = pytest.mark.offline
 

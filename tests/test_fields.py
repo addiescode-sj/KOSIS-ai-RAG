@@ -2,9 +2,9 @@
 
 import pytest
 
-from kosis_ai.schemas import TableInfo
-from kosis_rag.fields import item_unit, table_fields
-from kosis_rag.schemas import TableClass, TableRecord
+from kosis_rag.schemas.catalog import TableClass, TableRecord
+from kosis_rag.schemas.common import TableInfo
+from kosis_rag.shared.fields import item_unit, table_fields
 
 offline = pytest.mark.offline
 SIDO = ["서울특별시", "부산광역시", "대구광역시", "인천광역시"]

@@ -9,9 +9,12 @@ from fastapi.testclient import TestClient
 from kosis_chat.llm.model import MockClient
 from langchain_core.documents import Document
 
-from kosis_rag import chain
-from kosis_rag.loader import to_candidate
-from kosis_rag.schemas import TableCandidate
+from backend.app.respond import verify
+from backend.app.respond.node import GuideInput, RefuseInput, guide, refuse
+from kosis_rag.gate import texts
+from backend.app.respond.texts import NO_MATCH
+from kosis_rag.schemas.io import TableCandidate
+from kosis_rag.shared.catalog import to_candidate
 
 pytestmark = pytest.mark.offline
 
@@ -45,19 +48,30 @@ def _ids(tables):
     ("2023년 자료가 있는 표를 보세요.", []),  # names no table
 ])
 def test_picked_from_reply(reply, expected):
-    assert _ids(chain.picked_from_reply(reply, CANDS)) == expected
+    assert _ids(verify.picked_from_reply(reply, CANDS)) == expected
 
 
 def test_a_number_beyond_the_candidates_fails_the_check_and_never_streams():
-    assert chain.unsupported_claims("[7] 표가 맞습니다.", "q", CANDS) == ["[7]"]
-    assert chain.unsupported_claims("[2023년] 기준", "q", CANDS) == []  # a bracketed year is not a table number
-    assert chain.streamable_prefix("[7] 표가 맞습니다. ", "q", CANDS) is None
+    assert verify.unsupported_claims("[7] 표가 맞습니다.", "q", CANDS) == ["[7]"]
+    assert verify.unsupported_claims("[2023년] 기준", "q", CANDS) == []  # a bracketed year is not a table number
+    assert verify.streamable_prefix("[7] 표가 맞습니다. ", "q", CANDS) is None
 
 
 # --- 2. the answer cites exactly what it recommends ---
 
+def _guide(question, docs, client):
+    """The guide answer on docs (T2-41 S5: chain.guide_answer -> respond.node.guide)."""
+    return guide(GuideInput(question=question, candidates=[to_candidate(d) for d in docs]), client)
+
+
+def _refuse(question, docs, reason):
+    """The refusal answer on docs (T2-41 S5: chain.refusal_answer -> respond.node.refuse)."""
+    return refuse(RefuseInput(question=question, candidates=[to_candidate(d) for d in docs], refusal_reason=reason,
+                              refusal_text=texts.REFUSALS.get(reason, texts.REFUSAL_TEXT)))
+
+
 def _answer(reply):
-    return chain.guide_answer("출생아 수", DOCS, MockClient([reply]))
+    return _guide("출생아 수", DOCS, MockClient([reply]))
 
 
 def _cited(result):
@@ -78,13 +92,13 @@ def test_reply_naming_no_table_falls_back_to_the_template_and_its_top_3():
 
 
 def test_refusals_pick_nothing():
-    assert _answer(chain.NO_MATCH).picked == []
-    assert chain.refusal_answer("q", DOCS, None).picked == []
-    assert chain.refusal_answer("q", [], None).picked == []
+    assert _answer(NO_MATCH).picked == []
+    assert _refuse("q", DOCS, None).picked == []
+    assert _refuse("q", [], None).picked == []
 
 
 def test_picked_keeps_the_candidate_fields():
-    assert chain.guide_answer("q", DOCS, MockClient(["[1] DT_A"])).picked[0] == to_candidate(DOCS[0])
+    assert _guide("q", DOCS, MockClient(["[1] DT_A"])).picked[0] == to_candidate(DOCS[0])
 
 
 # --- 3. k is the server's budget unless a request gives it ---
@@ -95,8 +109,8 @@ def test_answer_api_uses_answer_k_unless_the_request_sets_k(tmp_path, monkeypatc
 
     monkeypatch.setattr(main, "LOG_DIR", tmp_path)
     resources = _resources()
-    resources.settings = resources.settings.model_copy(update={"answer_k": 2})
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(resources, MockClient("[1] DT_A"))
+    resources.options = resources.options.model_copy(update={"answer_k": 2})
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(resources, client=MockClient("[1] DT_A"))
     try:
         client = TestClient(main.app)
         assert len(client.post("/search", json={"question": "출생아 수"}).json()["candidates"]) == 2

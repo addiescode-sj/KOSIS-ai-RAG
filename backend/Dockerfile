@@ -4,7 +4,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 # embed: sentence-transformers for the query embedder (KURE-v1); torch runs on CPU in the container
-RUN uv sync --frozen --no-dev --group embed
+RUN uv sync --frozen --no-dev --group embed --no-install-project
 COPY vendor/phase1 vendor/phase1
 COPY src src
 COPY backend backend

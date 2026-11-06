@@ -10,10 +10,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
-from kosis_rag.index import REPO, read_records, to_metadata
-from kosis_rag.vectorstore import chroma_client
+from kosis_rag.adapters.chroma import chroma_client
+from kosis_rag.adapters.files import read_records
+from kosis_rag.schemas.resources import ChromaConfig
+from kosis_rag_build.chroma import to_metadata
+
+REPO = Path(__file__).resolve().parents[1]
 
 FIELDS = ("f_years", "f_cycle", "f_regions", "f_region_level", "f_measure", "f_unit", "f_dims")
 # mentor example: tables with 서울특별시 rows, 2025 values and a region breakdown
@@ -31,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     expected = {r.info.key: to_metadata(r) for r in read_records(args.tables)}
-    collection = chroma_client().get_collection(args.collection, embedding_function=None)
+    config = ChromaConfig(host=os.environ.get("CHROMA_HOST", "localhost"), port=int(os.environ.get("CHROMA_PORT", 8001)))
+    collection = chroma_client(config).get_collection(args.collection, embedding_function=None)
     got = collection.get(include=["metadatas"])
     loaded = dict(zip(got["ids"], got["metadatas"]))
     n = len(expected)

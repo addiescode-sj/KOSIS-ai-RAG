@@ -12,10 +12,10 @@ score is about what the filter actually sees, not about a separate copy.
 
 from __future__ import annotations
 
-from kosis_rag.fields import TableFields, table_fields
-from kosis_rag.filters import has_dimension
-from kosis_rag.query import DIMENSION_WORDS
-from kosis_rag.schemas import TableRecord
+from kosis_rag.shared.fields import TableFields, table_fields
+from kosis_rag.shared.filters import has_dimension
+from kosis_rag.shared.vocab import DIMENSION_WORDS
+from kosis_rag.schemas.catalog import TableRecord
 
 FIELDS = tuple(f for f in TableFields.model_fields if f != "key")
 CANONICAL_DIMS = sorted(set(DIMENSION_WORDS.values()))

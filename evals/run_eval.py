@@ -98,7 +98,7 @@ def run_l0(args) -> tuple[list[dict], dict, str]:
                if line.strip()} if METADATA_SAMPLE.exists() else None)
     loaded = None
     if args.retriever == "chroma":
-        from kosis_rag.retriever import ChromaTableRetriever
+        from kosis_rag.legacy.retrievers import ChromaTableRetriever
         loaded = set(ChromaTableRetriever.connect().collection.get(include=[])["ids"])
     s = metadata.score(records, gold, sample, loaded)
     rows = [{"key": k, **metadata.fields(r), "latency_ms": 0.0} for k, r in records.items()]
@@ -123,7 +123,7 @@ def run_l0(args) -> tuple[list[dict], dict, str]:
 
 def run_l2(args) -> tuple[list[dict], dict, str]:
     """L2: parse_query on every labelled question against query_golden.jsonl."""
-    from kosis_rag.query import parse_query
+    from kosis_rag.parse.node import parse_query
 
     from evals.evaluators import query
 
@@ -155,7 +155,7 @@ def run_l2(args) -> tuple[list[dict], dict, str]:
 
 def run_ablation(args) -> tuple[list[dict], dict, str]:
     """Slot ablation (§4.4): filter recall per combination; with --retriever chroma also Hit/MRR, flips, verdicts."""
-    from kosis_rag.query import parse_query
+    from kosis_rag.parse.node import parse_query
 
     from evals.runners import ablation
     from evals.runners import retrieval as runner
@@ -169,7 +169,7 @@ def run_ablation(args) -> tuple[list[dict], dict, str]:
     on = ablation.combos(args.slots.split(","))
     retriever = None
     if args.retriever == "chroma":
-        from kosis_rag.retriever import ChromaTableRetriever
+        from kosis_rag.legacy.retrievers import ChromaTableRetriever
         retriever = ChromaTableRetriever.connect(k=args.k)
     rows = ablation.run(items, slots, records, on, retriever, args.k)
     tau = args.tau
@@ -331,7 +331,7 @@ def search_failure_section(rows: list[dict], exported: bool) -> str:
     failed = [r for r in rows if r.get("failure")]
     counts = Counter(r["failure"]["span"] or "-" for r in failed)
     lines = ["", "## 실패 노드 (LangGraph trace)", "",
-             "- 판정: Hit@k 놓침 → 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 retrieve), 답 없음 오판 → gate (plans/T2-36.md)",
+             "- 판정: Hit@k 놓침 → 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 후보 풀을 만든 노드: 그래프는 fuse, T2-39), 답 없음 오판 → gate (plans/T2-36.md)",
              "- 노드별: " + (", ".join(f"{k} {v}" for k, v in counts.most_common()) or "실패 없음") + f" (합 {len(failed)})",
              f"- Jaeger: {'trace 전송함 (' + trace.JAEGER_UI + ')' if exported else 'OTEL_EXPORTER_OTLP_ENDPOINT 미설정, 전송 안 함'}"]
     if failed:

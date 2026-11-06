@@ -1,0 +1,199 @@
+{
+ "docs": [
+  {
+   "key": "101_DT_A",
+   "metadata": {
+    "input_rank": 1,
+    "key": "101_DT_A",
+    "org_id": "101",
+    "organization": "국가데이터처",
+    "period": "년",
+    "rank_bm25": 1,
+    "rank_dense": 1,
+    "rrf_score": 0.03278688524590164,
+    "score": 0.9,
+    "score_from": "dense",
+    "stage1_rank": 4,
+    "stage1_score": 0.1,
+    "stage2": "custom",
+    "stage2_calls": 1,
+    "stage2_error": null,
+    "stage2_input_tokens": 7,
+    "stage2_input_top_score": 0.7,
+    "stage2_output_tokens": null,
+    "stage2_picked": true,
+    "stage2_picked_n": 1,
+    "stage2_reason": null,
+    "survey_name": "인구동향조사",
+    "table_name": "출생아수",
+    "tbl_id": "DT_A",
+    "url": "http://kosis.kr/101_DT_A"
+   }
+  },
+  {
+   "key": "101_DT_C",
+   "metadata": {
+    "input_rank": 3,
+    "key": "101_DT_C",
+    "org_id": "101",
+    "organization": "국가데이터처",
+    "period": "년",
+    "rank_dense": 3,
+    "rrf_score": 0.015873015873015872,
+    "score": 0.7,
+    "score_from": "dense",
+    "stage1_rank": 1,
+    "stage1_score": 0.9,
+    "stage2": "custom",
+    "stage2_calls": 1,
+    "stage2_error": null,
+    "stage2_input_tokens": 7,
+    "stage2_input_top_score": 0.7,
+    "stage2_output_tokens": null,
+    "stage2_picked": false,
+    "stage2_picked_n": 1,
+    "stage2_reason": null,
+    "survey_name": "인구동향조사",
+    "table_name": "혼인건수",
+    "tbl_id": "DT_C",
+    "url": "http://kosis.kr/101_DT_C"
+   }
+  },
+  {
+   "key": "101_DT_B",
+   "metadata": {
+    "input_rank": 2,
+    "key": "101_DT_B",
+    "org_id": "101",
+    "organization": "국가데이터처",
+    "period": "년",
+    "rank_dense": 2,
+    "rrf_score": 0.016129032258064516,
+    "score": 0.8,
+    "score_from": "dense",
+    "stage1_rank": 2,
+    "stage1_score": 0.5,
+    "stage2": "custom",
+    "stage2_calls": 1,
+    "stage2_error": null,
+    "stage2_input_tokens": 7,
+    "stage2_input_top_score": 0.7,
+    "stage2_output_tokens": null,
+    "stage2_picked": false,
+    "stage2_picked_n": 1,
+    "stage2_reason": null,
+    "survey_name": "인구동향조사",
+    "table_name": "사망자수",
+    "tbl_id": "DT_B",
+    "url": "http://kosis.kr/101_DT_B"
+   }
+  },
+  {
+   "key": "101_DT_D",
+   "metadata": {
+    "input_rank": 4,
+    "key": "101_DT_D",
+    "org_id": "101",
+    "organization": "국가데이터처",
+    "period": "년",
+    "rank_dense": 4,
+    "rrf_score": 0.015625,
+    "score": 0.6000000000000001,
+    "score_from": "dense",
+    "stage1_rank": 3,
+    "stage1_score": 0.3,
+    "stage2": "custom",
+    "stage2_calls": 1,
+    "stage2_error": null,
+    "stage2_input_tokens": 7,
+    "stage2_input_top_score": 0.7,
+    "stage2_output_tokens": null,
+    "stage2_picked": false,
+    "stage2_picked_n": 1,
+    "stage2_reason": null,
+    "survey_name": "인구동향조사",
+    "table_name": "이혼건수",
+    "tbl_id": "DT_D",
+    "url": "http://kosis.kr/101_DT_D"
+   }
+  }
+ ],
+ "query": {
+  "cycle": null,
+  "dimensions": [],
+  "measures": [
+   "출생"
+  ],
+  "period_end": null,
+  "period_start": null,
+  "recent": false,
+  "regions": [],
+  "years": []
+ },
+ "refusal_reason": null,
+ "relaxed": [],
+ "removed": {},
+ "route": "guide",
+ "table_filter": null,
+ "trace": {
+  "condition": {
+   "relaxed": []
+  },
+  "fuse": {
+   "lists": [
+    "dense",
+    "bm25"
+   ],
+   "n_docs": 4,
+   "n_removed": 0,
+   "relaxed": []
+  },
+  "gate": {
+   "route": "guide"
+  },
+  "guide": {
+   "origin": "refusal"
+  },
+  "parse": {},
+  "rerank1": {},
+  "rerank2": {
+   "stage2": "custom",
+   "stage2_calls": 1,
+   "stage2_error": null,
+   "stage2_input_tokens": 7,
+   "stage2_input_top_score": 0.7,
+   "stage2_output_tokens": null,
+   "stage2_picked": true,
+   "stage2_picked_n": 1,
+   "stage2_reason": null
+  },
+  "retrieve_bm25": {
+   "n_docs": 1,
+   "n_removed": 0,
+   "top_keys": [
+    "101_DT_A"
+   ]
+  },
+  "retrieve_dense": {
+   "n_docs": 4,
+   "n_removed": 0,
+   "top_keys": [
+    "101_DT_A",
+    "101_DT_B",
+    "101_DT_C",
+    "101_DT_D"
+   ]
+  }
+ },
+ "trace_order": [
+  "parse",
+  "condition",
+  "retrieve_bm25",
+  "retrieve_dense",
+  "fuse",
+  "rerank1",
+  "rerank2",
+  "gate",
+  "guide"
+ ]
+}

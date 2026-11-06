@@ -1,0 +1,87 @@
+{
+ "docs": [],
+ "query": {
+  "cycle": null,
+  "dimensions": [],
+  "measures": [
+   "출생"
+  ],
+  "period_end": "1999",
+  "period_start": "1999",
+  "recent": false,
+  "regions": [],
+  "years": [
+   1999
+  ]
+ },
+ "refusal_reason": null,
+ "relaxed": [],
+ "removed": {
+  "101_DT_A": "요청 1999년 없음 (실제 2020~2023, 2개 시점, 주기 Y)",
+  "101_DT_B": "요청 1999년 없음 (실제 2023~2023, 1개 시점, 주기 Y)",
+  "101_DT_C": "요청 1999년 없음 (실제 2010~2010, 1개 시점, 주기 Y)",
+  "101_DT_D": "요청 1999년 없음 (실제 2023~2023, 1개 시점, 주기 Y)"
+ },
+ "route": "refuse",
+ "table_filter": {
+  "cycle": null,
+  "dimensions": [],
+  "measures": [
+   "출생",
+   "출산",
+   "생아"
+  ],
+  "mode": "strict",
+  "organization": null,
+  "period_from": null,
+  "period_to": null,
+  "region_mode": "hard",
+  "regions": [],
+  "soft_measures": [],
+  "years": [
+   1999
+  ]
+ },
+ "trace": {
+  "condition": {
+   "relaxed": []
+  },
+  "fuse": {
+   "lists": [
+    "dense",
+    "bm25"
+   ],
+   "n_docs": 0,
+   "n_removed": 4,
+   "relaxed": []
+  },
+  "gate": {
+   "route": "refuse"
+  },
+  "parse": {},
+  "refuse": {},
+  "rerank1": {},
+  "rerank2": {},
+  "retrieve_bm25": {
+   "n_docs": 0,
+   "n_removed": 1,
+   "top_keys": []
+  },
+  "retrieve_dense": {
+   "n_docs": 0,
+   "n_removed": 4,
+   "top_keys": []
+  }
+ },
+ "trace_order": [
+  "parse",
+  "condition",
+  "retrieve_bm25",
+  "retrieve_dense",
+  "fuse",
+  "rerank1",
+  "rerank2",
+  "gate",
+  "refuse"
+ ]
+}

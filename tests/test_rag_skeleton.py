@@ -3,10 +3,12 @@ from pathlib import Path
 import pytest
 
 from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
-from kosis_rag import chain
-from kosis_rag.loader import load_catalog, to_document
-from kosis_rag.retriever import BM25TableRetriever, ChromaTableRetriever
-from kosis_rag.tools import build_tools
+from backend.app.respond import legacy as respond_legacy  # T2-41 S5: chain.answer -> respond.legacy.answer
+from backend.app.respond.legacy import answer_tool
+from backend.app.respond.texts import NO_MATCH
+from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever
+from kosis_rag.shared.catalog import load_catalog, to_document
+from kosis_rag.legacy.tools import build_tools
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tables_sample.csv"
 
@@ -19,7 +21,7 @@ def retriever():
 
 
 def test_search_keeps_table_id_and_ranks_by_name(retriever):
-    (search, _) = build_tools(retriever, MockClient())
+    [search] = build_tools(retriever)
     hits = search.invoke({"question": "시군구별 주민등록세대수", "k": 2})
     assert hits[0]["tbl_id"] == "DT_1B040B3"
     assert hits[0]["score"] > 0 and len(hits) <= 2
@@ -27,12 +29,12 @@ def test_search_keeps_table_id_and_ranks_by_name(retriever):
 
 def test_no_token_overlap_refuses_without_calling_model(retriever):
     client = MockClient()
-    result = chain.answer(retriever, client, "bitcoin price")
+    result = respond_legacy.answer(retriever, client, "bitcoin price")
     assert result.no_answer and result.answer_origin == "refusal" and client.calls == []
 
 
 def test_model_no_match_is_a_refusal(retriever):
-    result = chain.answer(retriever, MockClient(chain.NO_MATCH), "주민등록세대수 알려줘")
+    result = respond_legacy.answer(retriever, MockClient(NO_MATCH), "주민등록세대수 알려줘")
     assert result.no_answer and result.candidates
 
 
@@ -42,14 +44,14 @@ def test_model_no_match_is_a_refusal(retriever):
     LLMResult(text="", status=STATUS_API_ERROR, error="boom"),  # failed call
 ])
 def test_unsupported_or_failed_reply_falls_back_to_template(retriever, reply):
-    result = chain.answer(retriever, MockClient([reply]), "주민등록세대수")
+    result = respond_legacy.answer(retriever, MockClient([reply]), "주민등록세대수")
     assert result.answer_origin == "template"
     assert "KOSIS / 주민등록인구현황 / 행정구역(시군구)별 주민등록세대수" in result.answer
 
 
 def test_supported_reply_is_kept_and_cited_by_code(retriever):
     reply = "[1] DT_1B040B3 표가 2020년 시군구별 세대수를 담고 있습니다."
-    result = chain.answer(retriever, MockClient([reply]), "2020년 주민등록세대수")
+    result = respond_legacy.answer(retriever, MockClient([reply]), "2020년 주민등록세대수")
     assert result.answer_origin == "llm" and result.answer.startswith(reply)
     assert "출처:" in result.answer
 
@@ -70,7 +72,8 @@ def test_chroma_retriever_feeds_the_same_chain_and_tools():
     docs = [to_document(t) for t in load_catalog(FIXTURE)]
     distances = [0.6, 0.1] + [0.9] * (len(docs) - 2)
     retriever = ChromaTableRetriever(collection=_FakeCollection(docs, distances), embed_query=lambda q: [0.0], k=3)
-    (search, answer) = build_tools(retriever, MockClient())
+    [search] = build_tools(retriever)
+    answer = answer_tool(retriever, MockClient())
     hits = search.invoke({"question": "아무 질문", "k": 2})
     assert [h["tbl_id"] for h in hits] == [docs[1].metadata["tbl_id"], docs[0].metadata["tbl_id"]]
     assert hits[0]["score"] == pytest.approx(0.9)  # 1 - cosine distance
@@ -82,12 +85,12 @@ def test_langchain_chat_model_reply_and_failure(retriever):
     from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
     reply = "[1] DT_1B040B3 표가 시군구별 세대수를 담고 있습니다."
-    result = chain.answer(retriever, FakeListChatModel(responses=[reply]), "주민등록세대수")
+    result = respond_legacy.answer(retriever, FakeListChatModel(responses=[reply]), "주민등록세대수")
     assert result.answer_origin == "llm" and result.answer.startswith(reply)
 
     class Boom(FakeListChatModel):
         def _call(self, *a, **kw):
             raise TimeoutError("down")
 
-    result = chain.answer(retriever, Boom(responses=[""]), "주민등록세대수")
+    result = respond_legacy.answer(retriever, Boom(responses=[""]), "주민등록세대수")
     assert result.answer_origin == "template" and result.llm_status == STATUS_API_ERROR

@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from backend.app import main  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
-from kosis_rag.graph import build_graph, run_search  # noqa: E402
-from kosis_rag.pipeline import load_resources  # noqa: E402
-from test_graph import KEYS, RECORDS, CatalogRetriever, _pick, _settings, _stage1  # noqa: E402
+from backend.app.respond.graph import build_answer_graph, run_answer  # noqa: E402
+from kosis_rag.llm.config import LLMConfig  # noqa: E402
+from test_graph import KEYS, RECORDS, CatalogRetriever, _load, _pick, _stage1  # noqa: E402
 
 pytestmark = pytest.mark.offline
 
@@ -24,19 +24,19 @@ REPLY = "[1] DT_A 표가 출생아 수를 담고 있습니다."
 
 def _resources(**kw):
     parts = {"stage1_score": _stage1, "select": _pick("101_DT_A"), **kw}
-    return load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS), **parts)
+    return _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), **parts)
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "LOG_DIR", tmp_path)
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), MockClient(REPLY))
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), client=MockClient(REPLY))
     yield TestClient(main.app)
     main.app.dependency_overrides.clear()
 
 
 def _expected(question, **kw):
-    return run_search(build_graph(_resources(**kw), MockClient(REPLY)), question)
+    return run_answer(build_answer_graph(_resources(**kw), MockClient(REPLY)), question)
 
 
 def _chain(client, question):
@@ -51,7 +51,7 @@ def _chain(client, question):
 @pytest.mark.parametrize("question, select, answer_node", [("출생아 수", _pick("101_DT_A"), "guide"),
                                                            ("자동차 등록 대수", _pick(reason="out_of_scope"), "refuse")])
 def test_node_chain_equals_search_equals_stream_equals_graph(client, question, select, answer_node):
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(select=select), MockClient(REPLY))
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(select=select), client=MockClient(REPLY))
     expected = _expected(question, select=select).result.model_dump(mode="json")
 
     assert client.get("/nodes").json()["nodes"] == ["parse", "retrieve", "rerank1", "rerank2", "gate", "answer"]
@@ -60,7 +60,9 @@ def test_node_chain_equals_search_equals_stream_equals_graph(client, question, s
 
     with client.stream("POST", "/search/stream", json={"question": question}) as r:
         events = [line.split(": ", 1)[1] for line in r.iter_lines() if line.startswith("event: ")]
-    assert events == ["parse", "retrieve", "rerank1", "rerank2", "gate", answer_node, "result"]
+    events[2:4] = sorted(events[2:4])  # T2-39: the graph's parallel list nodes finish in any order
+    assert events == ["parse", "condition", "retrieve_bm25", "retrieve_dense", "fuse", "rerank1", "rerank2", "gate",
+                      answer_node, "result"]
 
 
 def test_stream_result_event_holds_the_search_result_and_each_node_its_own_trace(client):
@@ -74,8 +76,9 @@ def test_stream_result_event_holds_the_search_result_and_each_node_its_own_trace
 
 def test_search_logs_each_node_after_the_response(client, tmp_path):
     client.post("/search", json={"question": "출생아 수"})
-    [line] = [json.loads(x) for f in tmp_path.glob("*.jsonl") for x in f.read_text().splitlines()]
-    assert set(line["seconds"]) == {"parse", "retrieve", "rerank1", "rerank2", "gate", "guide"}
+    [line] = [json.loads(x) for f in tmp_path.glob("*.jsonl") for x in f.read_text(encoding="utf-8").splitlines()]
+    assert set(line["seconds"]) == {"parse", "condition", "retrieve_dense", "retrieve_bm25", "fuse", "rerank1",
+                                    "rerank2", "gate", "guide"}  # the graph's nodes (T2-39 split of retrieve)
     assert line["route"] == "guide" and line["top"][0] == "101_DT_A"
 
 
@@ -95,7 +98,7 @@ def test_node_api_errors(client):
     state = client.post("/nodes/parse", json={"question": "출생아 수"}).json()
     assert client.post("/nodes/answer", json=state).status_code == 422  # no route yet
     assert client.post("/nodes/answer", json={**state, "route": "guide"}).status_code == 422  # guide with no docs
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(select=None), MockClient(REPLY))
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(select=None), client=MockClient(REPLY))
     assert client.post("/nodes/rerank2", json=state).status_code == 409
 
 
@@ -103,3 +106,57 @@ def test_openapi_lists_every_node_endpoint():
     paths = main.app.openapi()["paths"]
     assert {f"/nodes/{n}" for n in ("parse", "retrieve", "rerank1", "rerank2", "gate", "answer")} <= set(paths)
     assert {"/nodes", "/search", "/search/stream", "/health"} <= set(paths)
+
+
+def test_a_missing_llm_key_is_a_503_not_a_500(client):
+    from kosis_rag.llm.config import LLMKeyMissing
+
+    def no_key():
+        raise LLMKeyMissing("LLMConfig.api_key is required for provider='hcx'")
+
+    main.app.dependency_overrides[main.get_runtime] = no_key
+    r = client.post("/search", json={"question": "출생아 수"})
+    assert r.status_code == 503 and "LLM key missing" in r.json()["detail"]
+
+
+# --- T2-41 S4: the guide client is made when guide first runs; without a guide key only guide answers 503 ---
+
+NO_KEY = LLMConfig(provider="clova_chat", model="HCX-DASH-002")  # api_key None: backend.app.config with no key set
+
+
+def test_without_a_guide_key_parse_to_gate_run_and_answer_is_503(client):
+    runtime = main.Runtime(_resources(), guide_llm=NO_KEY)
+    main.app.dependency_overrides[main.get_runtime] = lambda: runtime
+    state = client.post("/nodes/parse", json={"question": "출생아 수"}).json()
+    for name in ("retrieve", "rerank1", "rerank2", "gate"):
+        r = client.post(f"/nodes/{name}", json=state)
+        assert r.status_code == 200, name
+        state = r.json()
+    assert state["route"] == "guide"
+    r = client.post("/nodes/answer", json=state)
+    assert r.status_code == 503 and "guide LLM key not set" in r.json()["detail"]
+    r = client.post("/search", json={"question": "출생아 수"})
+    assert r.status_code == 503 and "guide LLM key not set" in r.json()["detail"]
+    refused = client.post("/nodes/answer", json={**state, "route": "refuse"})
+    assert refused.status_code == 200 and refused.json()["result"]["no_answer"]  # refuse needs no LLM
+
+
+def test_the_guide_client_is_built_once_on_the_first_guide_run(client, monkeypatch):
+    from kosis_rag.llm import providers
+
+    made = []
+
+    def fake_clova_chat(config):
+        made.append(config)
+        return MockClient(REPLY)
+
+    # T2-41 S5: the guide is built through llm.providers.build_client (the provider table), cached on the Runtime
+    monkeypatch.setitem(providers.PROVIDERS, "clova_chat", fake_clova_chat)
+    runtime = main.Runtime(_resources(), guide_llm=LLMConfig(provider="clova_chat", model="HCX-DASH-002", api_key="k"))
+    main.app.dependency_overrides[main.get_runtime] = lambda: runtime
+    assert client.post("/nodes/parse", json={"question": "출생아 수"}).status_code == 200
+    assert made == []  # not made before guide runs
+    first = client.post("/search", json={"question": "출생아 수"}).json()
+    second = client.post("/search", json={"question": "출생아 수", "k": 3}).json()  # another k: another graph
+    assert len(made) == 1 and made[0].model == "HCX-DASH-002"
+    assert first == _expected("출생아 수").result.model_dump(mode="json") and second["candidates"]

@@ -1,0 +1,55 @@
+{
+ "answer": "제공된 KOSIS 통계표 중에서 이 질문에 맞는 표를 찾지 못했습니다. 다른 표현으로 다시 질문해 주세요.",
+ "answer_origin": "refusal",
+ "candidates": [
+  {
+   "key": "101_DT_A",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.9,
+   "survey_name": "인구동향조사",
+   "table_name": "출생아수",
+   "tbl_id": "DT_A",
+   "url": "http://kosis.kr/101_DT_A"
+  },
+  {
+   "key": "101_DT_C",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.7,
+   "survey_name": "인구동향조사",
+   "table_name": "혼인건수",
+   "tbl_id": "DT_C",
+   "url": "http://kosis.kr/101_DT_C"
+  },
+  {
+   "key": "101_DT_B",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.8,
+   "survey_name": "인구동향조사",
+   "table_name": "사망자수",
+   "tbl_id": "DT_B",
+   "url": "http://kosis.kr/101_DT_B"
+  },
+  {
+   "key": "101_DT_D",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.6000000000000001,
+   "survey_name": "인구동향조사",
+   "table_name": "이혼건수",
+   "tbl_id": "DT_D",
+   "url": "http://kosis.kr/101_DT_D"
+  }
+ ],
+ "llm_status": "ok",
+ "no_answer": true,
+ "no_answer_reason": null,
+ "picked": [],
+ "question": "출생아 수"
+}

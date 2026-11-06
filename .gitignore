@@ -6,7 +6,6 @@ docs/reports/raw/
 # Secrets (KOSIS / HCX API keys must never reach GitHub)
 .env
 .env.*
-!.env.example
 secrets/
 *.pem
 *.key
@@ -58,3 +57,8 @@ evals/reports/*/
 
 # Per-machine compose overrides (e.g. a shared Chroma folder)
 docker-compose.override.yml
+
+# build outputs (T2-41 S6b: wheel check; keep out of the single commit)
+dist/
+build/
+*.egg-info/

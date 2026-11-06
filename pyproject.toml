@@ -10,8 +10,8 @@ dependencies = [
     "pandas>=2.0",
     "pyarrow>=15.0",
     "pyyaml>=6.0",
-    "python-dotenv>=1.0",
-    "google-genai>=2.3",
+    "python-dotenv>=1.0",  # Phase 1 (vendor/phase1 kosis_chat.config.load_env) reads .env with it; Phase 2 code never imports it
+    # T2-41 S6b: google-genai removed (nothing here or in vendor/phase1 imports it)
     "langchain-core>=1.7.0",
     "langgraph>=1.0,<2",
     "rank-bm25>=0.2.2",
@@ -31,5 +31,19 @@ embed = [
     "sentence-transformers",
 ]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+# T2-41: every package under src, added by the step that creates it (tests/test_layout.py checks the list)
+packages = ["kosis_rag", "kosis_rag.adapters", "kosis_rag.gate", "kosis_rag.graph", "kosis_rag.legacy",
+            "kosis_rag.llm", "kosis_rag.parse", "kosis_rag.rerank", "kosis_rag.retrieve", "kosis_rag.schemas", "kosis_rag.shared",
+            # S6a: the offline DB build package (kosis_rag never imports it)
+            "kosis_rag_build", "kosis_rag_build.graph", "kosis_rag_build.hq"]
+
+[tool.setuptools.package-data]
+# T2-41 S3 (P2-D22): prompts are .md files read through importlib.resources (tests/test_layout.py checks the list)
+"kosis_rag.rerank" = ["prompts/*.md"]
+"kosis_rag_build.hq" = ["prompts/*.md"]  # S6a: the question generation prompt (prompt_hash names the reply cache)

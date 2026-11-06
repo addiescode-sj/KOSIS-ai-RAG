@@ -6,13 +6,18 @@ One question = one trace:
     eval.question            qid, kind, layer, verdict, failure.stage / failure.span / failure.reason
     ├─ retrieve              L1·e2e, a plain retriever: retriever, top_keys, gold_rank, right_table
     ├─ search_tables         L1·e2e, the LangGraph search (T2-10), same attributes
-    │  └─ parse, retrieve, rerank1, rerank2, gate, refuse | guide           (graph nodes, NodeSpans)
+    │  └─ parse, condition, retrieve_dense ∥ retrieve_bm25 [∥ retrieve_hq ∥ retrieve_hq_bm25], fuse,
+    │     rerank1, rerank2, gate, refuse | guide                               (graph nodes, NodeSpans; T2-39 split)
     └─ tool.summarize_stat   L3·e2e: table_key, outcome, numbers_origin
        └─ judge, analyze.*, compute, compose, verify, template, fallback_chatbot   (Phase 1 spans, T1-22)
 
 The Phase 1 pipeline already records OTel-shaped span dicts in Answer.decision_metadata["spans"]; summarize() keeps
 them (summarize_stat drops them). NodeSpans records the graph nodes as span dicts of the same shape from LangChain
-callbacks (row["search_spans"], kept apart from the Phase 1 row["spans"]). blame() / blame_search() name the failing
+callbacks (row["search_spans"], kept apart from the Phase 1 row["spans"]). Since T2-39 the graph searches its lists in
+parallel nodes (retrieve_*, each writing only its own list into `runs`) and forms the candidate pool at `fuse`: only
+nodes that output `docs` (fuse, rerank1, rerank2) carry a ranked pool, so the blame chain starts at fuse. The
+retrieve_* spans keep their own n_docs / top_keys attributes, and fuse's docs say per table which lists found it
+(rank_<list> metadata). blame() / blame_search() name the failing
 stage with deterministic rules, and export() replays the dicts as OTel spans over OTLP when
 OTEL_EXPORTER_OTLP_ENDPOINT is set (docker compose --profile obs up jaeger).
 Tokens and cost stay in evals.ops (ops.json); the gen_ai.* span attributes are only the per-call record.
@@ -114,7 +119,8 @@ def lost_at(spans: list[dict], gold: set[str], k: int) -> tuple[str, str] | None
     """(node, reason) for the search node that left the gold tables outside the top k (plans/T2-36.md Idea 3).
 
     Per node, the best rank of any gold key in its whole output pool (positions, so no ties). The node is the last
-    one that moved it from <= k to > k; retrieve when no node ever had it within k. None without node spans.
+    one that moved it from <= k to > k; the first pool node when no node ever had it within k (the graph: fuse, where
+    the lists are joined; a plain retriever's caller uses "retrieve"). None without node spans.
     """
     ranks = [(s["name"], next((n for n, key in enumerate(s["keys"], 1) if key in gold), math.inf))
              for s in spans if "keys" in s]
@@ -129,7 +135,8 @@ def lost_at(spans: list[dict], gold: set[str], k: int) -> tuple[str, str] | None
         return culprit
     name, first = ranks[0]
     if first == math.inf:
-        return name, f"{name}: 정답 표가 후보 풀({len(spans[0].get('keys') or [])}개)에 없음"
+        pool = next(s for s in spans if "keys" in s)["keys"]  # the first node with a pool (fuse in the graph)
+        return name, f"{name}: 정답 표가 후보 풀({len(pool)}개)에 없음"
     return name, f"{name}: 정답 표 {show(first)}, 이후 노드도 top {k} 안으로 못 올림 (최종 {show(ranks[-1][1])})"
 
 

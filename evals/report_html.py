@@ -331,7 +331,7 @@ def search_failures_body(m: dict, rows: list[dict]) -> str:
              if failed else '<p class="note">실패 문항 없음</p>')
     return "".join([
         f'<div class="card"><h2>실패 노드 (LangGraph, {len(failed)}건)</h2>',
-        '<p class="note">Hit@k 놓침은 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 retrieve), 답 없음 오판은 gate. '
+        '<p class="note">Hit@k 놓침은 정답 표를 top k 밖으로 마지막으로 내린 노드(처음부터 밖이면 후보 풀을 만든 노드: 그래프는 fuse), 답 없음 오판은 gate. '
         '굵은 테두리 = 판정한 노드, 마우스를 올리면 지연이 보인다.</p>', chart, table, "</div>"])
 
 

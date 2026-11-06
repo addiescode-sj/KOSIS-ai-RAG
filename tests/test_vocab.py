@@ -2,15 +2,16 @@
 
 import pytest
 
-from kosis_rag import filters, query, vocab
-from kosis_rag.vocab import LABEL_ALIASES, dimension_keys, unit_key
+from kosis_rag.parse import patterns
+from kosis_rag.shared import filters, vocab
+from kosis_rag.shared.vocab import LABEL_ALIASES, dimension_keys, unit_key
 
 offline = pytest.mark.offline
 
 
 @offline
 def test_region_words_are_the_same_objects_as_before():
-    assert vocab.SIDO is filters.SIDO and vocab.REGION_WORDS is query.REGION_WORDS
+    assert vocab.SIDO is filters.SIDO and vocab.REGION_WORDS is patterns.REGION_WORDS
     assert vocab.SIDO_LABELS["강원도"] == "강원특별자치도"
 
 
@@ -28,7 +29,7 @@ def test_dimension_keys(name, keys):
 
 @offline
 def test_question_breakdowns_share_the_keys():
-    for word, key in query.DIMENSION_WORDS.items():
+    for word, key in vocab.DIMENSION_WORDS.items():
         assert dimension_keys(key) == [key], word
 
 

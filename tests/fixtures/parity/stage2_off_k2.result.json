@@ -1,0 +1,45 @@
+{
+ "answer": "[1] DT_C 표입니다.\n\n출처:\n- KOSIS / 인구동향조사 / 혼인건수 (http://kosis.kr/101_DT_C)",
+ "answer_origin": "llm",
+ "candidates": [
+  {
+   "key": "101_DT_C",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.7,
+   "survey_name": "인구동향조사",
+   "table_name": "혼인건수",
+   "tbl_id": "DT_C",
+   "url": "http://kosis.kr/101_DT_C"
+  },
+  {
+   "key": "101_DT_B",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.8,
+   "survey_name": "인구동향조사",
+   "table_name": "사망자수",
+   "tbl_id": "DT_B",
+   "url": "http://kosis.kr/101_DT_B"
+  }
+ ],
+ "llm_status": "ok",
+ "no_answer": false,
+ "no_answer_reason": null,
+ "picked": [
+  {
+   "key": "101_DT_C",
+   "org_id": "101",
+   "organization": "국가데이터처",
+   "period": "년",
+   "score": 0.7,
+   "survey_name": "인구동향조사",
+   "table_name": "혼인건수",
+   "tbl_id": "DT_C",
+   "url": "http://kosis.kr/101_DT_C"
+  }
+ ],
+ "question": "출생아 수"
+}
