@@ -96,8 +96,8 @@ def test_answer_api_uses_answer_k_unless_the_request_sets_k(tmp_path, monkeypatc
 
     monkeypatch.setattr(main, "LOG_DIR", tmp_path)
     resources = _resources()
-    resources.settings = resources.settings.model_copy(update={"answer_k": 2})
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(resources, MockClient("[1] DT_A"))
+    resources.options = resources.options.model_copy(update={"answer_k": 2})
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(resources, client=MockClient("[1] DT_A"))
     try:
         client = TestClient(main.app)
         assert len(client.post("/search", json={"question": "출생아 수"}).json()["candidates"]) == 2

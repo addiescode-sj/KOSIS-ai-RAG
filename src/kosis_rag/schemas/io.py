@@ -1,9 +1,12 @@
-"""Phase 2 I/O contract: search candidates, tool and API inputs, and the guide answer (T2-41 S1: from schemas.py).
+"""Phase 2 I/O contract: search candidates, tool and API inputs, and the guide answer (T2-41 S1: from schemas.py);
+the module's own input and output, SearchInput / SearchOutput (S4, plans/T2-41.md 입출력 계약; fixed at S5).
 
 Source comes from the Phase 1 copy in `kosis_rag.schemas.common` (P2-D0).
 """
 
 from __future__ import annotations
+
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -54,3 +57,28 @@ class SearchResult(BaseModel):
     answer: str  # final text; citations are appended by code
     answer_origin: str  # "llm" | "template" (LLM failed or failed verification) | "refusal"
     llm_status: str | None = None  # Phase 1 LLMResult.status when the model was called
+
+
+class SearchInput(BaseModel):
+    """Input of kosis_rag.api.SearchModule.search (T2-41 S4)."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    question: str = Field(min_length=1)
+    k: int | None = Field(default=None, ge=1, le=20)  # candidate budget docs[:k]; None = options.answer_k (as AskArgs.k)
+
+
+class SearchOutput(BaseModel):
+    """Output of SearchModule.search (T2-41 S4): gate's decision and the tables, no sentence (that is the app's).
+
+    route "found" means gate refused nothing: there are candidates (stage 2 picked some, or stage 2 is off). It does
+    not mean Phase 1 can compute on them; hand Phase 1 `picked[0].key` (the tables.csv key "101_DT_..."), not tbl_id.
+    """
+
+    schema_version: Literal["2.0"] = "2.0"
+    question: str
+    route: Literal["found", "refuse"]
+    refusal_reason: str | None = None  # gate: stage2_reason (out_of_scope | no_item) or None
+    refusal_text: str | None = None  # on refuse: gate.texts REFUSALS.get(reason, REFUSAL_TEXT) (code text, no LLM)
+    picked: list[TableCandidate] = Field(default_factory=list)  # found: stage 2's picks (rank order), else candidates
+    candidates: list[TableCandidate] = Field(default_factory=list)  # docs[:k] (kept on refuse when there are docs)
+    spans: list[dict[str, Any]] = Field(default_factory=list)  # {"node": name, **trace[name]} in node order

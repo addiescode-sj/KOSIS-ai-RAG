@@ -38,8 +38,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 package-dir = {"" = "src"}
 # T2-41: every package under src, added by the step that creates it (tests/test_layout.py checks the list)
-packages = ["kosis_rag", "kosis_rag.adapters", "kosis_rag.gate", "kosis_rag.hq", "kosis_rag.legacy", "kosis_rag.llm",
-            "kosis_rag.parse", "kosis_rag.rerank", "kosis_rag.retrieve", "kosis_rag.schemas", "kosis_rag.shared"]
+packages = ["kosis_rag", "kosis_rag.adapters", "kosis_rag.gate", "kosis_rag.graph", "kosis_rag.hq", "kosis_rag.legacy",
+            "kosis_rag.llm", "kosis_rag.parse", "kosis_rag.rerank", "kosis_rag.retrieve", "kosis_rag.schemas", "kosis_rag.shared"]
 
 [tool.setuptools.package-data]
 # T2-41 S3 (P2-D22): prompts are .md files read through importlib.resources (tests/test_layout.py checks the list)

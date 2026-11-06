@@ -26,6 +26,7 @@ import re
 from typing import Any
 
 from kosis_rag.schemas.catalog import TableRecord
+from kosis_rag.schemas.resources import IndexSpec
 from kosis_rag.shared.vocab import REGION_LEVELS
 
 MAX_LABELS = 60  # longer label lists are summarized in the embedding text
@@ -224,6 +225,22 @@ def build_doc(record: TableRecord | dict[str, Any], fmt: str = DOC_FORMAT, max_i
         "bm25_text": " ".join(p for p in bm25 if p),
         "fields": {**fields, "name": name, "format": fmt},
     }
+
+
+def text_format(spec: IndexSpec, dense: Any) -> str:
+    """The table text the whole search uses: the dense collection's format; spec.text_format, when set, must agree
+    (T2-41 S4: from pipeline.text_format, which took SearchSettings).
+
+    In: spec = the index spec (text_format = TEXT_FORMAT or None); dense = the dense list (its doc_format, if any).
+    Out: the format name used for BM25, the re-ranker passages and stage 2 passages.
+    Side effects: raises ValueError when spec.text_format disagrees with the collection.
+    Node: none directly (load_resources calls it once).
+    """
+    built = getattr(dense, "doc_format", None)
+    fmt = built if built in FORMATS else (spec.text_format or DOC_FORMAT)  # KURE collections: our default
+    if spec.text_format and spec.text_format != fmt:
+        raise ValueError(f"TEXT_FORMAT={spec.text_format} but the collection holds {fmt!r} text")
+    return fmt
 
 
 def main(argv: list[str] | None = None) -> int:

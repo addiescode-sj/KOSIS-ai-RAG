@@ -10,7 +10,10 @@ __init__ without side effects. S2 adds: the old query / retriever paths and the 
 never adapters, graph, legacy or the old top-level modules), and no self.last_* state in retrieve/. S3 adds: the old
 rerank / hcx / clova paths (kosis_rag.rerank is now a package), the names chain.py gave to gate/, the stages rerank and
 gate (rerank may also import llm/), llm/ importing only itself, no Phase 1 import anywhere in src (the llm/ copies),
-urllib.request / openai / langchain_naver only in llm/, and the rerank prompts as package data.
+urllib.request / openai / langchain_naver only in llm/, and the rerank prompts as package data. S4 adds: the old
+graph / pipeline paths (kosis_rag.graph is now a package), the names chain.py and legacy/retrievers.py no longer
+define, langgraph only in src/kosis_rag/graph/, no .env / environment read in src (the CLIs listed until S6a),
+adapters/ imported only by graph/, api.py and llm/, and no positional load_resources(spec, options) call anywhere.
 Exceptions are listed with their reason and the step that removes them.
 """
 
@@ -48,6 +51,9 @@ OLD_PATHS: tuple[str, ...] = (
     "kosis_rag.query", "kosis_rag.retriever",
     # S3: moved to rerank/ (a package now: stage1 stage2 selectors hcx node ...), llm/ and legacy/rerankers.py
     "kosis_rag.rerank", "kosis_rag.hcx", "kosis_rag.clova",
+    # S4: graph.py -> graph/ (a package now: search nodes_api spans) + schemas/state.py; pipeline.py ->
+    # schemas/resources.py, adapters/loader.py, legacy/pipeline.py (SearchSettings / from_env deleted)
+    "kosis_rag.graph", "kosis_rag.pipeline",
 )
 # Names moved out of a module that stays (S2), checked like OLD_PATHS: no import of them, and the module no longer
 # defines them at top level (docs/migration.md).
@@ -57,12 +63,15 @@ OLD_NAMES: dict[str, tuple[str, ...]] = {
     "kosis_rag.hq.index": ("HqRetriever", "hq_bm25", "max_pool", "ckpt8", "collection_name", "read_questions",
                            "HQ_DIR", "COLLECTION_PREFIX", "DOC_FORMAT", "DESC_SUFFIX", "N_QUESTIONS"),
     "kosis_rag.index": ("COLLECTION_NAME",),  # S2: shared/constants.py
-    "kosis_rag.pipeline": ("bm25_text",),  # S2: retrieve/bm25.py
-    # S3: gate/node.py (decide_route, Route -> found | refuse) and gate/texts.py; chain.py uses them by module access
-    "kosis_rag.chain": ("decide_route", "Route", "NO_MATCH", "REFUSAL_TEXT", "REFUSALS"),
+    # S3: gate/node.py (decide_route, Route -> found | refuse) and gate/texts.py; chain.py uses them by module access.
+    # S4: clova_chat (-> llm.providers.clova_chat(config)) and the guide constants (-> backend/app/config.py)
+    "kosis_rag.chain": ("decide_route", "Route", "NO_MATCH", "REFUSAL_TEXT", "REFUSALS", "clova_chat", "GUIDE_MODEL",
+                        "GUIDE_TEMPERATURE", "GUIDE_MAX_TOKENS", "GUIDE_TIMEOUT", "GUIDE_KEY_ENV"),
+    # S4: the environment is the caller's (backend/app/config.py): connect takes ChromaConfig
+    "kosis_rag.legacy.retrievers": ("env_chroma_config",),
 }
 # Packages that took an old module's name: their own modules are new paths, not the old one (kosis_rag.schemas.io).
-REUSED_NAMES = ("kosis_rag.schemas", "kosis_rag.rerank")
+REUSED_NAMES = ("kosis_rag.schemas", "kosis_rag.rerank", "kosis_rag.graph")
 # Files allowed to import pandas / pyarrow. Placeholder: not enforced at S0 (no rule for frame libraries yet).
 FRAME_ALLOWED: tuple[str, ...] = ()
 
@@ -96,8 +105,34 @@ PHASE1_COPIES = {
 # S3 (P2-D22): prompt files that must ship as package data: package -> glob in [tool.setuptools.package-data]
 PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"]}
 
-# langgraph: only the graph files (S4: src/kosis_rag/graph/ and, from S6a, src/kosis_rag_build/graph/).
-LANGGRAPH_ALLOWED = ("src/kosis_rag/graph.py", "src/kosis_rag/hq/graph.py")
+# langgraph: only the graph folder (S4: src/kosis_rag/graph/ and, from S6a, src/kosis_rag_build/graph/); the offline
+# question build src/kosis_rag/hq/graph.py until S6a moves it to kosis_rag_build/graph/. "/" at the end = a folder.
+LANGGRAPH_ALLOWED = ("src/kosis_rag/graph/", "src/kosis_rag/hq/graph.py")
+# S4 (§0.6): no .env and no environment read in src (dotenv import, os.environ, os.getenv). Exceptions: the CLIs that
+# still read their settings from .env + environment until S6a (kosis_rag_build/cli.py, then scripts/kosis_build.py).
+ENV_ALLOWED = ("src/kosis_rag/index.py", "src/kosis_rag/hq/build.py", "src/kosis_rag/hq/index.py")
+# S4: adapters/ (files, Chroma, models, loader) is imported only by graph/, api.py and llm/ (and itself).
+ADAPTERS = "kosis_rag.adapters"
+ADAPTERS_IMPORTERS = ("src/kosis_rag/adapters/", "src/kosis_rag/graph/", "src/kosis_rag/api.py", "src/kosis_rag/llm/")
+ADAPTERS_EXCEPTIONS = {
+    # The offline CLIs (index, hq build / index) read files and open Chroma / models themselves until S6a moves them
+    # to kosis_rag_build (which may import kosis_rag.adapters).
+    "src/kosis_rag/index.py", "src/kosis_rag/hq/build.py", "src/kosis_rag/hq/index.py",
+    # The old retriever classes' connect() opens its collection and embedder (evals, lab and adapters.loader call it).
+    "src/kosis_rag/legacy/retrievers.py",
+}
+# S4: callers whose old import is left on purpose, with the reason (checked by test_exceptions_are_still_needed).
+CALLER_EXCEPTIONS = {
+    # evals are not modified by the refactor (user decision 11/05 21:17): SearchSettings is gone and the L1 runner's
+    # _staged_settings fails when called until the evals owner rewrites it (refactor/phase2/03 §2).
+    ("evals/runners/retrieval.py", "kosis_rag.pipeline"),
+    ("evals/runners/retrieval.py", "kosis_rag.pipeline.SearchSettings"),
+}
+# S4: files allowed a positional load_resources(...) call (spec and options are keyword-only), with the reason.
+LOAD_RESOURCES_POSITIONAL = {
+    # evals construction lines not modified (03 §2): the call fails with TypeError until the evals owner fixes it
+    "evals/runners/retrieval.py",
+}
 # Top-level packages src must never import (entry points and experiments depend on src, not the other way).
 NOT_FROM_SRC = ("backend", "evals", "scripts", "lab", "tests")
 # (file, imported name) pairs allowed against NOT_FROM_SRC, with the reason.
@@ -181,8 +216,10 @@ def test_src_import_rules(path: Path):
     rel = _rel(path)
     names = _imports(path)
     problems = []
-    if rel not in LANGGRAPH_ALLOWED:
+    if not _allowed(rel, LANGGRAPH_ALLOWED):
         problems += [n for n in names if _hits(n, ("langgraph",))]
+    if path.is_relative_to(MODULE) and not _allowed(rel, ADAPTERS_IMPORTERS) and rel not in ADAPTERS_EXCEPTIONS:
+        problems += [n for n in names if _hits(n, (ADAPTERS,))]
     problems += [n for n in names if _hits(n, NOT_FROM_SRC) and (rel, n) not in SRC_EXCEPTIONS]
     if path.is_relative_to(MODULE):  # the search module never imports the offline build package
         problems += [n for n in names if _hits(n, ("kosis_rag_build",))]
@@ -194,7 +231,7 @@ def test_src_import_rules(path: Path):
     if rel not in PHASE1_ALLOWED:
         problems += [n for n in names if _hits(n, PHASE1)]
     for library, allowed in LIBRARY_ALLOWED.items():
-        if not any(rel.startswith(a) if a.endswith("/") else rel == a for a in allowed):
+        if not _allowed(rel, allowed):
             problems += [n for n in names if _hits(n, (library,))]
     stage = _stage_of(path)
     if stage is not None:  # S2: schemas <- shared <- parse <- retrieve <- rerank <- gate; nothing else of kosis_rag
@@ -202,6 +239,56 @@ def test_src_import_rules(path: Path):
                    + STAGE_EXTRA.get(stage, ()))
         problems += [n for n in names if _hits(n, ("kosis_rag",)) and not _hits(n, allowed)]
     assert not problems, f"{rel}: imports break the layout rules: {sorted(set(problems))}"
+
+
+def _allowed(rel: str, allowed: tuple[str, ...]) -> bool:
+    """rel is one of the listed files or inside a listed folder (an entry ending in "/")."""
+    return any(rel.startswith(a) if a.endswith("/") else rel == a for a in allowed)
+
+
+def _env_reads(path: Path) -> list[str]:
+    """What in the file reads .env or the environment: a dotenv import, os.environ / os.getenv, or a from-import of
+    environ / getenv from os."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    hits = [n for n in _imports(path) if _hits(n, ("dotenv",)) or n in ("os.environ", "os.getenv")]
+    hits += [f"os.{n.attr}" for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+             and n.value.id == "os" and n.attr in ("environ", "getenv")]
+    return hits
+
+
+@pytest.mark.parametrize("path", _py_files(MODULE), ids=_rel)
+def test_src_reads_no_env(path: Path):
+    """S4 (§0.6): the module reads no .env and no environment; the caller declares the settings."""
+    rel = _rel(path)
+    if rel in ENV_ALLOWED:
+        return
+    assert not _env_reads(path), f"{rel}: reads .env or the environment: {sorted(set(_env_reads(path)))}"
+
+
+def test_env_exceptions_are_still_needed():
+    for rel in ENV_ALLOWED:
+        assert _env_reads(ROOT / rel), f"stale exception: {rel} no longer reads the environment"
+
+
+def _positional_load_resources(path: Path) -> list[int]:
+    """Lines of calls load_resources(<positional>, ...) in the file (by name or as an attribute)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call) and n.args
+            and ((isinstance(n.func, ast.Name) and n.func.id == "load_resources")
+                 or (isinstance(n.func, ast.Attribute) and n.func.attr == "load_resources"))]
+
+
+def test_load_resources_is_called_by_keyword_only():
+    """S4 (11/05 external review P1-2b): spec and options are passed by name everywhere (the signature makes them
+    keyword-only, and search_config_from_env returns options first, so a positional call would swap them)."""
+    import inspect
+
+    from kosis_rag.adapters.loader import load_resources
+
+    params = inspect.signature(load_resources).parameters
+    assert all(params[name].kind is inspect.Parameter.KEYWORD_ONLY for name in ("spec", "options", "llm"))
+    found = {_rel(p): lines for p in _py_files(MODULE, BUILD, *CALLERS) if (lines := _positional_load_resources(p))}
+    assert set(found) == LOAD_RESOURCES_POSITIONAL, f"positional load_resources calls: {found}"
 
 
 def _stage_of(path: Path) -> str | None:
@@ -244,7 +331,7 @@ def test_retrieve_keeps_no_last_state():
 
 @pytest.mark.parametrize("path", CALLER_FILES, ids=_rel)
 def test_callers_use_no_old_path(path: Path):
-    problems = _old(_imports(path))
+    problems = [n for n in _old(_imports(path)) if (_rel(path), n) not in CALLER_EXCEPTIONS]
     assert not problems, f"{_rel(path)}: imports an old path: {sorted(set(problems))}"
 
 
@@ -254,6 +341,10 @@ def test_exceptions_are_still_needed():
         assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
     for rel in PHASE1_ALLOWED:
         assert any(_hits(n, PHASE1) for n in _imports(ROOT / rel)), f"stale exception: {rel} no longer imports Phase 1"
+    for rel, name in CALLER_EXCEPTIONS:
+        assert name in _imports(ROOT / rel), f"stale exception: {rel} no longer imports {name}"
+    for rel in ADAPTERS_EXCEPTIONS:
+        assert any(_hits(n, (ADAPTERS,)) for n in _imports(ROOT / rel)), f"stale exception: {rel} imports no adapter"
 
 
 def test_old_modules_are_gone():

@@ -45,9 +45,11 @@ import numpy as np
 from evals.schemas import GOLDEN
 from evals.trace import NodeSpans
 from kosis_chat.llm.model import MockClient
-from kosis_rag.adapters.files import read_records
-from kosis_rag.graph import build_graph, run_search
-from kosis_rag.pipeline import REPO, SearchSettings, load_resources
+from backend.app.config import search_config_from_env
+from kosis_rag.adapters.files import TABLES, read_records
+from kosis_rag.adapters.loader import load_resources
+from kosis_rag.graph.search import build_graph, run_search
+from kosis_rag.shared.vocab import REPO
 from kosis_rag.shared import tabletext as text
 
 KS = (1, 5, 10)
@@ -306,10 +308,10 @@ def main() -> None:
     if not ckpt:
         raise SystemExit("S0 needs the stage 1 re-ranker: set RERANK_CKPT in .env or pass --rerank-ckpt")
     items = read_golden(args.golden)
-    s0 = SearchSettings.from_env(cond_filter=True, stage2="none", rerank_ckpt=ckpt, hq_build=None, hq_bm25=False,
-                                 hq_weight=1.0)
-    records_list = read_records(s0.tables)
-    base = load_resources(s0, records=records_list)
+    s0 = dict(cond_filter=True, stage2="none", rerank_ckpt=ckpt, hq_build=None, hq_bm25=False, hq_weight=1.0)
+    cfg = search_config_from_env(**s0)  # the shell environment (filled from .env by load_dotenv above)
+    records_list = read_records(cfg.spec.tables or TABLES)
+    base = load_resources(spec=cfg.spec, options=cfg.options, records=records_list)
     records = base.records
     variants = {"S0": {}, "S1": {"hq_build": args.build}, "S2": {"hq_build": args.build, "hq_bm25": True},
                 "S1-w.5": {"hq_build": args.build, "hq_weight": 0.5}}
@@ -317,11 +319,13 @@ def main() -> None:
         variants["S1-nofilter"] = {"hq_build": args.nofilter_build}
     if args.desc:
         variants["S1-desc"] = {"hq_build": args.build + "-desc"}
-    resources = {name: base if not kw else load_resources(s0.model_copy(update=kw), records=records_list,
-                                                          dense=base.dense, stage1_score=base.stage1_score)
+    configs = {name: search_config_from_env(**{**s0, **kw}) for name, kw in variants.items()}
+    resources = {name: base if not kw else load_resources(spec=configs[name].spec, options=configs[name].options,
+                                                          records=records_list, dense=base.dense,
+                                                          stage1_score=base.stage1_score)
                  for name, kw in variants.items()}
     graphs = {name: build_graph(r, MockClient()) for name, r in resources.items()}
-    print("configs: " + ", ".join(f"{n} = {r.settings.label()}" for n, r in resources.items()))
+    print("configs: " + ", ".join(f"{n} = {r.options.label(r.spec)}" for n, r in resources.items()))
 
     dev = [i for i in items if i["split"] == "dev"]
     test = [i for i in items if i["split"] == "test"]
@@ -348,7 +352,7 @@ def main() -> None:
     n_ratio = sum(c["ratio"] >= CONTAMINATED for c in contam.values())
     lines = [f"# T2-39 역HyDE 평가 {stamp}", "",
              f"- 골든 `{args.golden.name}` 답 있음 {len(items)}문항 (dev {len(dev)} / test {len(test)}), 빌드 `{args.build}`",
-             "- 구성: " + "; ".join(f"{n} = `{r.settings.label()}`" for n, r in resources.items()),
+             "- 구성: " + "; ".join(f"{n} = `{r.options.label(r.spec)}`" for n, r in resources.items()),
              f"- dev 선택({'/'.join(SELECTABLE)} 중 Hit@1+Hit@5): **{choice}**. test는 S0와 {choice}만 1회 실행",
              "- **순위 규약**: 문항 순위 = 필요한 묶음마다 그 묶음 안 최선 순위 중 **가장 나쁜 것**"
              "(lab 규약, 계획 20 \"묶음별 최악 순위\" = evals Complete@k). "

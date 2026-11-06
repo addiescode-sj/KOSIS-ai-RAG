@@ -17,7 +17,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from backend.app import main  # noqa: E402
 from kosis_rag import chain  # noqa: E402
 from kosis_rag.gate import texts  # noqa: E402
-from kosis_rag.graph import build_graph, run_search, stream_search  # noqa: E402
+from kosis_rag.graph.search import build_graph, run_search, stream_search  # noqa: E402
 from kosis_rag.schemas.io import TableCandidate  # noqa: E402
 from test_api_nodes import _resources  # noqa: E402
 
@@ -125,14 +125,14 @@ def test_streamed_chunks_sum_their_usage():
 def test_sse_sends_token_events_between_gate_and_result_and_the_node_api_still_answers(tmp_path, monkeypatch):
     reply = "[1] DT_A 표가 출생아 수를 담고 있습니다."
     monkeypatch.setattr(main, "LOG_DIR", tmp_path)
-    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), _fake(reply))
+    main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), client=_fake(reply))
     try:
         client = TestClient(main.app)
         with client.stream("POST", "/search/stream", json={"question": "출생아 수"}) as r:
             events = [line.split(": ", 1)[1] for line in r.iter_lines() if line.startswith("event: ")]
         assert events.index("gate") < events.index("token") and events[-2:] == ["guide", "result"]
         # outside a graph there is no stream writer: /nodes/answer must still answer
-        main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), _fake(reply))
+        main.app.dependency_overrides[main.get_runtime] = lambda: main.Runtime(_resources(), client=_fake(reply))
         state = client.post("/nodes/parse", json={"question": "출생아 수"}).json()
         for name in ["retrieve", "rerank1", "rerank2", "gate", "answer"]:
             state = client.post(f"/nodes/{name}", json=state).json()

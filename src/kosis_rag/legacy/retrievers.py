@@ -8,7 +8,6 @@ there and orders by RRF (T2-06). Unlike the stage functions they keep what the l
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 from typing import Any, Literal
 
@@ -29,18 +28,6 @@ from kosis_rag.retrieve.lists import condition_filter, search_list
 from kosis_rag.schemas.catalog import TableRecord
 from kosis_rag.schemas.resources import ChromaConfig
 from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
-
-
-def env_chroma_config() -> ChromaConfig:
-    """CHROMA_HOST / CHROMA_PORT from the environment or .env (loads .env), as vectorstore.chroma_address read them.
-
-    T2-41 S1: chroma_client takes a ChromaConfig; until S4 moves the environment to backend/app/config.py, the
-    callers in src that connected with no arguments build it here (S2: from retriever.py).
-    """
-    from dotenv import load_dotenv
-
-    load_dotenv()
-    return ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
 
 
 class BM25TableRetriever(BaseRetriever):
@@ -93,20 +80,23 @@ class ChromaTableRetriever(BaseRetriever):
 
     @classmethod
     def connect(cls, name: str | None = None, k: int = 20, device: str | None = None,
-                embed_ckpt: str | None = None) -> ChromaTableRetriever:
-        """Open CHROMA_COLLECTION (or `name`) on the shared server and load the query embedder it was built with.
+                embed_ckpt: str | None = None, *, chroma: ChromaConfig | None = None) -> ChromaTableRetriever:
+        """Open `name` (else chroma.collection) on the shared server and load the query embedder it was built with.
 
         KURE-v1 collections (T2-24 text) need nothing more. Fine-tuned bge-m3 collections (T2-06, kosis_rag.shared.tabletext
-        formats) need the same checkpoint (`embed_ckpt`, else EMBED_CKPT in .env); a different file is refused, and
-        questions get the same surface rules as the documents.
+        formats) need the same checkpoint (`embed_ckpt`); a different file is refused, and questions get the same
+        surface rules as the documents. T2-41 S4: reads no .env and no environment — the server is `chroma`
+        (default ChromaConfig(): localhost:8001) and the caller names the collection and the checkpoint.
         """
         from kosis_rag.adapters.chroma import chroma_client
         from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
 
-        client = chroma_client(env_chroma_config())  # also loads .env
-        name = name or os.getenv("CHROMA_COLLECTION")
+        chroma = chroma or ChromaConfig()
+        name = name or chroma.collection
         if not name:
-            raise ValueError("Set CHROMA_COLLECTION in .env to the collection built by `python -m kosis_rag.index`")
+            raise ValueError("no collection: pass ChromaConfig(collection=...) (backend: CHROMA_COLLECTION in the shell "
+                             "environment) naming the collection built by `python -m kosis_rag.index`")
+        client = chroma_client(chroma)
         collection = client.get_collection(name, embedding_function=None)
         meta = collection.metadata or {}
         built_with = meta.get("embed_model")
@@ -122,7 +112,7 @@ class ChromaTableRetriever(BaseRetriever):
         fmt = meta.get("doc_format")
         if fmt not in text.FORMATS:
             raise ValueError(f"collection {name} holds {fmt!r} text; this code knows {', '.join(text.FORMATS)}")
-        embedder = model.load_embedder(embed_ckpt or os.getenv("EMBED_CKPT"), device=device, doc_format=fmt)
+        embedder = model.load_embedder(embed_ckpt, device=device, doc_format=fmt)
         if embedder.ckpt != meta.get("embed_ckpt"):
             raise ValueError(f"collection {name} was embedded with {meta.get('embed_ckpt')!r}, "
                              f"the query embedder loaded {embedder.ckpt!r}; set EMBED_CKPT to the same file")
@@ -171,12 +161,13 @@ class HqRetriever(BaseRetriever):
 
     @classmethod
     def connect(cls, build_id: str, dense: Any, *, records: dict[str, TableRecord], text_of: dict[str, str],
-                k: int = 50, name: str | None = None) -> HqRetriever:
+                k: int = 50, name: str | None = None, chroma: ChromaConfig | None = None) -> HqRetriever:
         """Open the question collection of `build_id` for the dense side's embedder.
 
         In: build_id = HQ_BUILD; dense = the table retriever (ChromaTableRetriever: its embed_query and its
             collection's embed_model / embed_ckpt are reused); records, text_of = the registry and n2 passages;
-            k = tables returned; name = collection override. Out: HqRetriever.
+            k = tables returned; name = collection override; chroma = the server (default ChromaConfig(); T2-41 S4:
+            no environment read). Out: HqRetriever.
         Side effects: connects to Chroma; ValueError when the collection was embedded with other weights.
         Node: none (load_resources calls it; retrieve_hq searches it).
         """
@@ -185,7 +176,7 @@ class HqRetriever(BaseRetriever):
         meta = (getattr(getattr(dense, "collection", None), "metadata", None) or {})
         ckpt = meta.get("embed_ckpt") or meta.get("embed_model")
         name = name or collection_name(build_id, ckpt)
-        collection = chroma_client(env_chroma_config()).get_collection(name, embedding_function=None)
+        collection = chroma_client(chroma or ChromaConfig()).get_collection(name, embedding_function=None)
         hq_meta = collection.metadata or {}
         if (hq_meta.get("embed_ckpt") or hq_meta.get("embed_model")) != ckpt or hq_meta.get("doc_format") != HQ_DOC_FORMAT:
             raise ValueError(f"question collection {name} was embedded with {hq_meta.get('embed_ckpt')!r} "

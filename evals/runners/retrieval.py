@@ -93,15 +93,15 @@ def build(name: str, items: list[RetrievalItem], k: int) -> Runnable:
     if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
         return ChromaTableRetriever.connect(k=k)
     if name in STAGED:  # the pipeline keeps its own pool of 50; the runner cuts to k
-        from kosis_rag.pipeline import build_search
+        from kosis_rag.legacy.pipeline import build_search
 
         return build_search(_staged_settings(name))
     if name.startswith(GRAPH) and name[len(GRAPH):] in STAGED:
         # The graph's ranked pool (state.docs), uncut, with the run config (callbacks) passed through. The guide node
         # gets Phase 1 MockClient: no model call, so L1 counts the same calls and tokens as the retriever above.
         from kosis_chat.llm.model import MockClient
-        from kosis_rag.graph import build_graph, run_search
-        from kosis_rag.pipeline import load_resources
+        from kosis_rag.adapters.loader import load_resources
+        from kosis_rag.graph.search import build_graph, run_search
 
         graph = build_graph(load_resources(_staged_settings(name[len(GRAPH):])), MockClient())
         return RunnableLambda(lambda question, config: run_search(graph, question, config).docs, name=name)

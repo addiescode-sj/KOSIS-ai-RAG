@@ -140,13 +140,14 @@ def test_5_hcx_client_sends_the_same_request(monkeypatch, model, thinking, max_t
 
 
 def test_5_guide_model_defaults_are_phase1_model_yaml():
-    """chain.clova_chat read Phase 1 load_settings() (configs/model.yaml) until S3; its constants must match."""
+    """chain.clova_chat read Phase 1 load_settings() (configs/model.yaml) until S3; the guide defaults (S4:
+    backend/app/config.py, the first key variable) must match."""
     from kosis_chat.config import DEFAULT_BASE_URL, load_settings
 
-    from kosis_rag import chain
+    from backend.app import config
     from kosis_rag.llm import hcx
 
     s = load_settings()
-    assert (chain.GUIDE_MODEL, chain.GUIDE_TEMPERATURE, chain.GUIDE_MAX_TOKENS, chain.GUIDE_TIMEOUT,
-            chain.GUIDE_KEY_ENV) == (s.model_name, s.temperature, s.max_tokens, s.timeout_seconds, s.api_key_env)
+    assert (config.GUIDE_MODEL, config.GUIDE_TEMPERATURE, config.GUIDE_MAX_TOKENS, config.GUIDE_TIMEOUT,
+            config.GUIDE_KEY_ENV[0]) == (s.model_name, s.temperature, s.max_tokens, s.timeout_seconds, s.api_key_env)
     assert hcx.DEFAULT_BASE_URL == DEFAULT_BASE_URL == s.base_url

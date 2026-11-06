@@ -9,12 +9,14 @@ from langchain_core.retrievers import BaseRetriever
 
 from kosis_rag.adapters.models import resolve_ckpt
 from kosis_rag.llm.clova_rerank import WRAP, ClovaReranker, ClovaResult
-from kosis_rag.pipeline import SearchSettings, build_search
+from kosis_rag.adapters.loader import load_resources
+from kosis_rag.legacy.pipeline import build_search
 from kosis_rag.legacy.rerankers import CrossEncoderReranker, LLMReranker
 from kosis_rag.legacy.retrievers import HybridRetriever
 from kosis_rag.rerank.stage1 import blend_order
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
+from kosis_rag.schemas.resources import IndexSpec, SearchOptions
 from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.filters import TableFilter
 
@@ -228,25 +230,16 @@ def test_clova_non_retry_error_raises_without_key_in_message():
 def test_pipeline_assembles_hybrid_stage1_stage2(tmp_path):
     records = [_record("101_DT_A", "출생아수"), _record("101_DT_B", "사망자수"), _record("101_DT_C", "혼인건수")]
     dense = ListRetriever(keys=["101_DT_A", "101_DT_B", "101_DT_C"])
-    settings = SearchSettings(tables=tmp_path / "unused.jsonl", cond_filter=False, stage2="none")
-    retriever = build_search(settings, records=records, dense=dense,
-                             stage1_score=lambda q, ks: [{"101_DT_A": 0.1, "101_DT_B": 0.2, "101_DT_C": 0.9}[k] for k in ks],
-                             select=lambda q, ks: ["101_DT_B"])
+    resources = load_resources(
+        spec=IndexSpec(tables=tmp_path / "unused.jsonl"), options=SearchOptions(cond_filter=False, stage2="none"),
+        records=records, dense=dense,
+        stage1_score=lambda q, ks: [{"101_DT_A": 0.1, "101_DT_B": 0.2, "101_DT_C": 0.9}[k] for k in ks],
+        select=lambda q, ks: ["101_DT_B"])
+    retriever = build_search(resources)
     docs = retriever.invoke("혼인 건수")
     assert _keys(docs)[0] == "101_DT_B"
     meta = docs[0].metadata
     assert {"rrf_score", "stage1_score", "stage2_picked"} <= set(meta)
-
-
-@offline
-def test_settings_from_env(monkeypatch):
-    monkeypatch.setenv("HQ_BUILD", "")  # empty, so load_dotenv (override=False) keeps .env HQ_BUILD out
-    monkeypatch.setenv("COND_FILTER", "off")
-    monkeypatch.setenv("STAGE2", "CLOVA")
-    monkeypatch.setenv("RERANK_CKPT", "")
-    s = SearchSettings.from_env()
-    assert (s.cond_filter, s.stage2, s.rerank_ckpt) == (False, "clova", None)
-    assert s.label() == "hybrid -> clova"
 
 
 @offline
@@ -275,16 +268,16 @@ def test_default_text_is_n2_and_n3_is_deprecated():
 
 @offline
 def test_search_text_format_follows_collection(tmp_path):
-    from kosis_rag.pipeline import text_format
+    from kosis_rag.shared.tabletext import text_format
 
     dense = ListRetriever(keys=[])
-    assert text_format(SearchSettings(), dense) == "n2-L60"  # no format on the retriever: default
-    s_n2 = SearchSettings(text_format="n2-L60")
+    assert text_format(IndexSpec(), dense) == "n2-L60"  # no format on the retriever: default
+    s_n2 = IndexSpec(text_format="n2-L60")
     assert text_format(s_n2, dense) == "n2-L60"
     built = type("Built", (), {"doc_format": "n2-L60"})()
-    assert text_format(SearchSettings(), built) == "n2-L60"
+    assert text_format(IndexSpec(), built) == "n2-L60"
     with pytest.raises(ValueError):
-        text_format(SearchSettings(text_format="n3-L60"), built)
+        text_format(IndexSpec(text_format="n3-L60"), built)
 
 
 @offline

@@ -5,7 +5,6 @@ No model, no server: the Chroma collection is a fake that returns fixed distance
 """
 
 import json
-from pathlib import Path
 
 import pytest
 from langchain_core.retrievers import BaseRetriever
@@ -13,7 +12,8 @@ from langchain_core.retrievers import BaseRetriever
 from kosis_rag.adapters import files
 from kosis_rag.adapters.files import read_questions
 from kosis_rag.legacy.retrievers import BM25TableRetriever, HqRetriever
-from kosis_rag.pipeline import SearchSettings, load_resources
+from kosis_rag.adapters.loader import load_resources
+from kosis_rag.schemas.resources import IndexSpec, SearchOptions
 from kosis_rag.retrieve.bm25 import Bm25Index
 from kosis_rag.retrieve.hq import ckpt8, collection_name, hq_bm25, max_pool
 from kosis_rag.schemas.catalog import TableRecord
@@ -164,12 +164,14 @@ def test_load_resources_builds_the_question_bm25_only_when_asked(monkeypatch):
     monkeypatch.setattr(files, "read_questions", lambda build, root=None: rows)
     fake_hq = _retriever()
 
-    def settings(**kw):
-        return SearchSettings(tables=Path("unused.jsonl"), cond_filter=False, stage2="none", **kw)
+    def load(hq_build=None, **kw):
+        return load_resources(spec=IndexSpec(hq_build=hq_build),
+                              options=SearchOptions(cond_filter=False, stage2="none", **kw),
+                              records=RECORDS, dense=ListDense(), hq=fake_hq)
 
-    on = load_resources(settings(hq_build="hq-t", hq_bm25=True), records=RECORDS, dense=ListDense(), hq=fake_hq)
+    on = load(hq_build="hq-t", hq_bm25=True)
     assert on.hq is fake_hq and isinstance(on.hq_bm25, BM25TableRetriever) and [d.id for d in on.hq_bm25.docs] == [A]
-    dense_only = load_resources(settings(hq_build="hq-t"), records=RECORDS, dense=ListDense(), hq=fake_hq)
+    dense_only = load(hq_build="hq-t")
     assert dense_only.hq is fake_hq and dense_only.hq_bm25 is None
-    off = load_resources(settings(), records=RECORDS, dense=ListDense(), hq=fake_hq)
+    off = load()
     assert off.hq is None and off.hq_bm25 is None

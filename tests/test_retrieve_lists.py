@@ -118,20 +118,19 @@ def test_search_list_hands_the_vector_to_every_kind_of_list():
 
 
 def test_retrieve_steps_are_search_list_and_rrf_fuse():
-    from kosis_rag.pipeline import load_resources
-    from tests.test_graph import CatalogRetriever
+    from tests.test_graph import CatalogRetriever, _load
 
-    resources = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=[C, A, B, D]), sigungu={})
+    resources = _load(_settings(), records=RECORDS, dense=CatalogRetriever(keys=[C, A, B, D]), sigungu={})
     f = TableFilter(years=[2023])
     runs, removed = {}, {}
     for name, lst, _ in retrieve_step.search_lists(resources):
         out = retrieve_step.retrieve_list(name, ListInput(question="출생아 수", table_filter=f), resources)
         docs, dropped, relaxed, missing = search_list("출생아 수", lst, table_filter=f, records=resources.records,
-                                                      k_each=resources.settings.pool)
+                                                      k_each=resources.options.pool)
         assert out == ListOutput(docs=docs, removed=dropped, relaxed=relaxed, missing=missing)
         runs[name], removed[name] = out.docs, out.removed
     fused = retrieve_step.fuse(FuseInput(runs=runs, run_removed=removed), resources)
-    assert fused.docs == rrf_fuse([runs["dense"], runs["bm25"]], ["dense", "bm25"], k=resources.settings.pool)
+    assert fused.docs == rrf_fuse([runs["dense"], runs["bm25"]], ["dense", "bm25"], k=resources.options.pool)
     assert fused.removed == {**removed["dense"], **removed["bm25"]}
     with pytest.raises(ValidationError):
         ListInput(question="q", k_each=3)

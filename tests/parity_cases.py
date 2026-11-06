@@ -21,8 +21,10 @@ from typing import Any, Callable
 from kosis_chat.llm.model import MockClient
 
 from kosis_rag.gate.texts import NO_MATCH, REFUSAL_TEXT, REFUSALS
-from kosis_rag.graph import SearchState, build_graph, run_search
-from kosis_rag.pipeline import load_resources
+from kosis_rag.adapters.loader import load_resources
+from kosis_rag.graph.search import build_graph, run_search
+from kosis_rag.schemas.resources import IndexSpec
+from kosis_rag.schemas.state import SearchState
 from kosis_rag.shared.catalog import to_candidate
 
 from tests.test_graph import RECORDS, CatalogRetriever, KEYS, _boom, _pick, _settings, _stage1
@@ -67,7 +69,7 @@ KINDS = ("result", "output", "state")
 
 def run_case(case: Case) -> SearchState:
     """The final graph state of one case (fresh fakes and a fresh MockClient each time)."""
-    resources = load_resources(_settings(**case.settings), records=RECORDS,
+    resources = load_resources(spec=IndexSpec(), options=_settings(**case.settings), records=RECORDS,
                                dense=CatalogRetriever(keys=list(case.dense_keys)),
                                stage1_score=case.stage1, select=case.select)
     return run_search(build_graph(resources, MockClient(case.reply), k=case.k), case.question)

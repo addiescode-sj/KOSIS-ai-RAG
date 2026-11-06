@@ -1,6 +1,7 @@
 """KOSIS RAG API (T2-37): the LangGraph search nodes, one endpoint each, plus the whole search as JSON and as SSE.
 
-Logic lives in src/kosis_rag (graph.make_nodes, stream_search, ground_docs); this module only exposes it.
+Logic lives in src/kosis_rag (graph.nodes_api.make_nodes, graph.search.stream_search, ground_docs); this module only
+exposes it. Settings come from the shell environment (backend/app/config.py; no .env is read, T2-41 S4).
 Node endpoints are stateless: they take a SearchState and return it with that node's fields written, so a client can
 chain parse -> retrieve -> ... -> answer itself or re-run one node on an edited state. Tables in a request are
 re-attached to the server's records (ground_docs), so a client cannot invent a table or a citation.
@@ -11,7 +12,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterator
@@ -22,10 +23,12 @@ from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
-from kosis_rag.graph import Node, SearchState, build_graph, ground_docs, make_nodes, run_search, stream_search
-from kosis_rag.pipeline import SearchResources
-from kosis_rag.llm.config import LLMKeyMissing
+from kosis_rag.graph.nodes_api import ground_docs, make_nodes
+from kosis_rag.graph.search import Node, build_graph, run_search, stream_search
+from kosis_rag.llm.config import LLMConfig, LLMKeyMissing
 from kosis_rag.schemas.io import AskArgs, SearchResult
+from kosis_rag.schemas.resources import SearchResources
+from kosis_rag.schemas.state import SearchState
 
 LOG_DIR = Path("logs/api")  # gitignored; one JSON line per search, written after the response (BackgroundTasks)
 QUESTION = {"question": "2023년 시도별 출생아 수", "k": 5}
@@ -59,23 +62,48 @@ async def llm_key_missing(request: Request, exc: LLMKeyMissing) -> JSONResponse:
 
 @dataclass
 class Runtime:
-    """What the endpoints share: the loaded resources, the guide LLM, and one compiled graph per k."""
+    """What the endpoints share: the loaded resources, the guide LLM, and one compiled graph per k.
+
+    The guide client is made on first use (guide_client, T2-41 S4): parse ... gate run without a guide key, and a
+    missing key is LLMKeyMissing (503) when guide runs. `client` is a ready guide client (tests: MockClient).
+    """
 
     resources: SearchResources
-    client: Any  # LLMClient | BaseChatModel
+    _: KW_ONLY
+    guide_llm: LLMConfig | None = None  # backend.app.config.guide_llm_from_env(); None = no guide LLM
+    client: Any = None  # a ready guide client (LLMClient | BaseChatModel); None = make one from guide_llm
     graphs: dict[int, Any] = field(default_factory=dict)
+    _guide: Any = None
+    _guide_lock: Any = field(default_factory=threading.Lock)
+
+    def guide_client(self) -> Any:
+        """The guide LLM client, made once on the first call (the graphs and nodes get this method as a factory).
+
+        Side effects: the first call builds ChatClovaX from guide_llm; raises LLMKeyMissing when guide_llm is None or
+        has no key (nothing is kept, the next call checks again).
+        """
+        if self.client is not None:
+            return self.client
+        with self._guide_lock:
+            if self._guide is None:
+                if self.guide_llm is None or self.guide_llm.api_key is None:
+                    raise LLMKeyMissing("guide LLM key not set (HCX_API_KEY or CLOVASTUDIO_API_KEY in the environment)")
+                from kosis_rag.llm.providers import clova_chat
+
+                self._guide = clova_chat(self.guide_llm)
+            return self._guide
 
     def graph(self, k: int):
         if k not in self.graphs:  # ponytail: one graph per k (k <= 20), compiling is cheap next to the resources
-            self.graphs[k] = build_graph(self.resources, self.client, k=k)
+            self.graphs[k] = build_graph(self.resources, self.guide_client, k=k)
         return self.graphs[k]
 
     def nodes(self, k: int) -> dict[str, Node]:
-        return make_nodes(self.resources, self.client, k=k)
+        return make_nodes(self.resources, self.guide_client, k=k)
 
     def k(self, requested: int | None) -> int:
         """The candidate budget: the request's k, else the server's ANSWER_K (T2-39)."""
-        return requested or self.resources.settings.answer_k
+        return requested or self.resources.options.answer_k
 
 
 _runtime: Runtime | None = None
@@ -83,19 +111,22 @@ _lock = threading.Lock()
 
 
 def get_runtime() -> Runtime:
-    """Load the resources and the guide LLM on first use (not at startup, so /health works without Chroma or data/).
+    """Load the resources on first use (not at startup, so /health works without Chroma or data/).
 
-    Out: the shared Runtime. Side effects: the first call reads tables.jsonl, connects to Chroma, loads the models;
-    a failure is a 503 and the next request tries again.
+    Out: the shared Runtime. Side effects: the first call reads the shell environment (backend/app/config.py, no
+    .env), reads tables.jsonl, connects to Chroma, loads the models; a failure is a 503 and the next request tries
+    again. The guide LLM is not made here (Runtime.guide_client, on the first guide run).
     """
     global _runtime
     with _lock:
         if _runtime is None:
-            from kosis_rag.chain import clova_chat
-            from kosis_rag.pipeline import load_resources
+            from backend.app.config import search_config_from_env
+            from kosis_rag.adapters.loader import load_resources
 
             try:
-                _runtime = Runtime(resources=load_resources(), client=clova_chat())
+                cfg = search_config_from_env()
+                resources = load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm)
+                _runtime = Runtime(resources=resources, guide_llm=cfg.guide_llm)
             except Exception as e:  # noqa: BLE001 - any load failure means the search is unavailable
                 raise HTTPException(503, f"search resources not available: {e}") from e
         return _runtime

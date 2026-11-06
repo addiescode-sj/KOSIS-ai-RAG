@@ -10,26 +10,25 @@ from pydantic import SecretStr
 pytest.importorskip("langgraph")
 
 from kosis_chat.llm.model import MockClient  # noqa: E402
-from kosis_rag import chain, pipeline  # noqa: E402
-from kosis_rag.graph import build_graph, run_search, stream_search  # noqa: E402
+from backend.app import config as app_config  # noqa: E402
+from kosis_rag.graph.search import build_graph, run_search, stream_search  # noqa: E402
 from kosis_rag.llm import providers  # noqa: E402
 from kosis_rag.llm.base import MockClient as OurMock  # noqa: E402
 from kosis_rag.llm.clova_rerank import ClovaReranker  # noqa: E402
 from kosis_rag.llm.config import LLMConfig, LLMKeyMissing, Provider, require_key  # noqa: E402
 from kosis_rag.llm.hcx import HCXClient  # noqa: E402
 from kosis_rag.llm.openai import OpenAIClient  # noqa: E402
-from kosis_rag.pipeline import load_resources  # noqa: E402
 from kosis_rag.rerank import selectors  # noqa: E402
 from kosis_rag.rerank.hcx import HcxSelector  # noqa: E402
 
-from tests.test_graph import RECORDS, KEYS, CatalogRetriever, _settings, _stage1  # noqa: E402
+from tests.test_graph import RECORDS, KEYS, CatalogRetriever, _load, _settings, _stage1  # noqa: E402
 
 SECRET = "nv-test-secret-0000"
 
 
 def _graph(stage2: str, stage2_llm: LLMConfig | None):
-    resources = load_resources(_settings(stage2=stage2), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
-                               stage1_score=_stage1, stage2_llm=stage2_llm)
+    resources = _load(_settings(stage2=stage2), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
+                      stage1_score=_stage1, llm=stage2_llm)
     return resources, build_graph(resources, MockClient("[1] DT_A 표입니다."))
 
 
@@ -60,8 +59,7 @@ def test_mock_provider_needs_no_key():
 
 
 def test_a_given_selector_is_not_checked_for_a_key():
-    resources = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
-                               select=lambda q, ks: ["101_DT_B"])
+    resources = _load(records=RECORDS, dense=CatalogRetriever(keys=KEYS), select=lambda q, ks: ["101_DT_B"])
     assert resources.stage2_llm is None and resources.stage2_name == "custom"
     state = run_search(build_graph(resources, MockClient("[1] DT_B 표입니다.")), "출생아 수")
     assert state.docs[0].metadata["key"] == "101_DT_B"
@@ -95,7 +93,7 @@ def test_clova_chat_takes_the_config():
     chat = providers.clova_chat(LLMConfig(provider="clova_chat", model="HCX-DASH-002", api_key=SECRET))
     assert (chat.model_name, chat.temperature, chat.max_tokens) == ("HCX-DASH-002", 0.0, 1024)
     given = LLMConfig(provider="clova_chat", model="HCX-DASH-002", api_key=SECRET, max_tokens=64)
-    assert chain.clova_chat(given).max_tokens == 64  # a given config is used as is (no .env read)
+    assert providers.clova_chat(given).max_tokens == 64  # a given config is used as is (no .env read)
 
 
 def test_stage2_defaults_and_selector_settings():
@@ -112,15 +110,25 @@ def test_stage2_defaults_and_selector_settings():
     assert gpt.client.temperature == 0.0 and gpt.client.seed is None
 
 
-def test_env_stage2_llm_reads_the_old_variables(monkeypatch):
-    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)  # never reads the repo's .env here
+def test_stage2_llm_from_env_reads_the_old_variables(monkeypatch):
+    """T2-41 S4: pipeline.env_stage2_llm moved to backend/app/config.py (shell environment only, no .env)."""
     monkeypatch.setenv("HCX_API_KEY", SECRET)
     monkeypatch.setenv("HCX_THINKING", " LOW ")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    hcx = pipeline.env_stage2_llm("hcx")
+    hcx = app_config.stage2_llm_from_env("hcx")
     assert (hcx.provider, hcx.model, hcx.thinking, require_key(hcx)) == ("hcx", "HCX-007", "low", SECRET)
-    assert pipeline.env_stage2_llm("clova").provider == "clova_rerank"
-    assert pipeline.env_stage2_llm("gpt").api_key is None  # OPENAI_API_KEY unset: LLMKeyMissing at rerank2
+    assert app_config.stage2_llm_from_env("clova").provider == "clova_rerank"
+    assert app_config.stage2_llm_from_env("gpt").api_key is None  # OPENAI_API_KEY unset: LLMKeyMissing at rerank2
+    assert app_config.stage2_llm_from_env("none") is None and app_config.stage2_llm_from_env("nope") is None
+
+
+def test_stage2_on_without_a_given_config_uses_the_keyless_default():
+    """load_resources(llm=None) with stage 2 on: the selector is built from selectors.default_config (no key, no env
+    read), so rerank2 raises LLMKeyMissing on entry as the old env_stage2_llm with no key did."""
+    resources, graph = _graph("hcx", None)
+    assert resources.stage2_llm == selectors.default_config("hcx")
+    with pytest.raises(LLMKeyMissing):
+        run_search(graph, "출생아 수")
 
 
 def test_clova_reranker_takes_the_key_from_the_config():

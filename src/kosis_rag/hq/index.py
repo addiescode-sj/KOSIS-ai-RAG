@@ -23,9 +23,9 @@ from datetime import datetime
 from pathlib import Path
 
 from kosis_rag.adapters import files
-from kosis_rag.legacy.retrievers import env_chroma_config
 from kosis_rag.retrieve import hq as hq_search  # module access: this CLI re-exports none of its names
 from kosis_rag.retrieve.constants import HQ_DOC_FORMAT
+from kosis_rag.schemas.resources import ChromaConfig
 from kosis_rag.shared import constants
 from kosis_rag.shared import tabletext as text
 
@@ -61,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
               "embed_model": embedder.name, "embed_ckpt": embedder.ckpt, "data_sha256": digest,
               "dim": len(vectors[0]), "normalized": True, "hnsw:space": "cosine", "n_docs": len(rows),
               "n_tables": len({r["key"] for r in rows})}
-    count = load(chroma_client(env_chroma_config()), [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
+    # CLI: CHROMA_HOST / CHROMA_PORT from the environment or .env (T2-41 S4: inlined from legacy.retrievers, which no
+    # longer reads the environment; this CLI is a listed exception until S6a moves it to kosis_rag_build)
+    chroma = ChromaConfig(host=os.getenv("CHROMA_HOST") or "localhost", port=int(os.getenv("CHROMA_PORT") or 8001))
+    count = load(chroma_client(chroma), [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
                  vectors, name, record)
     print(f"collection {name}: {count} questions over {record['n_tables']} tables (embedder {embedder.ckpt})")
     print(f"to search with it, set HQ_BUILD={build} in .env (empty = off); HQ_BM25=on adds the question BM25")

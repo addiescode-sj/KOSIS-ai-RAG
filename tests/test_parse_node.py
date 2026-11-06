@@ -15,8 +15,9 @@ from pydantic import ValidationError
 from kosis_rag.adapters import files
 from kosis_rag.parse.node import decide_condition, parse_query, parse_question
 from kosis_rag.parse.schemas import ConditionInput, ConditionOutput, ParsedQuery, ParseInput
-from kosis_rag import pipeline
-from kosis_rag.pipeline import SearchSettings, load_resources
+from kosis_rag.adapters import loader
+from kosis_rag.adapters.loader import load_resources
+from kosis_rag.schemas.resources import IndexSpec, SearchOptions
 from kosis_rag.retrieve.lists import condition_filter
 from kosis_rag.shared.filters import filter_with_relaxation, relax
 from tests.test_graph import RECORDS, CatalogRetriever, KEYS
@@ -29,8 +30,9 @@ QUESTIONS = ["해운대구와 수원시 인구", "서울 중구 인구", "중구
 
 
 def _resources(sigungu=None, **kw):
-    settings = SearchSettings(tables=Path("unused.jsonl"), **{"cond_filter": True, "stage2": "none", **kw})
-    return load_resources(settings, records=RECORDS, dense=CatalogRetriever(keys=KEYS), sigungu=sigungu)
+    options = SearchOptions(**{"cond_filter": True, "stage2": "none", **kw})
+    return load_resources(spec=IndexSpec(), options=options, records=RECORDS, dense=CatalogRetriever(keys=KEYS),
+                          sigungu=sigungu)
 
 
 def test_importing_parse_reads_no_file():
@@ -71,8 +73,8 @@ def test_load_resources_reads_the_dictionary_once(monkeypatch, caplog):
     assert _resources().sigungu == SIGUNGU and calls == [1]
     assert _resources({"수원시": ["경기도"]}).sigungu == {"수원시": ["경기도"]} and calls == [1]  # given: not read
     monkeypatch.setattr(files, "load_sigungu", lambda: {})
-    monkeypatch.setattr(pipeline, "_SIGUNGU_WARNED", [])  # the warning is once per process
-    with caplog.at_level("WARNING", logger="kosis_rag.pipeline"):
+    monkeypatch.setattr(loader, "_SIGUNGU_WARNED", [])  # the warning is once per process
+    with caplog.at_level("WARNING", logger="kosis_rag.adapters.loader"):
         assert _resources().sigungu == {}
     assert "sigungu.json not found" in caplog.text
 

@@ -6,9 +6,7 @@ a reply that names an id or year not in the candidates, or a failed model call, 
 
 from __future__ import annotations
 
-import os
 import re
-from pathlib import Path
 from typing import Callable
 
 from langchain_core.documents import Document
@@ -19,19 +17,9 @@ from langchain_core.runnables import Runnable, RunnableLambda
 
 from kosis_rag.gate import node as gate_step  # module access: chain re-exports none of gate's names (T2-41 S3)
 from kosis_rag.gate import texts
-from kosis_rag.llm import providers
 from kosis_rag.llm.base import STATUS_API_ERROR, STATUS_OK, LLMClient, LLMResult
-from kosis_rag.llm.config import LLMConfig
 from kosis_rag.schemas.io import SearchResult, TableCandidate
 from kosis_rag.shared.catalog import to_candidate
-
-# The guide model's settings: Phase 1 configs/model.yaml @e248a45, which clova_chat read through Phase 1 until
-# T2-41 S3 (tests/test_phase1_contract.py checks they still match). S4 moves them to backend/app/config.py.
-GUIDE_MODEL = "HCX-DASH-002"
-GUIDE_TEMPERATURE = 0.0
-GUIDE_MAX_TOKENS = 1024
-GUIDE_TIMEOUT = 60.0
-GUIDE_KEY_ENV = "HCX_API_KEY"
 
 PROMPT = ChatPromptTemplate.from_messages([
     ("system",
@@ -59,24 +47,6 @@ def format_context(candidates: list[TableCandidate]) -> str:
         f"[{i}] {c.tbl_id} | {c.table_name} | {c.survey_name} | {c.organization} | {c.period}"
         for i, c in enumerate(candidates, 1)
     )
-
-
-def clova_chat(config: LLMConfig | None = None) -> BaseChatModel:
-    """HCX through langchain-naver's ChatClovaX (llm.providers.clova_chat): the guide LLM.
-
-    In: config = provider clova_chat settings; None = GUIDE_MODEL, GUIDE_TEMPERATURE, GUIDE_MAX_TOKENS and
-        GUIDE_TIMEOUT (Phase 1 configs/model.yaml) with HCX_API_KEY from this repo's .env (T2-41 S3: still read here;
-        S4 moves it to backend/app/config.py), else ChatClovaX's own CLOVASTUDIO_API_KEY.
-    Out: the chat model. Side effects: with no config, loads this repo's .env into the environment (existing
-        variables kept). Node: guide (built once by the backend).
-    """
-    if config is None:
-        from dotenv import load_dotenv
-
-        load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
-        config = LLMConfig(provider="clova_chat", api_key=os.environ.get(GUIDE_KEY_ENV) or None, model=GUIDE_MODEL,
-                           temperature=GUIDE_TEMPERATURE, max_tokens=GUIDE_MAX_TOKENS, timeout=GUIDE_TIMEOUT)
-    return providers.clova_chat(config)
 
 
 def llm_runnable(client: LLMClient | BaseChatModel, on_chunk: Callable[[str], None] | None = None) -> Runnable:

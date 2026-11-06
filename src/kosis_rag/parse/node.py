@@ -6,7 +6,7 @@ once by the caller); this module reads no file, at import or later.
 
 Step functions (the graph's nodes call them): parse_question(ParseInput, resources) -> ParsedQuery and
 decide_condition(ConditionInput, resources) -> ConditionOutput. `resources` is the search resources
-(pipeline.SearchResources until S4): parse reads its sigungu, condition its records and settings.cond_filter.
+(schemas.resources.SearchResources): parse reads its sigungu, condition its records and options.cond_filter.
 """
 
 from __future__ import annotations
@@ -162,7 +162,7 @@ def parse_question(inp: ParseInput, resources: Any) -> ParsedQuery:
 def decide_condition(inp: ConditionInput, resources: Any) -> ConditionOutput:
     """Decide once the filter every list is searched under (the condition node's step).
 
-    In: inp.query (its filter is used only when resources.settings.cond_filter is on); resources.records = the
+    In: inp.query (its filter is used only when resources.options.cond_filter is on); resources.records = the
         registry the filter is decided on.
     Out: ConditionOutput(table_filter = the filter after relaxation (None when off or no condition), relaxed =
         conditions dropped because no table met them (filters.RELAX_ORDER; years are never dropped)).
@@ -170,7 +170,7 @@ def decide_condition(inp: ConditionInput, resources: Any) -> ConditionOutput:
     Node: condition.
     """
     records = resources.records
-    table_filter = inp.query.to_filter() if resources.settings.cond_filter and inp.query is not None else None
+    table_filter = inp.query.to_filter() if resources.options.cond_filter and inp.query is not None else None
     relaxed: list[str] = []
     if table_filter is not None and not table_filter.is_empty():
         _, relaxed, _ = filter_with_relaxation(records, table_filter)

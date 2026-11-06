@@ -22,71 +22,45 @@ retrieve_hq_bm25) are added only when the resources hold them (HQ_BUILD); withou
 pre-T2-39 graph returned (tests/test_graph_runs.py). The candidate pool is formed at fuse: tracing (evals.trace)
 sees the retrieve_* nodes as spans without a ranked pool, and fuse as the first search node.
 
-LangGraph is imported only here (and in kosis_rag.hq.graph, the offline question build): the old path works
-without it. The list nodes run in LangGraph's worker threads. When two or more lists embed the question (dense and
+LangGraph is imported only in this package (and in kosis_rag.hq.graph, the offline question build): the old path
+works without it. The list nodes run in LangGraph's worker threads. When two or more lists embed the question (dense and
 the question index share one query embedder), the `embed` node embeds it once before the branches and each list
 searches with that vector, so the embedder is never called from two threads at once and the question is embedded
 once. With one embedding list (HQ off) there is no embed node: dense embeds inside its own search, as before.
 
-The node API (backend.app.main, T2-37) keeps its `retrieve` endpoint: make_nodes runs condition, [embed], the
-retrieve_<list> nodes and fuse one after another as one `retrieve` node, so a client's chain parse -> retrieve ->
-... -> answer still equals run_search. The graph itself (build_graph, run_search, stream_search) runs graph_nodes.
+The node API (backend.app.main, T2-37) keeps its `retrieve` endpoint: graph.nodes_api.make_nodes runs condition,
+[embed], the retrieve_<list> nodes and fuse one after another as one `retrieve` node, so a client's chain parse ->
+retrieve -> ... -> answer still equals run_search. The graph itself (build_graph, run_search, stream_search) runs
+graph_nodes.
+
+T2-41 S4 (from graph.py): graph_nodes assembles a node table (name -> node over one step function; a stage that is off
+has no row) and add_search_edges wires it; the state is schemas.state.SearchState, the timing graph.spans. The guide
+client may be a 0-argument factory, called once when guide first runs (the backend creates its LLM lazily).
 """
 
 from __future__ import annotations
 
+import threading
 import time
-from typing import Annotated, Any, Callable, Iterator, Literal
+from typing import Any, Callable, Iterator
 
-from langchain_core.documents import Document
 from langchain_core.language_models import BaseChatModel
 from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, Field
 
 from kosis_rag import chain
 from kosis_rag.gate import node as gate_step
 from kosis_rag.gate.node import GateInput
+from kosis_rag.graph.spans import timed as _timed
 from kosis_rag.llm.base import LLMClient
 from kosis_rag.parse import node as parse_step  # module access, so a test can patch parse.node.parse_query
-from kosis_rag.parse.schemas import ConditionInput, ParsedQuery, ParseInput
-from kosis_rag.pipeline import SearchResources
+from kosis_rag.parse.schemas import ConditionInput, ParseInput
 from kosis_rag.rerank import node as rerank_step
 from kosis_rag.rerank.schemas import Stage1Input, Stage2Input
 from kosis_rag.retrieve import node as retrieve_step
 from kosis_rag.retrieve.schemas import EmbedInput, FuseInput, ListInput
-from kosis_rag.schemas.catalog import TableRecord
-from kosis_rag.schemas.io import SearchResult
-from kosis_rag.shared.catalog import to_document
-from kosis_rag.shared.filters import TableFilter
-
-
-def merge(old: dict, new: dict) -> dict:
-    """Reducer for the fields parallel nodes write: the union of both dicts, the newer value on a shared key.
-
-    In: old = the field's value; new = one node's update. Out: {**old, **new}. Side effects: none.
-    Node: none (LangGraph applies it to runs, run_removed and trace).
-    """
-    return {**old, **new}
-
-
-class SearchState(BaseModel):
-    """What the nodes share. Every field has one writer, except docs (overwritten by each search stage) and the
-    merged fields (runs, run_removed, trace), which each node adds its own key to."""
-
-    question: str
-    query: ParsedQuery | None = None  # set by parse
-    table_filter: TableFilter | None = None  # set by condition: the filter every list is searched under
-    query_vecs: dict[str, list[float]] = Field(default_factory=dict)  # set by embed: list name -> question vector
-    relaxed: list[str] = Field(default_factory=list)  # set by condition: conditions dropped so a table could pass (T2-29)
-    runs: Annotated[dict[str, list[Document]], merge] = Field(default_factory=dict)  # retrieve_*: list name -> ranked docs
-    run_removed: Annotated[dict[str, dict[str, str]], merge] = Field(default_factory=dict)  # retrieve_*: name -> removed
-    removed: dict[str, str] = Field(default_factory=dict)  # set by fuse: key -> why filtered out (lists in fuse order)
-    docs: list[Document] = Field(default_factory=list)  # overwritten by fuse, rerank1, rerank2
-    route: Literal["refuse", "guide"] | None = None  # set by gate
-    refusal_reason: str | None = None  # set by gate
-    result: SearchResult | None = None  # set by refuse or guide
-    trace: Annotated[dict[str, dict[str, Any]], merge] = Field(default_factory=dict)  # node -> {"seconds": float, ...}
+from kosis_rag.schemas.resources import SearchResources
+from kosis_rag.schemas.state import SearchState
 
 
 Node = Callable[[SearchState], dict]  # one graph node: current state -> the fields it writes
@@ -104,12 +78,10 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
     Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
     """
     def timed(name: str, state: SearchState, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
-        """The trace with this node's entry added.
+        """The trace with this node's entry added (graph.spans.timed over state.trace). Node: every node."""
+        return _timed(name, state.trace, started, **extra)
 
-        In: name = node name; state = current state; started = perf_counter at node start; extra = fields to record.
-        Out: {**state.trace, name: {"seconds": ..., **extra}}. Side effects: none. Node: every node.
-        """
-        return {**state.trace, name: {"seconds": time.perf_counter() - started, **extra}}
+    guide_client = _client_getter(client)
 
     def parse(state: SearchState) -> dict:
         """Read the question's search conditions once.
@@ -243,7 +215,9 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
 
         In: state.question, state.docs. Out: {"result": SearchResult, "trace"}; under graph.stream with "custom" mode
             also {"delta": text} pieces of the reply that already pass the check (chain.streamable_prefix, T2-38).
-        Side effects: one guide LLM call (failures come back as a status, then the code template). Node: guide.
+        Side effects: on the first run, a client factory is called (it may raise, e.g. LLMKeyMissing: the backend's
+            guide key is missing); one guide LLM call (failures come back as a status, then the code template).
+        Node: guide.
         """
         started = time.perf_counter()
         try:  # graph.stream(stream_mode=[..., "custom"]) receives the pieces; invoke ignores them
@@ -251,7 +225,7 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
         except RuntimeError:  # run outside a graph (the node API's /nodes/answer)
             writer = None
         on_text = (lambda piece: writer({"delta": piece})) if writer else None
-        result = chain.guide_answer(state.question, state.docs[:k], client, on_text=on_text)
+        result = chain.guide_answer(state.question, state.docs[:k], guide_client(), on_text=on_text)
         return {"result": result, "trace": timed("guide", state, started, origin=result.answer_origin)}
 
     # Lists in fuse order (dense first: its score stays in metadata["score"]): dense and BM25 always, the question
@@ -262,93 +236,56 @@ def graph_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *
     # the embed node embeds once and hands each its vector; with one (HQ off) there is no embed node.
     embedders = retrieve_step.embedders(resources)
 
-    # Nodes: parse and condition, [embed], the lists (run in parallel by build_graph), fuse, the stages that are on
-    nodes: dict[str, Node] = {"parse": parse, "condition": condition}
-    if len(embedders) >= 2:
-        nodes["embed"] = embed
-    nodes.update(branches)
-    nodes["fuse"] = fuse
-    if resources.stage1_score is not None:
-        nodes["rerank1"] = rerank1
-    if resources.select is not None:
-        nodes["rerank2"] = rerank2
-    return {**nodes, "gate": gate, "refuse": refuse, "guide": guide}
+    # The node table in run order: (name, node, on). A stage that is off has no node; only gate branches at run time.
+    table: list[tuple[str, Node, bool]] = [
+        ("parse", parse, True),
+        ("condition", condition, True),
+        ("embed", embed, len(embedders) >= 2),
+        *((name, fn, True) for name, fn in branches),
+        ("fuse", fuse, True),
+        ("rerank1", rerank1, resources.stage1_score is not None),
+        ("rerank2", rerank2, resources.select is not None),
+        ("gate", gate, True),
+        ("refuse", refuse, True),
+        ("guide", guide, True),
+    ]
+    return {name: fn for name, fn, on in table if on}
 
 
-RETRIEVAL_STEPS = ("condition", "embed", "fuse")  # with every retrieve_<list>: the pre-T2-39 retrieve node's parts
-MERGED = ("runs", "run_removed", "trace")  # the SearchState fields with the merge reducer
+def _is_factory(client: Any) -> bool:
+    """True for a 0-argument guide client factory: a callable that is not itself a client (no invoke / generate)."""
+    return callable(client) and not hasattr(client, "invoke") and not hasattr(client, "generate")
 
 
-def is_retrieval_step(name: str) -> bool:
-    """True for a graph node that is part of the old `retrieve` node (condition, embed, retrieve_<list>, fuse)."""
-    return name in RETRIEVAL_STEPS or name.startswith("retrieve_")
+def _client_getter(client: Any) -> Callable[[], Any]:
+    """A function giving the guide client: the client itself, or the factory's result made on first use and kept.
 
-
-def apply_update(state: SearchState, update: dict) -> SearchState:
-    """The state after one node's update, the way the graph applies it (merge on runs, run_removed and trace)."""
-    merged = {f: merge(getattr(state, f), update[f]) for f in MERGED if f in update}
-    return state.model_copy(update={**update, **merged})
-
-
-def make_nodes(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5) -> dict[str, Node]:
-    """The node functions the node API exposes, in run order (T2-37): parse, retrieve, [rerank1], [rerank2], gate,
-    refuse, guide.
-
-    In: as build_graph.
-    Out: name -> fn(SearchState) -> state update. `retrieve` runs the graph's retrieval steps (condition, [embed],
-        retrieve_<list>..., fuse; T2-39) one after another in the calling thread and writes what the pre-T2-39
-        retrieve node wrote (docs, removed, relaxed) plus the steps' own fields (table_filter, runs, run_removed;
-        query_vecs is left empty, the vectors are not sent back) and a trace entry per step and one for `retrieve`.
-        It ignores those fields in the incoming state, so a client cannot hand it a list or a vector. The lists are
-        fused in fuse's fixed order, so the chain parse -> retrieve -> ... -> answer equals run_search. The other
-        nodes are graph_nodes' own.
-    Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
+    In: client = an LLMClient / BaseChatModel, or a 0-argument factory returning one (T2-41 S4: the backend's
+        Runtime.guide_client, so the guide LLM is created — and its key checked — only when guide runs).
+    Out: fn() -> client. Side effects: the first fn() calls the factory (its exceptions propagate, nothing is kept).
+    Node: guide.
     """
-    nodes = graph_nodes(resources, client, k=k)
-    steps = [name for name in nodes if is_retrieval_step(name)]
+    if not _is_factory(client):
+        return lambda: client
+    made: list[Any] = []
+    lock = threading.Lock()
 
-    def retrieve(state: SearchState) -> dict:
-        """condition -> [embed] -> retrieve_<list>... -> fuse as one step (the node API's /nodes/retrieve).
+    def get() -> Any:
+        with lock:  # one factory call even when guide runs concurrently on the same compiled graph
+            if not made:
+                made.append(client())
+        return made[0]
 
-        In: state.question, state.query. Out: {"docs", "removed", "relaxed", "table_filter", "runs", "run_removed",
-            "query_vecs" (empty), "trace" (each step's entry and "retrieve")}.
-        Side effects: as the steps (Chroma query, BM25 scoring, query embedding). Node: none (the API's retrieve).
-        """
-        started = time.perf_counter()
-        cur = state.model_copy(update={"table_filter": None, "query_vecs": {}, "relaxed": [], "runs": {},
-                                       "run_removed": {}, "removed": {}, "docs": []})
-        for name in steps:
-            cur = apply_update(cur, nodes[name](cur))
-        entry = {"seconds": time.perf_counter() - started, "n_docs": len(cur.docs), "n_removed": len(cur.removed),
-                 "relaxed": cur.relaxed, "steps": steps}
-        return {"docs": cur.docs, "removed": cur.removed, "relaxed": cur.relaxed, "table_filter": cur.table_filter,
-                "runs": cur.runs, "run_removed": cur.run_removed, "query_vecs": {},
-                "trace": {**cur.trace, "retrieve": entry}}
-
-    api: dict[str, Node] = {"parse": nodes["parse"], "retrieve": retrieve}
-    return {**api, **{name: fn for name, fn in nodes.items() if name != "parse" and not is_retrieval_step(name)}}
+    return get
 
 
-def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5):
-    """Compile the search graph for these resources. Returns the compiled graph (call .invoke({"question": q})).
+def add_search_edges(g: StateGraph, nodes: dict[str, Node]) -> None:
+    """Wire graph_nodes' table into g: parse -> condition [-> embed] -> every list at once -> fuse (waits for all),
+    a line through the stages that are on, one branch at the gate (refuse | guide), both to END.
 
-    In: resources = load_resources(...) (records, dense, BM25, stage 1 scorer, stage 2 selector, settings);
-        client = the guide LLM (ChatClovaX, or an LLMClient such as MockClient); k = tables shown to the answer
-        (gate / refuse / guide see docs[:k]; the search stages see the whole pool), same default as chain.answer.
-    Out: a compiled LangGraph graph over SearchState with graph_nodes' nodes: retrieve_hq is added only when
-        resources.hq is set, retrieve_hq_bm25 only when resources.hq_bm25 is set (T2-39, HQ_BUILD / HQ_BM25), embed
-        only when two or more lists embed the question (an embed_query field: dense and hq), rerank1 only when
-        resources.stage1_score is set, rerank2 only when resources.select is set.
-    Side effects: none when built; running it calls the retrievers, the models and the LLMs the resources hold.
-    Node: none (it builds them).
+    In: g = a StateGraph over SearchState with the nodes already added; nodes = graph_nodes(...).
+    Out: None. Side effects: adds the edges to g. Node: none.
     """
-    nodes = graph_nodes(resources, client, k=k)
-    g = StateGraph(SearchState)
-    for name, fn in nodes.items():
-        g.add_node(name, fn)
-
-    # Edges: parse -> condition [-> embed] -> every list at once -> fuse (waits for all), a line through the stages,
-    # one branch at the gate
     branches = [name for name in nodes if name.startswith("retrieve_")]
     fan_out = "embed" if "embed" in nodes else "condition"  # the node the list branches start from
     stages = ["fuse", *(name for name in ("rerank1", "rerank2") if name in nodes)]
@@ -365,6 +302,28 @@ def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *
     g.add_conditional_edges("gate", lambda state: state.route, {"refuse": "refuse", "guide": "guide"})
     g.add_edge("refuse", END)
     g.add_edge("guide", END)
+
+
+def build_graph(resources: SearchResources, client: LLMClient | BaseChatModel, *, k: int = 5):
+    """Compile the search graph for these resources. Returns the compiled graph (call .invoke({"question": q})).
+
+    In: resources = adapters.loader.load_resources(spec=..., options=...) (records, dense, BM25, stage 1 scorer,
+        stage 2 selector, options, spec);
+        client = the guide LLM (ChatClovaX, or an LLMClient such as MockClient), or a 0-argument factory of one
+        (called when guide first runs; T2-41 S4, until S5 moves guide out); k = tables shown to the answer
+        (gate / refuse / guide see docs[:k]; the search stages see the whole pool), same default as chain.answer.
+    Out: a compiled LangGraph graph over SearchState with graph_nodes' nodes: retrieve_hq is added only when
+        resources.hq is set, retrieve_hq_bm25 only when resources.hq_bm25 is set (T2-39, HQ_BUILD / HQ_BM25), embed
+        only when two or more lists embed the question (an embed_query field: dense and hq), rerank1 only when
+        resources.stage1_score is set, rerank2 only when resources.select is set.
+    Side effects: none when built; running it calls the retrievers, the models and the LLMs the resources hold.
+    Node: none (it builds them).
+    """
+    nodes = graph_nodes(resources, client, k=k)
+    g = StateGraph(SearchState)
+    for name, fn in nodes.items():
+        g.add_node(name, fn)
+    add_search_edges(g, nodes)
     return g.compile()
 
 
@@ -401,24 +360,3 @@ def stream_search(graph, question: str, config: dict | None = None) -> Iterator[
         else:
             final = chunk
     yield "result", SearchState.model_validate(final)
-
-
-def ground_docs(docs: list[Document], records: dict[str, TableRecord]) -> list[Document]:
-    """Re-attach the catalog fields of docs sent from outside (the node API) from the server's records (T2-37).
-
-    In: docs = documents from a request; records = key -> TableRecord (resources.records).
-    Out: the same docs in the same order with id and the catalog metadata (to_document's: key, ids, names, period,
-        url) taken from the record; search metadata (score, ranks, stage*) and page_content are kept, since
-        the nodes read text and scores by key and pass page_content through. So a client may reorder or re-score
-        tables but cannot invent a table or its citation.
-    Side effects: raises KeyError listing the keys that are not in records. Node: none (the API calls it).
-    """
-    keys = [d.metadata.get("key") or d.id for d in docs]
-    unknown = [key for key in keys if key not in records]
-    if unknown:
-        raise KeyError(f"unknown table keys: {unknown}")
-    out = []
-    for d, key in zip(docs, keys):
-        catalog = to_document(records[key].info).metadata  # the catalog fields only
-        out.append(Document(page_content=d.page_content, id=key, metadata={**d.metadata, **catalog}))
-    return out

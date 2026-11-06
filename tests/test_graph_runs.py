@@ -12,7 +12,6 @@ No model, no server, no API: the same kind of fakes as tests/test_graph.py.
 """
 
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -25,10 +24,12 @@ from langchain_core.retrievers import BaseRetriever  # noqa: E402
 from kosis_chat.llm.model import MockClient  # noqa: E402
 from kosis_rag import chain  # noqa: E402
 from kosis_rag.gate.node import GateInput, decide_route  # noqa: E402
-from kosis_rag.graph import SearchState, build_graph, make_nodes, run_search  # noqa: E402
+from kosis_rag.adapters.loader import load_resources  # noqa: E402
+from kosis_rag.graph.nodes_api import make_nodes  # noqa: E402
+from kosis_rag.graph.search import build_graph, run_search  # noqa: E402
+from kosis_rag.legacy.pipeline import build_search  # noqa: E402
 from kosis_rag.legacy.retrievers import HqRetriever, HybridRetriever, hybrid_search  # noqa: E402
 from kosis_rag.parse import node as query_rules  # noqa: E402
-from kosis_rag.pipeline import SearchSettings, build_search, load_resources  # noqa: E402
 from kosis_rag.rerank.hcx import HcxResult  # noqa: E402
 from kosis_rag.rerank.stage1 import rerank_stage1  # noqa: E402
 from kosis_rag.rerank.stage2 import rerank_stage2  # noqa: E402
@@ -36,6 +37,8 @@ from kosis_rag.retrieve.fuse import rrf_fuse  # noqa: E402
 from kosis_rag.retrieve.lists import condition_filter, search_list  # noqa: E402
 from kosis_rag.schemas.catalog import TableRecord  # noqa: E402
 from kosis_rag.schemas.common import TableInfo  # noqa: E402
+from kosis_rag.schemas.resources import IndexSpec, SearchOptions  # noqa: E402
+from kosis_rag.schemas.state import SearchState  # noqa: E402
 from kosis_rag.shared.catalog import to_document  # noqa: E402
 from kosis_rag.shared.filters import (TableFilter, filter_tables, filter_with_relaxation, relax, soft_rank,  # noqa: E402
                                       why_excluded)
@@ -103,8 +106,22 @@ def _plain(docs):
     return [(d.id, d.page_content, {k: v for k, v in d.metadata.items() if not k.endswith("_seconds")}) for d in docs]
 
 
-def _settings(**kw):
-    return SearchSettings(tables=Path("unused.jsonl"), **{"cond_filter": False, "stage2": "none", **kw})
+def _settings(**kw) -> tuple[IndexSpec, SearchOptions]:
+    """(spec, options) of these tests (T2-41 S4: the SearchSettings fields split by where they now live)."""
+    kw = {"cond_filter": False, "stage2": "none", **kw}
+    spec = {k: v for k, v in kw.items() if k in IndexSpec.model_fields}
+    return IndexSpec(**spec), SearchOptions(**{k: v for k, v in kw.items() if k not in spec})
+
+
+def _load(settings, **parts):
+    """load_resources over the fakes for _settings(...)."""
+    spec, options = settings
+    return load_resources(spec=spec, options=options, **parts)
+
+
+def _label(**kw) -> str:
+    spec, options = _settings(**kw)
+    return options.label(spec)
 
 
 def _master_hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[str] | None = None,
@@ -174,7 +191,7 @@ def _old_state(question, resources, client, k=5):
     """What the pre-T2-39 graph (master ba72da4) returned for the same resources: its retrieve node verbatim (parse
     filter, relax, one master hybrid_search over dense + BM25, frozen above), then the same stage and answer functions
     in order."""
-    s = resources.settings
+    s = resources.options
     query = query_rules.parse_query(question, sigungu=resources.sigungu)
     table_filter = query.to_filter() if s.cond_filter else None
     relaxed = []
@@ -210,7 +227,7 @@ def test_graph_without_hq_equals_the_old_graph(question, cond, stages):
     stage1 = _stage1 if stages in ("both", "stage1") else None
     select = _pick(B) if stages == "both" else None
     reply = "[1] DT_A 표입니다."
-    resources = load_resources(_settings(cond_filter=cond), records=RECORDS, dense=CatalogRetriever(keys=[C, A, B, D]),
+    resources = _load(_settings(cond_filter=cond), records=RECORDS, dense=CatalogRetriever(keys=[C, A, B, D]),
                                stage1_score=stage1, select=select)
     assert resources.hq is None and resources.hq_bm25 is None
     old_client, new_client = MockClient(reply), MockClient(reply)
@@ -225,7 +242,7 @@ def test_graph_without_hq_equals_the_old_graph(question, cond, stages):
 
 def test_graph_without_hq_has_no_question_nodes_even_when_a_fake_is_given():
     # HQ_BUILD empty: an injected question index is not used
-    resources = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
+    resources = _load(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS),
                                hq=CatalogRetriever(keys=[D]), hq_bm25=PlainRetriever(keys=[D]))
     assert resources.hq is None and resources.hq_bm25 is None
     nodes = set(build_graph(resources, MockClient()).get_graph().nodes)
@@ -276,7 +293,7 @@ def test_rrf_fuse_weights_default_to_plain_rrf():
 def _hq_resources(*, weight=1.0, hq_keys=(D, C), dense_keys=KEYS, bm25=True, cond=False, **kw):
     """Resources with the question index on: dense A..D, BM25 = [A] only (fixed fake), hq = hq_keys."""
     settings = _settings(cond_filter=cond, hq_build="hq-test", hq_weight=weight, hq_bm25=bm25)
-    resources = load_resources(settings, records=RECORDS, dense=CatalogRetriever(keys=list(dense_keys)),
+    resources = _load(settings, records=RECORDS, dense=CatalogRetriever(keys=list(dense_keys)),
                                hq=CatalogRetriever(keys=list(hq_keys)),
                                hq_bm25=PlainRetriever(keys=[D]) if bm25 else None, **kw)
     return replace(resources, bm25=PlainRetriever(keys=[A]))
@@ -303,7 +320,7 @@ def test_hq_list_is_fused_with_its_weight(weight, order):
 
 
 def test_hq_changes_the_order_against_hq_off():
-    off = load_resources(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
+    off = _load(_settings(), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
     off = replace(off, bm25=PlainRetriever(keys=[A]))
     before = run_search(build_graph(off, MockClient("[1] DT_A 표입니다.")), "출생아 수")
     after = run_search(build_graph(_hq_resources(bm25=False), MockClient("[1] DT_A 표입니다.")), "출생아 수")
@@ -342,11 +359,14 @@ def test_hq_with_rerankers_runs_them_after_fuse():
 
 
 def test_label_and_old_path_ignore_hq_when_off():
-    assert _settings().label() == "hybrid"
-    assert _settings(hq_build="hq-x", hq_bm25=True).label() == "hybrid+hq+hqbm25"
-    assert _settings(hq_build="hq-x", hq_weight=0.5).label() == "hybrid+hq(w0.5)"
-    # build_search (nested retrievers) never loads the question index: no Chroma connection is tried here
-    old = build_search(_settings(hq_build="hq-x", hq_bm25=True), records=RECORDS, dense=CatalogRetriever(keys=KEYS))
+    assert _label() == "hybrid"
+    assert _label(hq_build="hq-x", hq_bm25=True) == "hybrid+hq+hqbm25"
+    assert _label(hq_build="hq-x", hq_weight=0.5) == "hybrid+hq(w0.5)"
+    # build_search (nested retrievers) never uses the question index, even when the resources hold one (T2-41 S4: it
+    # takes loaded resources; before, it switched HQ_BUILD off and loaded its own)
+    resources = _hq_resources(bm25=True)
+    assert resources.hq is not None and resources.hq_bm25 is not None
+    old = build_search(resources)
     assert isinstance(old, HybridRetriever) and old.names == ["dense", "bm25"]
 
 
@@ -355,7 +375,7 @@ def test_tracing_blames_fuse_where_the_pool_is_formed():
     from evals.trace import NodeSpans, lost_at
 
     resources = _hq_resources(dense_keys=[A, B], hq_keys=[B], bm25=False, stage1_score=_stage1)
-    resources = replace(resources, settings=resources.settings.model_copy(update={"rerank_mode": "score"}))
+    resources = replace(resources, options=resources.options.model_copy(update={"rerank_mode": "score"}))
     nodes = NodeSpans()
     run_search(build_graph(resources, MockClient("[1] DT_A 표입니다.")), "출생아 수", {"callbacks": [nodes]})
     keyed = [s["name"] for s in nodes.spans if "keys" in s]
@@ -413,7 +433,7 @@ def _embedding_resources(embedder, collection, seen, **kw):
     hq = HqRetriever(collection=collection, embed_query=embedder, text_of={key: key for key in KEYS}, records=BY_KEY,
                      n_docs=len(collection.hits))
     settings = _settings(hq_build="hq-test", **kw)
-    return load_resources(settings, records=RECORDS, dense=dense, hq=hq)
+    return _load(settings, records=RECORDS, dense=dense, hq=hq)
 
 
 def test_the_question_is_embedded_once_for_dense_and_hq():
@@ -433,7 +453,7 @@ def test_the_question_is_embedded_once_for_dense_and_hq():
 
 def test_without_hq_there_is_no_embed_node_and_the_result_is_the_old_one():
     embedder, seen = CountingEmbedder(), []
-    resources = load_resources(_settings(cond_filter=True), records=RECORDS,
+    resources = _load(_settings(cond_filter=True), records=RECORDS,
                                dense=EmbeddingRetriever(keys=[C, A, B, D], embed_query=embedder, seen=seen))
     graph = build_graph(resources, MockClient("[1] DT_A 표입니다."))
     assert "embed" not in graph.get_graph().nodes
@@ -472,7 +492,7 @@ def test_node_api_retrieve_is_the_split_steps_and_the_chain_equals_the_graph(hq)
             collection = QuestionCollection([(f"{D}#q0", D, "이혼 건수", 0.1), (f"{C}#q0", C, "혼인 건수", 0.2)])
             return _embedding_resources(embedder, collection, seen, cond_filter=True), embedder, seen
         dense = EmbeddingRetriever(keys=[C, A, B, D], embed_query=embedder, seen=seen)
-        return load_resources(_settings(cond_filter=True), records=RECORDS, dense=dense), embedder, seen
+        return _load(_settings(cond_filter=True), records=RECORDS, dense=dense), embedder, seen
 
     question, reply = "2023년 인구", "[1] DT_A 표입니다."
     graph_resources, _, _ = resources()

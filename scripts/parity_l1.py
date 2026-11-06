@@ -64,15 +64,24 @@ def read_questions(path: Path | None) -> list[tuple[str, str]]:
     return [(f"q{n:04d}", line.strip()) for n, line in enumerate(lines, 1)]
 
 
+def preset_overrides(preset: str) -> dict[str, Any]:
+    """The search settings of a STAGED preset (evals.runners.retrieval.STAGED, read as data): empty rerank_ckpt = stage 1
+    off, as the L1 runner's _staged_settings read it at S0."""
+    from evals.runners.retrieval import STAGED
+
+    return {key: (value or None) if key == "rerank_ckpt" else value for key, value in STAGED[preset].items()}
+
+
 def build_preset_graph(preset: str):
-    """(graph, resources) of a STAGED preset, built as the L1 runner's graph:<preset> builds it (S0 form)."""
-    from kosis_chat.llm.model import MockClient
+    """(graph, resources) of a STAGED preset, built as the L1 runner's graph:<preset> built it at S0 (T2-41 S4: from
+    the new settings objects directly — shell environment + the preset's overrides — not through evals)."""
+    from backend.app.config import search_config_from_env
+    from kosis_rag.adapters.loader import load_resources
+    from kosis_rag.graph.search import build_graph
+    from kosis_rag.llm.base import MockClient
 
-    from evals.runners.retrieval import _staged_settings
-    from kosis_rag.graph import build_graph
-    from kosis_rag.pipeline import load_resources
-
-    resources = load_resources(_staged_settings(preset))
+    cfg = search_config_from_env(**preset_overrides(preset))
+    resources = load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm)
     return build_graph(resources, MockClient()), resources
 
 
@@ -91,22 +100,25 @@ def _collection(retriever: Any) -> tuple[str | None, dict[str, Any]]:
 def config_fingerprint(preset: str, resources: Any) -> dict[str, Any]:
     """The effective search configuration, read off the built resources (never from .env).
 
-    S0 form: resources = kosis_rag.pipeline.SearchResources (settings = SearchSettings). Later steps change only
-    where these values are read from (options / spec); the keys and the values for the same setup stay equal.
-    The list order and weights are the ones kosis_rag.graph.graph_nodes fuses with (dense 1.0, bm25 1.0, hq and
-    hq_bm25 HQ_WEIGHT, each only when its retriever is loaded).
+    S0 form read resources.settings (SearchSettings); S4 reads the same values off resources.options /
+    resources.spec (tables None = the default data/tables.jsonl, as SearchSettings.tables); the keys and the values
+    for the same setup stay equal (tests/test_parity_l1_tool.py). The list order and weights are the ones
+    kosis_rag.graph.search.graph_nodes fuses with (dense 1.0, bm25 1.0, hq and hq_bm25 HQ_WEIGHT, each only when its
+    retriever is loaded).
     """
-    s = resources.settings
+    from kosis_rag.adapters.files import TABLES
+
+    o, spec = resources.options, resources.spec
     dense_name, dense_meta = _collection(resources.dense)
     hq_name, _ = _collection(resources.hq)
     weights = {"dense": 1.0, "bm25": 1.0}
     if resources.hq is not None:
-        weights["hq"] = float(s.hq_weight)
+        weights["hq"] = float(o.hq_weight)
     if resources.hq_bm25 is not None:
-        weights["hq_bm25"] = float(s.hq_weight)
+        weights["hq_bm25"] = float(o.hq_weight)
     stage1 = resources.stage1_score is not None
     stage2 = resources.select is not None
-    tables = Path(s.tables)
+    tables = Path(spec.tables or TABLES)
     return {
         "preset": preset,
         "tables_sha256": file_sha256(tables) if tables.is_file() else None,
@@ -114,19 +126,19 @@ def config_fingerprint(preset: str, resources: Any) -> dict[str, Any]:
         "embed": dense_meta.get("embed_ckpt") or dense_meta.get("embed_model"),
         "collection_doc_format": dense_meta.get("doc_format"),
         "text_format": resources.text_format,
-        "cond_filter": bool(s.cond_filter),
-        "pool": int(s.pool),
+        "cond_filter": bool(o.cond_filter),
+        "pool": int(o.pool),
         "lists": list(weights),
         "weights": weights,
         "stages": {"dense": True, "bm25": True, "hq": resources.hq is not None,
                    "hq_bm25": resources.hq_bm25 is not None, "rerank1": stage1, "rerank2": stage2},
-        "hq_build": s.hq_build if resources.hq is not None else None,
+        "hq_build": spec.hq_build if resources.hq is not None else None,
         "hq_collection": hq_name,
-        "rerank1_ckpt": s.rerank_ckpt if stage1 else None,
-        "rerank1_mode": s.rerank_mode if stage1 else None,
-        "rerank1_n": int(s.rerank_n) if stage1 else None,
+        "rerank1_ckpt": spec.rerank_ckpt if stage1 else None,
+        "rerank1_mode": o.rerank_mode if stage1 else None,
+        "rerank1_n": int(o.rerank_n) if stage1 else None,
         "rerank2": resources.stage2_name if stage2 else None,
-        "rerank2_k": int(s.stage2_k) if stage2 else None,
+        "rerank2_k": int(o.stage2_k) if stage2 else None,
     }
 
 
@@ -167,7 +179,7 @@ def qids_sha256(qids: list[str]) -> str:
 
 
 def dump(preset: str, questions: Path | None, out: Path) -> int:
-    from kosis_rag.graph import run_search
+    from kosis_rag.graph.search import run_search
 
     source = questions if questions is not None else default_questions_path()
     pairs = read_questions(questions)

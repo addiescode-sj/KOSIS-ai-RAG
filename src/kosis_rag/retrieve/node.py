@@ -1,7 +1,7 @@
 """Retrieve stage step functions (T2-39; T2-41 S2: the bodies of graph.py's embed, retrieve_<list> and fuse nodes).
 
-`resources` is the search resources (pipeline.SearchResources until S4): the lists are its dense, bm25, [hq] and
-[hq_bm25]; settings.pool is each list's cut and the pool size, settings.hq_weight the question lists' RRF weight.
+`resources` is the search resources (schemas.resources.SearchResources): the lists are its dense, bm25, [hq] and
+[hq_bm25]; options.pool is each list's cut and the pool size, options.hq_weight the question lists' RRF weight.
 """
 
 from __future__ import annotations
@@ -19,9 +19,9 @@ def search_lists(resources: Any) -> list[tuple[str, Any, float]]:
 
     In: resources. Out: [(name, list, weight)]: dense and bm25 (1.0) always (dense first: its score stays in
         metadata["score"]), hq when resources.hq is set and hq_bm25 when resources.hq_bm25 is set (weight
-        settings.hq_weight). Side effects: none. Node: none (graph_nodes builds one retrieve_<name> node per list).
+        options.hq_weight). Side effects: none. Node: none (graph_nodes builds one retrieve_<name> node per list).
     """
-    s = resources.settings
+    s = resources.options
     lists = [("dense", resources.dense, 1.0), ("bm25", resources.bm25, 1.0)]
     if resources.hq is not None:
         lists.append(("hq", resources.hq, s.hq_weight))
@@ -62,13 +62,13 @@ def retrieve_list(name: str, inp: ListInput, resources: Any) -> ListOutput:
 
     In: name = the list name (dense, bm25, hq, hq_bm25); inp.question, inp.table_filter (from condition),
         inp.vector (this list's question vector from embed, if any: the search uses it instead of the embedder).
-    Out: ListOutput(docs = ranked docs (at most settings.pool), removed = key -> why filtered out, relaxed, missing).
+    Out: ListOutput(docs = ranked docs (at most options.pool), removed = key -> why filtered out, relaxed, missing).
     Side effects: the list's search (Chroma query or BM25 scoring); ValueError as search_list; KeyError for a name
         that is not one of search_lists(resources). Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25.
     """
     retriever = {n: r for n, r, _ in search_lists(resources)}[name]
     docs, removed, relaxed, missing = search_list(inp.question, retriever, table_filter=inp.table_filter,
-                                                  records=resources.records, k_each=resources.settings.pool,
+                                                  records=resources.records, k_each=resources.options.pool,
                                                   vector=inp.vector)
     return ListOutput(docs=docs, removed=removed, relaxed=relaxed, missing=missing)
 
@@ -77,13 +77,13 @@ def fuse(inp: FuseInput, resources: Any) -> FuseOutput:
     """Fuse the lists by weighted RRF into the candidate pool (the old retrieve node's last step).
 
     In: inp.runs, inp.run_removed (one entry per retrieve_* node; a list with no entry counts as empty).
-    Out: FuseOutput(docs = the fused pool (at most settings.pool; metadata as hybrid_search: score from dense,
+    Out: FuseOutput(docs = the fused pool (at most options.pool; metadata as hybrid_search: score from dense,
         score_from, rrf_score, rank_<name>), removed = key -> why filtered out (lists merged in fuse order)).
     Side effects: none. Node: fuse.
     """
     lists = search_lists(resources)
     names = [name for name, _, _ in lists]
-    docs = rrf_fuse([inp.runs.get(name, []) for name in names], names, k=resources.settings.pool, score_from=0,
+    docs = rrf_fuse([inp.runs.get(name, []) for name in names], names, k=resources.options.pool, score_from=0,
                     weights=[w for _, _, w in lists])
     removed: dict[str, str] = {}
     for name in names:
