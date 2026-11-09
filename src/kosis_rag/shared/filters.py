@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from kosis_rag.schemas.catalog import TableRecord
 # filters imports fields, never the other way (T2-41 S1): table_regions / has_dimension moved to fields for that
 from kosis_rag.shared.fields import has_dimension, implied, table_regions
-from kosis_rag.shared.roles import table_roles
+from kosis_rag.shared.roles import BUNDLED_CLASSES, bundled_blocks, table_roles
 from kosis_rag.shared.vocab import SIDO, SIDO_LABELS  # noqa: F401  (SIDO·SIDO_LABELS re-exported, T2-30 imports)
 
 # Same organization under its old and new names (통계청 became 국가데이터처)
@@ -138,6 +138,20 @@ def why_excluded(record: TableRecord, f: TableFilter) -> str | None:
     return None
 
 
+def crosses_blocks(record: TableRecord, wanted: list[str], dims: list[str]) -> str | None:
+    """Reason when two requested breakdowns sit only in one bundled class ("특성별": 성 | 이주세대 ...), else None.
+
+    The blocks of such a class are marginal totals, so the table has no 성 × 이주세대 cells (T2-42, KOS-118).
+    """
+    for blocks in bundled_blocks(record):
+        others = [n for n in dims if n not in blocks] + [
+            c.name for c in record.classes if c.name.replace(" ", "").removesuffix("별") not in BUNDLED_CLASSES]
+        alone = [d for d in wanted if d in blocks and not has_dimension(record, d, others)]
+        if len(alone) >= 2:
+            return f"분류 {'·'.join(alone)}는 따로 집계된 표 (교차 없음)"
+    return None
+
+
 def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
     """Reason when the table misses a requested breakdown or counts something else, else None (T2-27).
 
@@ -155,6 +169,8 @@ def lacks_role(record: TableRecord, f: TableFilter) -> str | None:
         missing = [d for d in missing if d not in held]
     if missing:
         return f"분류 {'·'.join(missing)} 없음 (분류: {'·'.join(dims) or '없음'})"
+    if reason := crosses_blocks(record, f.dimensions, dims):
+        return reason
     if f.measures and measure and not any(word in measure for word in f.measures):
         return f"세는 대상 {measure} (요청 {'·'.join(f.measures)})"  # a name that says nothing is kept
     return None
