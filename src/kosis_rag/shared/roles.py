@@ -38,8 +38,75 @@ def _dims(text: str) -> list[str]:
     return [_strip_byeol(p) for p in DIM_SEP.split(text) if p.strip()]
 
 
+# T2-42 (KOS-118): a class that stacks several breakdowns as blocks of labels. "특성별" in 119 tables holds e.g.
+# 남성·여성 | 사할린·한반도·일본 | 1세대·2세대 | 대한민국·러시아 | 재외동포(F-4) | 1년 미만 | 임대 아파트 | 중학교 ...
+# Each block is one breakdown, counted on its own (marginal totals: no cross of two blocks). Blocks are read from
+# labels that recur across those 119 tables, not from golden tables or questions.
+BUNDLED_CLASSES = {"특성"}
+LABEL_BLOCKS: list[tuple[str, re.Pattern]] = [
+    ("성", re.compile(r"^(?:남성|여성|남자|여자)$")),
+    ("출생지", re.compile(r"^(?:사할린|중앙아시아 국가|기타 러시아 지역|한반도|일본)$")),
+    ("이주세대", re.compile(r"^\d세대(?: 이상)?$")),
+    ("국적", re.compile(r"^(?:대한민국|러시아)$")),
+    ("체류자격", re.compile(r"\(F-\d\)$")),
+    ("거주기간", re.compile(r"^\d+년(?:~\d+년)? (?:미만|이상)$")),
+    ("주거시설형태", re.compile(r"^(?:입소 시설|임대 아파트|자녀 또는 친인척 집|개인 소유 주택)$")),
+    ("교육정도", re.compile(r"^(?:초등학교 이하|중학교|고등학교|전문대학|일반대학교|대학원)$")),
+    ("산업", re.compile(r"제조업$")),
+    ("조직형태", re.compile(r"^(?:개인사업체|회사 법인|회사 외 법인)$")),
+    ("매출액규모", re.compile(r"^(?:5억원 미만|\d+억원~\d+억원 미만|500억원 이상)$")),
+    ("종사자규모", re.compile(r"^\d+명(?:~\d+명)? (?:미만|이상)$")),
+    ("혼인상태", re.compile(r"^미혼(?:→혼인 변화)?$")),
+    ("출산여부", re.compile(r"^(?:미출산(?:→출산 변화)?|1자녀 출산|다자녀 출산)$")),
+]
+# a class whose labels are what is counted ("기본항목": 출생아수(명), 조사망률(천명당)), not a breakdown
+MEASURE_CLASSES = {"기본항목"}
+UNIT_LABEL = re.compile(r"[(（][^()（）]+[)）]\s*$")
+
+
+def label_blocks(labels: list[str]) -> list[str]:
+    """Breakdown names a bundled class holds, in label order; labels of no known block (전체, 모름) are skipped.
+
+    Side effects: none.
+    """
+    found = [name for label in labels for name, pattern in LABEL_BLOCKS if pattern.search(label.strip())]
+    return list(dict.fromkeys(found))
+
+
+def bundled_blocks(record: TableRecord) -> list[list[str]]:
+    """Per bundled class of the table, the breakdowns it holds (each counted alone: never two of one list together).
+
+    Side effects: none. Used by filters.lacks_role.
+    """
+    return [blocks for c in record.classes if _strip_byeol(c.name).replace(" ", "") in BUNDLED_CLASSES
+            and (blocks := label_blocks(c.labels))]
+
+
+def _unbundle(record: TableRecord, dims: list[str]) -> list[str]:
+    """dims with a bundled class replaced by its blocks and a class of counted items dropped (T2-42)."""
+    by_name = {_strip_byeol(c.name).replace(" ", ""): c for c in record.classes}
+    out: list[str] = []
+    for d in dims:
+        key = d.replace(" ", "")
+        c = by_name.get(key)
+        if c is not None and key in BUNDLED_CLASSES and (blocks := label_blocks(c.labels)):
+            out += blocks
+        elif (c is not None and key in MEASURE_CLASSES and c.labels
+              and sum(bool(UNIT_LABEL.search(x)) for x in c.labels) * 2 > len(c.labels)):
+            continue
+        else:
+            out.append(d)
+    return list(dict.fromkeys(out))
+
+
 def table_roles(record: TableRecord) -> tuple[str | None, list[str]]:
     """(measure, dimensions); measure is None when the name does not say what is counted."""
+    measure, dims = _name_roles(record)
+    return measure, _unbundle(record, dims)
+
+
+def _name_roles(record: TableRecord) -> tuple[str | None, list[str]]:
+    """(measure, dimensions) read from the table name, with class names where the name does not list them."""
     name = LEVEL_TAIL.sub("", record.info.table_name).strip() or record.info.table_name.strip()
     paren_dims: list[str] = []
     counted: list[str] = []

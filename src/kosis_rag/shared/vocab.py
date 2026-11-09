@@ -116,8 +116,39 @@ _KEY_GROUPS: dict[str, list[str]] = {
     "시나리오": ["시나리오", "가정"],
     "입국연도": ["입국연도"],
     "사망자녀수": ["사망자녀수"],
+    # T2-42 (KOS-118): breakdowns that were not in this table, picked from the 314 unmapped names of all 2,364 tables
+    # by how often they occur (not from golden tables or questions)
+    "전출지": ["전출지"],
+    "전입지": ["전입지"],
+    "전입사유": ["전입사유"],
+    "내외국인": ["내외국인"],
+    "항구": ["항구", "출입국항구"],
+    "대도시": ["대도시"],
+    "인구규모": ["인구규모"],
+    "다문화유형": ["다문화유형"],
+    "미성년자녀수": ["미성년자녀수"],
+    "혼인종류": ["혼인종류", "한국인남편의혼인종류", "한국인아내의혼인종류"],
+    "이혼종류": ["이혼종류"],
+    "체류기간": ["체류기간"],
+    "매출액규모": ["매출액규모"],
+    "종사자규모": ["종사자규모"],
+    "기업규모": ["기업규모"],
+    "소득수준": ["소득수준"],
+    "주택소유여부": ["주택소유여부"],
+    "가구유형": ["가구유형"],
+    "출발시각대": ["출발시각대"],
+    "재학년수": ["재학년수"],
+    "출생연도": ["출생연도", "년생"],
+    "성씨본관": ["성씨본관", "성씨ㆍ본관", "성씨·본관"],
+    # label blocks of a bundled "특성별" class (roles.LABEL_BLOCKS) that had no key yet
+    "이주세대": ["이주세대"],
+    "조직형태": ["조직형태"],
+    "출산여부": ["출산여부"],
     "월": ["월"],
 }
+for _key, _more in {"현거주지": ["거주지"], "1년전거주지": ["1년전거주지종류"], "5년전거주지": ["5년전거주지종류"],
+                    "전공분야": ["전공"]}.items():  # T2-42: other spellings of keys that were already here
+    _KEY_GROUPS[_key] += _more
 # every key is also its own name, so dimension_keys(key) == [key] (the question side names keys directly)
 DIMENSION_KEYS: dict[str, str] = {key: key for key in _KEY_GROUPS} | {
     name: key for key, names in _KEY_GROUPS.items() for name in names}
@@ -131,7 +162,7 @@ _QUESTION_ALIASES = {
 }
 DIMENSION_WORDS: dict[str, str] = {
     name: key for key, names in _KEY_GROUPS.items()
-    if key not in _QUESTION_SKIP and not key.startswith("가구주") and key != "모연령"
+    if key not in _QUESTION_SKIP and (not key.startswith("가구주") or key == "가구주와의관계") and key != "모연령"
     for name in names if name not in _QUESTION_ALIASES
 } | _QUESTION_ALIASES
 assert set(DIMENSION_WORDS.values()) <= set(_KEY_GROUPS), "question breakdown names need a key"
@@ -161,7 +192,13 @@ def dimension_keys(name: str) -> list[str]:
         head, tail = norm[:i], norm[i:]
         if head in DIMENSION_KEYS and tail in DIMENSION_KEYS:
             return [DIMENSION_KEYS[head], DIMENSION_KEYS[tail]]
+    # T2-42: "성별 육아휴직 사용 여부" names the breakdown, then what is counted; only the part before 별 is a key
+    if (m := _BREAKDOWN_THEN_MEASURE.match(name.strip())) and (head := _normalize(m.group(1))) in DIMENSION_KEYS:
+        return [DIMENSION_KEYS[head]]
     return []
+
+
+_BREAKDOWN_THEN_MEASURE = re.compile(r"^(\S+?)별\s+\S")
 
 
 UNITS = {"명", "가구", "건", "%", "세", "호", "천명", "천명당", "개", "명/㎢", "세대", "만원", "원", "천원", "개월", "㎡", "쌍",
