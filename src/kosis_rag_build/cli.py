@@ -6,6 +6,7 @@
     python -m kosis_rag_build.cli text     [--tables ...] [--tokens]          # table text formats: lengths and samples
     python -m kosis_rag_build.cli hq-build --model gpt-4o-mini [--limit 20] [--no-score | --rerank-ckpt ...]
     python -m kosis_rag_build.cli hq-index --build <build_id> [--ckpt ...] [--desc] [--dry-run]
+    python -m kosis_rag_build.cli chunks   --data-dir <provided data> [--table KEY ...] [--registry-only]   # T2-43
 
 (Windows cmd: `set PYTHONPATH=.;src;vendor/phase1;vendor/phase1/src`; bash: PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src.)
 
@@ -24,6 +25,7 @@ hq.index — the table in docs/migration.md S6a). hq-build prints token counts o
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import time
 from collections.abc import Mapping
@@ -118,6 +120,16 @@ def parser() -> argparse.ArgumentParser:
                    help="load a build written by --export into Chroma (no embedding)")
     _chroma_args(p)
 
+    p = sub.add_parser("chunks", help="region chunks of the very large tables: registry + Chroma collection (T2-43)")
+    p.add_argument("--data-dir", type=Path, required=True, help="the provided data folder holding values/<key>.parquet")
+    p.add_argument("--tables", type=Path, default=DATA / "tables.jsonl")
+    p.add_argument("--table", action="append", default=None, help="table key; repeat it (default: the two largest tables)")
+    p.add_argument("--out", type=Path, default=DATA / "chunks" / "regions.jsonl", help="the region registry file")
+    p.add_argument("--registry-only", action="store_true", help="write the registry, do not embed or load")
+    p.add_argument("--collection", default=None, help="default: kosis_chunks__<format>__<hash of the Parquet files>")
+    p.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
+    _chroma_args(p)
+
     p = sub.add_parser("text", help="table text formats: lengths and samples (kosis_rag.shared.tabletext)")
     p.add_argument("--tables", type=Path, default=DATA / "tables.jsonl")
     p.add_argument("--tokens", action="store_true", help="also count bge-m3 tokens (downloads the tokenizer)")
@@ -201,6 +213,53 @@ def run_chroma(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     print(f"collection {state.name}: {state.count} documents")
     print(f"to search it, set CHROMA_COLLECTION={state.name} (the previous builds stay; switch back the same way)")
     return 0 if state.count == len(state.ids) else 1
+
+
+def run_chunks(args: argparse.Namespace, env: Mapping[str, str]) -> int:
+    """Registry (one group-by per table) -> documents -> KURE-v1 -> its own collection. Values are not loaded."""
+    from kosis_rag.adapters import files
+    from kosis_rag_build import chunks as ch
+    from kosis_rag_build.schemas import index_version_now
+
+    keys = args.table or list(ch.CHUNK_TABLES)
+    infos = {r.info.key: r.info for r in files.read_records(args.tables) if r.info.key in keys}
+    if missing := [k for k in keys if k not in infos]:
+        raise SystemExit(f"not in {args.tables}: {', '.join(missing)}")
+    started = time.perf_counter()
+    registry, hashes = [], []
+    for key in keys:
+        parquet = args.data_dir / infos[key].parquet
+        part = ch.region_registry(parquet, infos[key])
+        if (n := sum(c.rows for c in part)) != infos[key].rows:
+            raise SystemExit(f"{key}: chunks cover {n} rows, tables.jsonl says {infos[key].rows}")
+        hashes.append(ch.file_sha256(parquet))
+        registry += part
+        print(f"{key}: {len(part)} regions, {n} rows")
+    ch.write_registry(args.out, registry)
+    print(f"wrote {args.out}: {len(registry)} chunks ({time.perf_counter() - started:.0f}s)")
+    if args.registry_only:
+        return 0
+
+    from kosis_rag.adapters.chroma import chroma_client
+    from kosis_rag.adapters.models import kure_embedder
+
+    docs = [ch.to_document(c, infos[c.table_key]) for c in registry]
+    metas = [ch.to_metadata(c, infos[c.table_key]) for c in registry]
+    embed, count_tokens, max_tokens = kure_embedder(args.device)
+    longest = max(count_tokens(d) for d in docs)
+    if longest > max_tokens:
+        raise SystemExit(f"a chunk has {longest} tokens, over the model limit {max_tokens}")
+    started = time.perf_counter()
+    vectors = [v for i in range(0, len(docs), 256) for v in embed(docs[i:i + 256])]
+    print(f"embedded {len(docs)} chunks ({time.perf_counter() - started:.0f}s), max {longest} tokens")
+    data_sha256 = "|".join(hashes)
+    name = args.collection or ch.collection_name(data_sha256)
+    record = ch.chunk_record(index_version_now(), hashlib.sha256(data_sha256.encode()).hexdigest(), registry,
+                             len(vectors[0]), longest)
+    count = chroma.load(chroma_client(chroma_config(args, env)), [c.id for c in registry], docs, metas, vectors,
+                        name, record)
+    print(f"collection {name}: {count} chunks (the table collection is unchanged)")
+    return 0 if count == len(registry) else 1
 
 
 def run_text(args: argparse.Namespace) -> int:
@@ -308,6 +367,8 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         return run_sigungu(args)
     if args.command == "chroma":
         return run_chroma(args, env)
+    if args.command == "chunks":
+        return run_chunks(args, env)
     if args.command == "text":
         return run_text(args)
     if args.command == "hq-build":
