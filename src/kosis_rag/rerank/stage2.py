@@ -29,9 +29,9 @@ def rerank_stage2(query: str, docs: list[Document], select: Select, *, k_in: int
     In: query = the user question; docs = candidates in current rank order (metadata["key"] set);
         select = (question, keys) -> picked keys, or an object with .keys/.calls/.usage/.reason;
         k_in = how many from the top the LLM sees; name = the re-ranker's name for metadata["stage2"].
-    Out: picked docs first (in input order), then the rest; every doc gets stage2, stage2_picked, stage2_picked_n,
-         stage2_reason, stage2_input_top_score, stage2_error, stage2_calls, stage2_input_tokens,
-         stage2_output_tokens and stage2_seconds. Keys the LLM invents are dropped.
+    Out: picked docs first (in the order the LLM gave), then the rest in input order; every doc gets stage2,
+         stage2_picked, stage2_picked_n, stage2_reason, stage2_input_top_score, stage2_error, stage2_calls,
+         stage2_input_tokens, stage2_output_tokens and stage2_seconds. Keys the LLM invents are dropped.
     Side effects: calls `select` (an LLM API in production); its exceptions are caught and stored in stage2_error,
         and the input order is kept.
     Node: rerank2.
@@ -40,6 +40,7 @@ def rerank_stage2(query: str, docs: list[Document], select: Select, *, k_in: int
     # 1. ask the LLM; a failure keeps the input order
     started = time.perf_counter()
     calls, usage, reason, error = 0, {}, None, None
+    picked_keys: list[str] = []
     try:
         out = select(query, keys) if keys else []
         picked_keys = list(getattr(out, "keys", out))
@@ -55,8 +56,9 @@ def rerank_stage2(query: str, docs: list[Document], select: Select, *, k_in: int
             "stage2_input_tokens": usage.get("promptTokens", usage.get("input_tokens")),
             "stage2_output_tokens": usage.get("completionTokens", usage.get("output_tokens")),
             "stage2_seconds": time.perf_counter() - started}
-    # 3. picked first in input order, then the rest
-    first = [d for d in docs if d.metadata["key"] in picked]
+    # 3. picked first in the LLM's order (its rank-1 choice stays first), then the rest in input order
+    by_key = {d.metadata["key"]: d for d in docs}
+    first = [by_key[k] for k in dict.fromkeys(picked_keys) if k in picked]
     rest = [d for d in docs if d.metadata["key"] not in picked]
     return [Document(page_content=d.page_content, id=d.id,
                      metadata={**d.metadata, **meta, "stage2_picked": d.metadata["key"] in picked})

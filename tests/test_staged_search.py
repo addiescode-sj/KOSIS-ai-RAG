@@ -170,10 +170,10 @@ def test_stage1_empty_input():
 # --- stage 2 ---
 
 @offline
-def test_stage2_puts_picked_first_in_stage1_order_and_drops_unknown_keys():
+def test_stage2_puts_picked_first_in_llm_order_and_drops_unknown_keys():
     base = ListRetriever(keys=["a", "b", "c", "d"])
     docs = LLMReranker(base=base, select=lambda q, ks: ["c", "zzz", "b"], k_in=3).invoke("q")
-    assert _keys(docs) == ["b", "c", "a", "d"]
+    assert _keys(docs) == ["c", "b", "a", "d"]  # the LLM's rank-1 pick stays first
     assert docs[0].metadata["stage2_picked"] and docs[0].metadata["stage2_picked_n"] == 2
     assert not docs[2].metadata["stage2_picked"]
 
