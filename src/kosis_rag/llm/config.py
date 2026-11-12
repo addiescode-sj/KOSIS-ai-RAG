@@ -35,6 +35,7 @@ class LLMConfig(BaseModel):
     retry_interval: float = 0.0  # seconds between a caller's repeated calls (Phase 1 summarize_stat); the clients here
     # do not use it (HCXClient keeps Phase 1's RETRY_DELAYS)
     timeout: float | None = None  # request timeout in seconds; None = the client's default (clova_chat: 60)
+    base_url: str | None = None  # openai only: an OpenAI-compatible server (e.g. vLLM .../v1); None = OpenAI (T3-23)
 
 
 def require_key(config: LLMConfig | None) -> str | None:

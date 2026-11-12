@@ -61,6 +61,8 @@ class OpenAIClient:
         key = require_key(self.config)
         extra = {"seed": self.seed} if self.seed is not None else {}
         client_args: dict[str, Any] = {"timeout": self.config.timeout} if self.config.timeout is not None else {}
+        if self.config.base_url:  # an OpenAI-compatible server (T3-23: a local vLLM model as stage 2)
+            client_args["base_url"] = self.config.base_url
         r = OpenAI(api_key=key, max_retries=5, **client_args).chat.completions.create(
             model=self.model, temperature=self.temperature, max_tokens=self.max_tokens,
             response_format={"type": "json_object"},

@@ -29,14 +29,18 @@ STAGE2_LLM: dict[str, tuple[str, str]] = {
 }
 
 
-def default_config(name: str, *, api_key: str | SecretStr | None = None, thinking: str = "none") -> LLMConfig:
+def default_config(name: str, *, api_key: str | SecretStr | None = None, thinking: str = "none",
+                   model: str | None = None, base_url: str | None = None) -> LLMConfig:
     """The LLMConfig a stage 2 name runs with by default (provider and model of STAGE2_LLM).
 
     In: name = a LLM_RERANKERS key; api_key = the provider's key (None: LLMKeyMissing at rerank2);
-        thinking = HCX-007 thinking.effort. Out: LLMConfig. Side effects: KeyError for an unknown name. Node: none.
+        thinking = HCX-007 thinking.effort; model = another model name (None: STAGE2_LLM's); base_url = an
+        OpenAI-compatible server for "gpt" (None: OpenAI; T3-23). Out: LLMConfig. Side effects: KeyError for an
+        unknown name. Node: none.
     """
-    provider, model = STAGE2_LLM[name]
-    return LLMConfig(provider=provider, api_key=api_key or None, model=model, thinking=thinking)
+    provider, default_model = STAGE2_LLM[name]
+    return LLMConfig(provider=provider, api_key=api_key or None, model=model or default_model, thinking=thinking,
+                     base_url=base_url or None)
 
 
 def clova(text_of: dict[str, str], config: LLMConfig) -> Select:

@@ -9,7 +9,7 @@ MAX_TOKENS = {"none": 512, "low": 5120, "medium": 5120, "high": 8192}
 # v2 (T2-09 dev): v1 asked for tables "that directly hold the number" and refused even rank-1 gold tables
 # (lab/T2-09-hcx-no-answer/prompt_v1.txt); v2 asks for the measure only and leaves years and region detail to code.
 # v3 clarifies the selector contract and examples while preserving v2's measure-only decision boundary.
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 PROMPT_FILE = f"stage2-hcx-{PROMPT_VERSION}.md"  # rerank/prompts/<file>: the HCX selector's system prompt
 GPT_MODEL = "gpt-4o-mini"  # stage 2 "gpt": the same prompt and parser over OpenAI (T2-09 lab)
 CLOVA_RERANK_MODEL = "reranker"  # stage 2 "clova": the CLOVA Studio reranker API has no model name; a label only
