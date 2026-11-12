@@ -106,10 +106,12 @@ def test_stage2_prompt_file_is_the_old_system_bytes():
 
 
 def test_loader_reads_the_same_text_through_importlib_resources():
+    # T3-23: the active prompt (PROMPT_FILE, v4 now) is read through importlib.resources; v3's bytes stay pinned above
+    active = MD.with_name(constants.PROMPT_FILE).read_text(encoding="utf-8")
     hcx.system_prompt.cache_clear()
-    assert hcx.system_prompt() == OLD_SYSTEM
-    assert (resources.files("kosis_rag.rerank") / "prompts" / constants.PROMPT_FILE).read_text(encoding="utf-8") == OLD_SYSTEM
-    assert constants.PROMPT_FILE == MD.name and constants.MAX_PICK == MAX_PICK
+    assert hcx.system_prompt() == active
+    assert (resources.files("kosis_rag.rerank") / "prompts" / constants.PROMPT_FILE).read_text(encoding="utf-8") == active
+    assert constants.MAX_PICK == MAX_PICK
 
 
 def test_refusal_texts_moved_unchanged():

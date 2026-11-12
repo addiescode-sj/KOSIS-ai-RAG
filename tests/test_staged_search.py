@@ -286,6 +286,7 @@ def test_resolve_ckpt_picks_last_epoch(tmp_path):
         (tmp_path / f"unseen-e{n}.pt").write_bytes(b"x")
     assert resolve_ckpt(tmp_path).name == "unseen-e10.pt"
     assert resolve_ckpt(None) is None and resolve_ckpt("") is None
+    assert resolve_ckpt("base") is None and resolve_ckpt(" Base ") is None  # T3-23: base model, no checkpoint
     with pytest.raises(FileNotFoundError):
         resolve_ckpt(tmp_path / "missing.pt")
     (tmp_path / "seen-e2.pt").write_bytes(b"x")

@@ -32,9 +32,16 @@ QUERY_TOKENS = 512
 PAIR_TOKENS = 512  # (question, table) pair length the re-ranker was trained with
 
 
+BASE_CKPT = "base"  # T3-23: RERANK_CKPT=base / EMBED_CKPT=base = the base model with no checkpoint (a baseline)
+
+
 def resolve_ckpt(path: str | Path | None) -> Path | None:
-    """A `.pt` file, or a run folder holding `<name>-e<N>.pt` files of one name (its last epoch). None / "" -> None."""
-    if not path:
+    """A `.pt` file, or a run folder holding `<name>-e<N>.pt` files of one name (its last epoch). None / "" / "base" -> None.
+
+    "base" keeps a stage on with the public base weights (spec.rerank_ckpt="base": stage 1 runs the untrained
+    cross-encoder), where None / "" turns stage 1 off.
+    """
+    if not path or (isinstance(path, str) and path.strip().lower() == BASE_CKPT):
         return None
     path = Path(path)
     if path.is_dir():
