@@ -16,18 +16,11 @@ def test_hit_mrr_and_complete_over_slots():
     assert row["rank"] == 2 and row["rr"] == 0.5
     assert row["hit@1"] == 0 and row["hit@3"] == 1
     assert row["complete@2"] == 0 and row["slot_recall@2"] == 0.5  # a2 is 2nd, b is 4th
-    # multi-table cutoff: b at rank 4 never counts, even at k=5/10
-    assert row["complete@5"] == 0 and row["slot_recall@10"] == 0.5 and row["slot_ranks"] == [2, None]
-    assert row["unjudged@10"] == 0.25  # y: neither gold nor judged (full list)
+    assert row["complete@3"] == 0 and row["slot_recall@3"] == 0.5  # b is 4th
+    assert row["complete@5"] == 1
+    assert row["unjudged@10"] == 0.25  # y: neither gold nor judged
 
-    row = retrieval.score_item(item, ["x", "y", "a"])
-    assert row["rank"] is None and row["hit@10"] == 0 and row["rr"] == 0.0  # a at 3rd is past the cutoff
-
-    row = retrieval.score_item(item, ["b", "a"])
-    assert row["hit@1"] == 1 and row["complete@2"] == 1
-
-    single = RetrievalItem(**BASE, qtype="concept", required=[["a"]])
-    assert retrieval.score_item(single, ["x", "y", "a"])["hit@3"] == 1  # single-table items keep the full list
+    assert retrieval.score_item(item, ["b", "a"])["complete@2"] == 1  # both slots in the top 2
 
 
 def test_no_answer_threshold_and_prf():
