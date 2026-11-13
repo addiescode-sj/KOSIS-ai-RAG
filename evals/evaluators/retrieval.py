@@ -12,7 +12,8 @@ from collections import defaultdict
 
 from evals.schemas import RetrievalItem
 
-KS = (1, 3, 5, 10)
+KS = (1, 2, 3, 5, 10)
+MULTI_TABLE_CUTOFF = 2  # multi-table items: a gold table counts only at rank 1-2; lower ranks score as a miss
 
 
 def first_rank(item: RetrievalItem, keys: list[str]) -> int | None:
@@ -31,13 +32,18 @@ def slot_ranks(item: RetrievalItem, keys: list[str]) -> list[int | None]:
 
 
 def score_item(item: RetrievalItem, keys: list[str], judged: set[str] | None = None) -> dict:
-    """Metrics of one answerable item for its ranked keys. judged: keys a person looked at for this item."""
-    rank = first_rank(item, keys)
-    row = {"rank": rank, "rr": 1 / rank if rank else 0.0, "slot_ranks": slot_ranks(item, keys)}
+    """Metrics of one answerable item for its ranked keys. judged: keys a person looked at for this item.
+
+    Multi-table items are scored on the top MULTI_TABLE_CUTOFF keys only, so every rank-based metric (Hit@k, MRR,
+    Complete@k, SlotRecall@k, slot_ranks) ignores a gold table below rank 2. unjudged@10 still sees the full list.
+    """
+    scored = keys[:MULTI_TABLE_CUTOFF] if len(item.required) > 1 else keys
+    rank = first_rank(item, scored)
+    row = {"rank": rank, "rr": 1 / rank if rank else 0.0, "slot_ranks": slot_ranks(item, scored)}
     for k in KS:
         row[f"hit@{k}"] = int(rank is not None and rank <= k)
-        row[f"complete@{k}"] = int(slots_covered(item, keys, k) == len(item.required))
-        row[f"slot_recall@{k}"] = slots_covered(item, keys, k) / len(item.required)
+        row[f"complete@{k}"] = int(slots_covered(item, scored, k) == len(item.required))
+        row[f"slot_recall@{k}"] = slots_covered(item, scored, k) / len(item.required)
     if judged is not None:
         top = keys[:10]
         row["unjudged@10"] = sum(1 for key in top if key not in judged and key not in item.gold_keys) / max(len(top), 1)
