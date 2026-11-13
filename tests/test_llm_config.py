@@ -101,7 +101,7 @@ def test_clova_chat_takes_the_config():
 
 def test_stage2_defaults_and_selector_settings():
     assert {n: (c := selectors.default_config(n)).provider for n in selectors.LLM_RERANKERS} == {
-        "clova": "clova_rerank", "hcx": "hcx", "gpt": "openai"}
+        "clova": "clova_rerank", "hcx": "hcx", "gpt": "openai", "jev": "systemone"}
     assert selectors.default_config("hcx").model == "HCX-007" and selectors.default_config("gpt").model == "gpt-4o-mini"
     config = selectors.default_config("hcx", api_key=SECRET, thinking="low")
     select = selectors.LLM_RERANKERS["hcx"]({"a": "A"}, config)

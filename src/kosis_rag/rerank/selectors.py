@@ -3,6 +3,7 @@
     clova  CLOVA Studio reranker API (llm.clova_rerank.ClovaReranker)             provider clova_rerank
     hcx    HCX-007 picks numbered tables, may pick none (rerank.hcx.HcxSelector)  provider hcx
     gpt    the same prompt and parser over OpenAI (HcxSelector + llm.openai)      provider openai
+    jev    a Jev-style decision model over /v1/systemone (rerank.systemone)      provider systemone
 
 The key is in the config (LLMConfig.api_key); a selector reads it at its first call, and the rerank2 node refuses a
 config without one before that (LLMKeyMissing). Another LLM re-ranker is one more entry with the same signature.
@@ -17,30 +18,36 @@ from pydantic import SecretStr
 from kosis_rag.llm.clova_rerank import ClovaReranker
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.llm.openai import OpenAIClient
-from kosis_rag.rerank.constants import CLOVA_RERANK_MODEL, GPT_MODEL, MODEL
+from kosis_rag.rerank.constants import CLOVA_RERANK_MODEL, GPT_MODEL, JEV_MODEL, MODEL
 from kosis_rag.rerank.hcx import HcxSelector
 from kosis_rag.rerank.stage2 import Select
+from kosis_rag.rerank.systemone import DecisionSelector
 
 # stage 2 name -> (LLMConfig.provider, default model)
 STAGE2_LLM: dict[str, tuple[str, str]] = {
     "clova": ("clova_rerank", CLOVA_RERANK_MODEL),
     "hcx": ("hcx", MODEL),
     "gpt": ("openai", GPT_MODEL),
+    "jev": ("systemone", JEV_MODEL),
 }
 
 
 def default_config(name: str, *, api_key: str | SecretStr | None = None, thinking: str = "none",
-                   model: str | None = None, base_url: str | None = None) -> LLMConfig:
+                   model: str | None = None, base_url: str | None = None, decision_mode: str | None = None,
+                   threshold: float | None = None, prompt_version: str | None = None) -> LLMConfig:
     """The LLMConfig a stage 2 name runs with by default (provider and model of STAGE2_LLM).
 
     In: name = a LLM_RERANKERS key; api_key = the provider's key (None: LLMKeyMissing at rerank2);
         thinking = HCX-007 thinking.effort; model = another model name (None: STAGE2_LLM's); base_url = an
-        OpenAI-compatible server for "gpt" (None: OpenAI; T3-23). Out: LLMConfig. Side effects: KeyError for an
-        unknown name. Node: none.
+        OpenAI-compatible server for "gpt" (None: OpenAI; T3-23), or the /v1/systemone server for "jev" (required);
+        decision_mode / threshold / prompt_version = "jev" only (None: noul, the mode's JEV_THRESHOLD,
+        JEV_PROMPT_VERSION). Out: LLMConfig.
+        Side effects: KeyError for an unknown name. Node: none.
     """
     provider, default_model = STAGE2_LLM[name]
     return LLMConfig(provider=provider, api_key=api_key or None, model=model or default_model, thinking=thinking,
-                     base_url=base_url or None)
+                     base_url=base_url or None, decision_mode=decision_mode or None, threshold=threshold,
+                     prompt_version=prompt_version or None)
 
 
 def clova(text_of: dict[str, str], config: LLMConfig) -> Select:
@@ -55,8 +62,13 @@ def gpt(text_of: dict[str, str], config: LLMConfig) -> Select:
     return HcxSelector(text_of=text_of, config=config, client=OpenAIClient(config))
 
 
+def jev(text_of: dict[str, str], config: LLMConfig) -> Select:
+    return DecisionSelector(text_of=text_of, config=config)
+
+
 LLM_RERANKERS: dict[str, Callable[[dict[str, str], LLMConfig], Select]] = {
     "clova": clova,
     "hcx": hcx,
     "gpt": gpt,
+    "jev": jev,
 }

@@ -12,4 +12,9 @@ MAX_TOKENS = {"none": 512, "low": 5120, "medium": 5120, "high": 8192}
 PROMPT_VERSION = "v4"
 PROMPT_FILE = f"stage2-hcx-{PROMPT_VERSION}.md"  # rerank/prompts/<file>: the HCX selector's system prompt
 GPT_MODEL = "gpt-4o-mini"  # stage 2 "gpt": the same prompt and parser over OpenAI (T2-09 lab)
+JEV_MODEL = "Cloudflare/clef-flash"  # stage 2 "jev": a Jev-style decision model over /v1/systemone (T3-23)
+JEV_MODES = ("noul", "choice")
+JEV_THRESHOLD = {"noul": 0.5, "choice": 0.05}  # default pick threshold per mode (choice: probabilities sum to 1)
+# the jev prompt: rerank/prompts/stage2-jev-<mode>-<version>.md (rerank.systemone.jev_prompt); JEV_PROMPT picks another
+JEV_PROMPT_VERSION = "v2"
 CLOVA_RERANK_MODEL = "reranker"  # stage 2 "clova": the CLOVA Studio reranker API has no model name; a label only
