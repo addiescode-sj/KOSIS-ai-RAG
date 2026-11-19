@@ -1,8 +1,8 @@
 """The staged table search as a LangGraph StateGraph (T2-10): one node per stage over one shared state.
 
                                          +-> retrieve_dense ---+
-    START -> parse -> condition -> [embed] +-> retrieve_bm25 ----+-> fuse -> [rerank1] -> [rerank2] -> gate -> END
-                                         +-> [retrieve_hq] ----+
+    START -> parse -> condition -> [embed] +-> retrieve_bm25 ----+-> fuse -> [rerank1] -> [answerable] -> [rerank2]
+                                         +-> [retrieve_hq] ----+                                     -> gate -> END
                                          +-> [retrieve_hq_bm25]+
 
 Each node calls the same function the old nested retrievers call (T2-41 S2: the parse / retrieve step functions
@@ -37,6 +37,10 @@ has no row) and add_search_edges wires it; the state is schemas.state.SearchStat
 T2-41 S5: the module graph ends at gate (route found | refuse) and holds no LLM client; the app's answer nodes
 (refuse | guide: the guide sentence, its check, the citations and the token stream) are backend/app/respond, which
 builds its own graph from graph_nodes and add_search_edges (backend.app.respond.graph.build_answer_graph).
+
+KOS-193: answerable (answerable.node.judge) runs the answerability classifier on the stage 1 top when the resources
+hold an answer scorer (ANSWER_CKPT). A question it refuses skips rerank2's LLM call and gate refuses it with
+"not_answerable"; without an answer scorer the graph is the one above without the node.
 """
 
 from __future__ import annotations
@@ -46,6 +50,8 @@ from typing import Any, Callable, Iterator
 
 from langgraph.graph import END, START, StateGraph
 
+from kosis_rag.answerable import node as answer_step
+from kosis_rag.answerable.schemas import AnswerInput
 from kosis_rag.gate import node as gate_step
 from kosis_rag.gate.node import GateInput
 from kosis_rag.graph.spans import timed as _timed
@@ -67,10 +73,11 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
 
     In: as build_graph.
     Out: name -> fn(SearchState) -> state update: parse, condition, [embed], retrieve_<list> per list (dense, bm25,
-        [hq], [hq_bm25]), fuse, [rerank1], [rerank2], gate. retrieve_hq is present only when
+        [hq], [hq_bm25]), fuse, [rerank1], [answerable], [rerank2], gate. retrieve_hq is present only when
         resources.hq is set, retrieve_hq_bm25 only when resources.hq_bm25 is set (T2-39, HQ_BUILD / HQ_BM25), embed
         only when two or more lists embed the question (an embed_query field: dense and hq), rerank1 only when
-        resources.stage1_score is set, rerank2 only when resources.select is set.
+        resources.stage1_score is set, answerable only when resources.answer_score is set (KOS-193, ANSWER_CKPT; a
+        resources object without the attribute counts as unset), rerank2 only when resources.select is set.
     Side effects: none when made; calling a node does what its docstring says. Node: none (it makes them).
     """
     def timed(name: str, state: SearchState, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
@@ -168,15 +175,35 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
         docs = rerank_step.rerank1(Stage1Input(question=state.question, docs=state.docs), resources).docs
         return {"docs": docs, "trace": timed("rerank1", state, started)}
 
+    def answerable(state: SearchState) -> dict:
+        """Judge with the answerability classifier whether the stage 1 top can answer the question (KOS-193).
+
+        In: state.question, state.docs.
+        Out: {"docs": same order, answer_top_score / answer_refused on every doc and answer_score on each scored one,
+            "trace" (top_score, refused, theta, n_scored)}.
+        Side effects: classifier inference over the first answer_top docs. Node: answerable (step:
+        answerable.node.judge).
+        """
+        started = time.perf_counter()
+        out = answer_step.judge(AnswerInput(question=state.question, docs=state.docs), resources)
+        return {"docs": out.docs, "trace": timed("answerable", state, started, top_score=out.top_score,
+                                                 refused=out.refused, theta=resources.options.answer_theta,
+                                                 n_scored=out.n_scored)}
+
     def rerank2(state: SearchState) -> dict:
         """Let the stage 2 LLM pick among the top stage2_k.
 
         In: state.question, state.docs.
-        Out: {"docs": picked first with stage2_* metadata, "trace": with the top doc's stage2_* fields}.
+        Out: {"docs": picked first with stage2_* metadata, "trace": with the top doc's stage2_* fields}. When the
+            answerable node refused the question (answer_refused on the top doc, KOS-193): the docs unchanged and
+            "trace" with skipped="answer_refused".
         Side effects: LLMKeyMissing on entry when resources.stage2_llm has no key (T2-41 S3); one LLM re-ranker call
-        (CLOVA / HCX / OpenAI); its errors are stored in stage2_error. Node: rerank2 (step: rerank.node.rerank2).
+        (CLOVA / HCX / OpenAI); its errors are stored in stage2_error. None (no key check, no call) when skipped.
+        Node: rerank2 (step: rerank.node.rerank2).
         """
         started = time.perf_counter()
+        if state.docs and state.docs[0].metadata.get("answer_refused"):  # gate refuses it: no LLM call
+            return {"docs": state.docs, "trace": timed("rerank2", state, started, skipped="answer_refused")}
         docs = rerank_step.rerank2(Stage2Input(question=state.question, docs=state.docs), resources).docs
         stage2 = {key: v for key, v in docs[0].metadata.items() if key.startswith("stage2")} if docs else {}
         return {"docs": docs, "trace": timed("rerank2", state, started, **stage2)}
@@ -208,6 +235,7 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
         *((name, fn, True) for name, fn in branches),
         ("fuse", fuse, True),
         ("rerank1", rerank1, resources.stage1_score is not None),
+        ("answerable", answerable, getattr(resources, "answer_score", None) is not None),
         ("rerank2", rerank2, resources.select is not None),
         ("gate", gate, True),
     ]
@@ -216,15 +244,16 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
 
 def add_search_edges(g: StateGraph, nodes: dict[str, Node]) -> None:
     """Wire graph_nodes' table into g: parse -> condition [-> embed] -> every list at once -> fuse (waits for all),
-    then a line through the stages that are on, up to gate. What follows gate is the caller's: build_graph ends it
-    (gate -> END), the backend's answer graph branches it (refuse | guide, backend.app.respond.graph).
+    then a line through the stages that are on ([rerank1] -> [answerable] -> [rerank2]), up to gate. What follows
+    gate is the caller's: build_graph ends it (gate -> END), the backend's answer graph branches it (refuse | guide,
+    backend.app.respond.graph).
 
     In: g = a StateGraph with the nodes already added; nodes = graph_nodes(...) (or a table with the same names).
     Out: None. Side effects: adds the edges to g. Node: none.
     """
     branches = [name for name in nodes if name.startswith("retrieve_")]
     fan_out = "embed" if "embed" in nodes else "condition"  # the node the list branches start from
-    stages = ["fuse", *(name for name in ("rerank1", "rerank2") if name in nodes)]
+    stages = ["fuse", *(name for name in ("rerank1", "answerable", "rerank2") if name in nodes)]
     g.add_edge(START, "parse")
     g.add_edge("parse", "condition")
     if fan_out == "embed":
@@ -247,7 +276,8 @@ def build_graph(resources: SearchResources, *, k: int = 5):
     Out: a compiled LangGraph graph over SearchState with graph_nodes' nodes: retrieve_hq is added only when
         resources.hq is set, retrieve_hq_bm25 only when resources.hq_bm25 is set (T2-39, HQ_BUILD / HQ_BM25), embed
         only when two or more lists embed the question (an embed_query field: dense and hq), rerank1 only when
-        resources.stage1_score is set, rerank2 only when resources.select is set.
+        resources.stage1_score is set, answerable only when resources.answer_score is set (KOS-193), rerank2 only
+        when resources.select is set.
     Side effects: none when built; running it calls the retrievers, the models and the LLMs the resources hold.
     Node: none (it builds them).
     """

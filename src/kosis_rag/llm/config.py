@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, SecretStr
 
-Provider = Literal["clova_chat", "clova_rerank", "hcx", "openai", "mock"]
+Provider = Literal["clova_chat", "clova_rerank", "hcx", "openai", "systemone", "mock"]
 
 
 class LLMKeyMissing(RuntimeError):
@@ -36,6 +36,10 @@ class LLMConfig(BaseModel):
     # do not use it (HCXClient keeps Phase 1's RETRY_DELAYS)
     timeout: float | None = None  # request timeout in seconds; None = the client's default (clova_chat: 60)
     base_url: str | None = None  # openai only: an OpenAI-compatible server (e.g. vLLM .../v1); None = OpenAI (T3-23)
+    # systemone (base_url required: a /v1/systemone server, e.g. the Colab Clef-Flash server .../v1; T3-23 Jev)
+    decision_mode: str | None = None  # stage 2 "jev": noul (one true/false per table) | choice; None = noul
+    threshold: float | None = None  # stage 2 "jev": a table is picked when its probability >= this; None = mode default
+    prompt_version: str | None = None  # stage 2 "jev": rerank/prompts/stage2-jev-<mode>-<this>.md; None = JEV_PROMPT_VERSION
 
 
 def require_key(config: LLMConfig | None) -> str | None:

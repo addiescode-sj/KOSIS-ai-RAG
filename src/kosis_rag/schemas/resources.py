@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -44,6 +44,8 @@ class IndexSpec(BaseModel):
     rerank_ckpt: str | None = None  # None = no stage 1 (RERANK_CKPT)
     hq_build: str | None = None  # T2-39 question index build id (HQ_BUILD); None = off
     hq_root: Path | None = None  # data/hq (None: adapters.files.HQ_DIR)
+    # KOS-193: answerability classifier checkpoint .pt (its .json beside it); None = off (ANSWER_CKPT)
+    answer_ckpt: str | None = None
     device: str | None = None  # cpu | cuda; None = auto
 
 
@@ -51,6 +53,9 @@ class SearchOptions(BaseModel):
     """How the search behaves (T2-41 S4). Defaults = the old settings object's defaults."""
 
     cond_filter: bool = True  # T2-14 conditions before the lists (COND_FILTER)
+    # KOS-192: which conditions filter when cond_filter is on. all = every condition (as before); years = only the
+    # years and the period range (cycle, 시도, breakdowns and measures neither drop nor re-rank a table)
+    cond_scope: Literal["all", "years"] = "all"
     pool: int = 50  # tables each list keeps before RRF, and the fusion hands on
     rerank_mode: str = "blend"  # stage 1: blend | score (RERANK_MODE)
     rerank_n: int = 50
@@ -59,15 +64,23 @@ class SearchOptions(BaseModel):
     answer_k: int = 5  # candidate tables handed to gate / guide when a request gives no k (ANSWER_K, T2-39)
     hq_weight: float = 1.0  # RRF weight of the question lists (HQ_WEIGHT)
     hq_bm25: bool = False  # also BM25 over each table's questions (HQ_BM25)
+    # KOS-193: refuse when the best classifier logit of the first answer_top docs (after stage 1) is < this; required
+    # when the classifier is on (ANSWER_THETA)
+    answer_theta: float | None = None
+    answer_top: int = 5  # docs the answerability classifier scores
 
     def label(self, spec: IndexSpec) -> str:
-        """The setup's short name, as the old settings' label() gave it: "hybrid+cond+hq -> stage1-blend -> hcx"."""
+        """The setup's short name, as the old settings' label() gave it: "hybrid+cond+hq -> stage1-blend -> hcx"
+        ("... -> stage1-blend -> answerable -> hcx" with the answerability classifier, spec.answer_ckpt)."""
         hq = ""
         if spec.hq_build:
             hq = "+hq" + ("+hqbm25" if self.hq_bm25 else "") + (f"(w{self.hq_weight:g})" if self.hq_weight != 1.0 else "")
-        parts = ["hybrid" + ("+cond" if self.cond_filter else "") + hq]
+        cond = ("+cond" + ("(years)" if self.cond_scope == "years" else "")) if self.cond_filter else ""
+        parts = ["hybrid" + cond + hq]
         if spec.rerank_ckpt:
             parts.append(f"stage1-{self.rerank_mode}")
+        if spec.answer_ckpt:
+            parts.append("answerable")
         if self.stage2 not in OFF:
             parts.append(self.stage2)
         return " -> ".join(parts)
@@ -76,8 +89,8 @@ class SearchOptions(BaseModel):
 @dataclass
 class SearchResources:
     """Everything load_resources opens once: records, dense list, BM25, text format, stage 1 scorer, stage 2 selector,
-    question index, 시군구 dictionary — with the options and spec they were opened for (T2-41 S4: was
-    pipeline.SearchResources with `settings`).
+    question index, 시군구 dictionary, answerability scorer (KOS-193) — with the options and spec they were opened for
+    (T2-41 S4: was pipeline.SearchResources with `settings`).
 
     Shared by the old path (legacy.pipeline.build_search wraps them as nested retrievers) and the graph (graph.search
     closes its nodes over them), so both search with the same objects. The step functions read `options`.
@@ -96,3 +109,4 @@ class SearchResources:
     hq: Any | None = None  # T2-39 question index, dense (legacy.retrievers.HqRetriever); None = off
     hq_bm25: Any | None = None  # T2-39 question index, BM25 over each table's questions; None = off
     sigungu: dict[str, list[str]] = field(default_factory=dict)  # 시군구 -> 시도 names parse reads (P2-D9)
+    answer_score: Any | None = None  # KOS-193: (question, table keys) -> one classifier logit per key; None = off

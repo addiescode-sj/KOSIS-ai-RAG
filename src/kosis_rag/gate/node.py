@@ -24,7 +24,8 @@ class GateInput(BoundaryModel):
 
 
 class GateOutput(BoundaryModel):
-    """Out of gate: the route and, for a stage 2 refusal, its reason (stage2_reason, possibly None)."""
+    """Out of gate: the route and, for a refusal, its reason (stage2_reason, possibly None; "not_answerable" when the
+    answerability classifier refused, KOS-193)."""
 
     route: Route
     refusal_reason: str | None = None
@@ -34,8 +35,10 @@ def decide_route(inp: GateInput, resources: Any = None) -> GateOutput:
     """Decide whether the search refuses (before any guide LLM call in the app).
 
     In: inp.docs = the tables shown to the answer (cut to k), in rank order; resources = unused (step signature).
-    Out: GateOutput. "refuse" when there are no docs, or when stage 2 ran without error and picked nothing (T2-09;
-        the reason is its stage2_reason, possibly None); otherwise ("found", None). A stage 2 error is not a
+    Out: GateOutput. "refuse" when there are no docs; with reason "not_answerable" when the answerability classifier
+        refused the question (answer_refused on the top doc, KOS-193; stage 2 was skipped); or when stage 2 ran
+        without error and picked nothing (T2-09; the reason is its stage2_reason, possibly None); otherwise
+        ("found", None). A stage 2 error is not a
         refusal: the answer keeps the stage 1 order.
     Side effects: none.
     Node: gate.
@@ -43,6 +46,8 @@ def decide_route(inp: GateInput, resources: Any = None) -> GateOutput:
     if not inp.docs:
         return GateOutput(route="refuse")
     meta = inp.docs[0].metadata
+    if meta.get("answer_refused"):  # the answerability classifier's verdict (KOS-193): stage 2 did not run
+        return GateOutput(route="refuse", refusal_reason="not_answerable")
     if meta.get("stage2_picked_n") == 0 and not meta.get("stage2_error"):  # the LLM re-ranker picked nothing (T2-09)
         return GateOutput(route="refuse", refusal_reason=meta.get("stage2_reason"))
     return GateOutput(route="found")

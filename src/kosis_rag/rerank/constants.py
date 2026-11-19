@@ -11,5 +11,14 @@ MAX_TOKENS = {"none": 512, "low": 5120, "medium": 5120, "high": 8192}
 # v3 clarifies the selector contract and examples while preserving v2's measure-only decision boundary.
 PROMPT_VERSION = "v4"
 PROMPT_FILE = f"stage2-hcx-{PROMPT_VERSION}.md"  # rerank/prompts/<file>: the HCX selector's system prompt
+# KOS-192 (opt-in, the rewrite path only): v4 plus how to read the user message's HINT_LABEL line; the graph and the
+# default selector keep PROMPT_FILE
+PROMPT_FILE_RW = "stage2-hcx-v5-rw.md"
+HINT_LABEL = "검색용 표현"  # the user message line `검색용 표현: <rewrite>` under the question (hcx.user_message hint)
 GPT_MODEL = "gpt-4o-mini"  # stage 2 "gpt": the same prompt and parser over OpenAI (T2-09 lab)
+JEV_MODEL = "Cloudflare/clef-flash"  # stage 2 "jev": a Jev-style decision model over /v1/systemone (T3-23)
+JEV_MODES = ("noul", "choice")
+JEV_THRESHOLD = {"noul": 0.5, "choice": 0.05}  # default pick threshold per mode (choice: probabilities sum to 1)
+# the jev prompt: rerank/prompts/stage2-jev-<mode>-<version>.md (rerank.systemone.jev_prompt); JEV_PROMPT picks another
+JEV_PROMPT_VERSION = "v2"
 CLOVA_RERANK_MODEL = "reranker"  # stage 2 "clova": the CLOVA Studio reranker API has no model name; a label only

@@ -51,12 +51,13 @@ BUILD_EXCEPTIONS: set[tuple[str, str]] = set()  # S6a review: question-index nam
 CALLERS = tuple(ROOT / d for d in ("backend", "evals", "scripts", "tests", "lab"))
 
 # Stage folders of kosis_rag in data-flow order (a stage may import the ones before it, never the ones after it).
-# S2: parse and retrieve; S3 adds rerank and gate.
-STAGES = ("parse", "retrieve", "rerank", "gate")
+# S2: parse and retrieve; S3 adds rerank and gate. KOS-192 adds rewrite (after stage 1, before stage 2 and gate).
+STAGES = ("parse", "retrieve", "rerank", "rewrite", "gate")
 # What every stage may import from kosis_rag besides the stages before it (and itself).
 STAGE_BASE = ("kosis_rag.schemas", "kosis_rag.shared")
 # S3: what a stage may import besides STAGE_BASE and the stages before it: rerank builds its LLM clients from llm/.
-STAGE_EXTRA = {"rerank": ("kosis_rag.llm",)}
+# KOS-192: rewrite builds its client from llm/ too.
+STAGE_EXTRA = {"rerank": ("kosis_rag.llm",), "rewrite": ("kosis_rag.llm",)}
 # S3: llm/ (transport and the Phase 1 client copies) imports only itself from kosis_rag.
 LLM = MODULE / "llm"
 LLM_ALLOWED = ("kosis_rag.llm",)
@@ -125,7 +126,8 @@ PHASE1_COPIES = {
     "src/kosis_rag/llm/hcx.py": "# copied from Phase 1 kosis_chat/llm/model.py@e248a45",
 }
 # S3 (P2-D22): prompt files that must ship as package data: package -> glob in [tool.setuptools.package-data]
-PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"], "kosis_rag_build.hq": ["prompts/*.md"]}
+PACKAGE_DATA = {"kosis_rag.rerank": ["prompts/*.md"], "kosis_rag_build.hq": ["prompts/*.md"],
+                "kosis_rag.rewrite": ["prompts/*.md"]}  # KOS-192: the query rewriter's prompt
 
 # S5: the token stream writer only where the graph runs: src/kosis_rag/graph/ (the module's nodes write none since
 # guide moved out) and the backend (backend/app/respond/node.py guide); checked for src only (backend may use it).

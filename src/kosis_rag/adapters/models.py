@@ -5,7 +5,7 @@ Both fine-tunings trained only the top layers, so a checkpoint (`.pt`, ~400MB) h
 = the public base model + the checkpoint's tensors put back by name (`strict=False`, but a tensor the base model
 does not have is an error, so a checkpoint for another model never loads silently). On a GPU the model runs in fp16.
 Checkpoints are not in git: they live under data/models/ (gitignored) and `.env` points at them
-(EMBED_CKPT, RERANK_CKPT). Without a checkpoint the base model loads as is (useful as a baseline).
+(EMBED_CKPT, RERANK_CKPT, ANSWER_CKPT). Without a checkpoint the base model loads as is (useful as a baseline).
 
 A model is only right for the table text it was trained on (kosis_rag.shared.tabletext formats). The trainers write a `.json`
 next to each `.pt`; its "doc_format" names that text, and loading with another text format is refused. Checkpoints
@@ -176,6 +176,61 @@ def load_cross_encoder(ckpt: str | Path | None = None, base: str = RERANK_BASE, 
     if device == "cuda":  # after loading, so the fp32 checkpoint is cast once
         hf.half()
     return CrossEncoderScorer(model=ce, name=base, ckpt=ckpt_id(path), batch=batch)
+
+
+ANSWER_TOKENS = 512  # (question, card) pair length of the answerability classifier when its .json gives none
+
+
+@dataclass
+class AnswerScorer:
+    """KOS-193 answerability classifier: score(questions, cards) -> one raw logit per pair (high = the table can
+    answer). The same model and arithmetic as scripts/answerability/score_run.Scorer (fp32 weights, fp16 autocast on a
+    GPU, no sigmoid), so the logits equal the offline ones that ANSWER_THETA was fitted on."""
+
+    model: Any
+    tokenizer: Any
+    name: str  # base model name (the .json's "base")
+    ckpt: str  # ckpt_id
+    card_format: str | None  # the card text the classifier was trained on (the .json's "card_format")
+    device: Any  # torch.device
+    max_length: int = ANSWER_TOKENS
+    batch: int = 16
+
+    def score(self, questions: list[str], cards: list[str]) -> list[float]:
+        import torch
+
+        out: list[float] = []
+        with torch.no_grad():
+            for b in range(0, len(questions), self.batch):
+                enc = self.tokenizer(questions[b:b + self.batch], cards[b:b + self.batch], truncation="longest_first",
+                                     max_length=self.max_length, padding=True, return_tensors="pt").to(self.device)
+                with torch.autocast(device_type=self.device.type, dtype=torch.float16,
+                                    enabled=self.device.type == "cuda"):
+                    out += self.model(**enc).logits.view(-1).float().cpu().tolist()
+        return out
+
+
+def load_answer_scorer(ckpt: str | Path, device: str | None = None, batch: int = 16) -> AnswerScorer:
+    """Load the answerability classifier as score_run.Scorer does: the .json's base model in fp32 with the
+    checkpoint's tensors put back by name (a tensor the base model does not have is an error). Not check_format: its
+    .json names a card_format (answerable.cards), not a table-text doc_format; the caller compares card_format.
+    ValueError when ckpt is empty or "base" (the classifier has no untrained baseline)."""
+    import torch
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    path = resolve_ckpt(ckpt)
+    if path is None:
+        raise ValueError(f"answerability checkpoint {ckpt!r}: give a trained .pt (there is no base classifier)")
+    meta = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    dev = torch.device(_device(device))
+    tokenizer = AutoTokenizer.from_pretrained(meta["base"])
+    model = AutoModelForSequenceClassification.from_pretrained(meta["base"], num_labels=1).float()
+    res = model.load_state_dict(torch.load(path, map_location="cpu"), strict=False)
+    if res.unexpected_keys:
+        raise ValueError(f"{path.name} does not fit {meta['base']}: {res.unexpected_keys[:3]}")
+    return AnswerScorer(model=model.to(dev).eval(), tokenizer=tokenizer, name=meta["base"], ckpt=ckpt_id(path),
+                        card_format=meta.get("card_format"), device=dev,
+                        max_length=int(meta.get("max_length") or ANSWER_TOKENS), batch=batch)
 
 
 Embed = Callable[[list[str]], list[list[float]]]

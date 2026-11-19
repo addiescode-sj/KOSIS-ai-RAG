@@ -8,6 +8,10 @@ constants (chain.py -> gate/texts.py); their old values are copied here too.
 T2-41 S5: the guide prompt (chain.PROMPT, a ChatPromptTemplate of a system and a human string) moved to
 backend/app/respond/prompts/guide-v1.md (system, the separator line, human). OLD_GUIDE_SYSTEM / OLD_GUIDE_HUMAN are
 the old expressions copied verbatim (NO_MATCH = "NO_MATCH"); kept for this moving step only.
+
+KOS-192: the query rewriter's prompt (rewrite/prompts/rewrite-v1.md) is pinned by its sha256: a change to it is a new
+version file, as for the stage 2 prompts. So is the rewrite path's stage 2 prompt (rerank/prompts/stage2-hcx-v5-rw.md:
+v4 plus how to read the `검색용 표현` line), which keeps v4's output format and examples.
 """
 
 import hashlib
@@ -20,6 +24,8 @@ from backend.app.respond import prompts as guide_prompts
 from kosis_rag.gate import texts
 from backend.app.respond.texts import NO_MATCH
 from kosis_rag.rerank import constants, hcx
+from kosis_rag.rewrite import constants as rewrite_constants
+from kosis_rag.rewrite import node as rewrite_node
 
 ROOT = Path(__file__).resolve().parents[1]
 MD = ROOT / "src" / "kosis_rag" / "rerank" / "prompts" / "stage2-hcx-v3.md"
@@ -114,6 +120,41 @@ def test_loader_reads_the_same_text_through_importlib_resources():
     assert constants.MAX_PICK == MAX_PICK
 
 
+REWRITE_MD = ROOT / "src" / "kosis_rag" / "rewrite" / "prompts" / "rewrite-v1.md"
+REWRITE_SHA256 = "e34e92f675868e714be5712ff03a27737f146562d19a6167768bd279d967e9c5"  # KOS-192 rewrite-v1, UTF-8
+REWRITE_V2_MD = REWRITE_MD.with_name("rewrite-v2.md")
+REWRITE_V2_SHA256 = "8c6748c65a0e003cffe18aad527f939b4aaa8633f92979418b907d2e49c21917"  # KOS-192 rewrite-v2, UTF-8
+
+
+def test_rewrite_prompt_is_pinned_and_read_through_importlib_resources():
+    raw = REWRITE_MD.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == REWRITE_SHA256
+    assert b"\r" not in raw and not raw.endswith(b"\n")  # LF only, no trailing newline (as the stage 2 prompts)
+    assert rewrite_constants.PROMPT_FILE == REWRITE_MD.name
+    rewrite_node.system_prompt.cache_clear()
+    assert rewrite_node.system_prompt() == raw.decode("utf-8")
+    assert (resources.files("kosis_rag.rewrite") / "prompts" / rewrite_constants.PROMPT_FILE).read_bytes() == raw
+
+
+RW_MD = MD.with_name("stage2-hcx-v5-rw.md")
+RW_SHA256 = "d936957ad115a95892587058e9e672cc2831f94e11d0568e6a12fc8f9e4f8a3d"  # KOS-192 stage2-hcx-v5-rw, UTF-8
+
+
+def test_rewrite_path_stage2_prompt_is_pinned_and_keeps_v4_contract():
+    raw = RW_MD.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == RW_SHA256
+    assert b"\r" not in raw and not raw.endswith(b"\n")  # LF only, no trailing newline (as the other stage 2 prompts)
+    assert constants.PROMPT_FILE_RW == RW_MD.name
+    assert constants.PROMPT_FILE == "stage2-hcx-v4.md"  # the graph's default prompt is not changed by KOS-192
+    text, v4 = raw.decode("utf-8"), MD.with_name("stage2-hcx-v4.md").read_text(encoding="utf-8")
+    assert v4[v4.index("# 출력 형식"):v4.index("# 예시")] in text  # the same output format (hcx.parse reads both)
+    assert v4.split("# 예시", 1)[1] in text  # v4's examples kept; the rewrite path's examples follow them
+    assert f"{constants.HINT_LABEL}: " in text  # the input format names the hint line
+    hcx.system_prompt.cache_clear()
+    assert hcx.system_prompt(constants.PROMPT_FILE_RW) == text
+    assert (resources.files("kosis_rag.rerank") / "prompts" / constants.PROMPT_FILE_RW).read_bytes() == raw
+
+
 def test_refusal_texts_moved_unchanged():
     assert NO_MATCH == OLD_NO_MATCH
     assert texts.REFUSAL_TEXT == OLD_REFUSAL_TEXT
@@ -137,3 +178,13 @@ def test_guide_loader_gives_the_old_messages_and_template():
     values = {"question": "q", "context": "[1] DT_A | 표"}
     assert new.invoke(values).to_messages() == old.invoke(values).to_messages()
     assert NO_MATCH in OLD_GUIDE_SYSTEM  # the prompt asks for the sentinel the guide reads
+
+def test_rewrite_v2_prompt_bytes_are_pinned():
+    data = REWRITE_V2_MD.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == REWRITE_V2_SHA256
+    assert b"\r" not in data and not data.endswith(b"\n")
+    from kosis_rag.rewrite.constants import PROMPT_FILE, PROMPT_FILE_V2
+    assert (PROMPT_FILE, PROMPT_FILE_V2) == ("rewrite-v1.md", "rewrite-v2.md")  # v1 stays the default
+    rewrite_node.system_prompt.cache_clear()
+    assert rewrite_node.system_prompt(PROMPT_FILE_V2) == data.decode("utf-8")  # the loader the experiments call
+    assert rewrite_node.system_prompt(PROMPT_FILE_V2) != rewrite_node.system_prompt()

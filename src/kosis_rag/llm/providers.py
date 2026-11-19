@@ -3,6 +3,7 @@
     hcx           HCXClient(config)                    (llm/hcx.py, Phase 1 copy; the stage 2 HCX selector)
     openai        OpenAIClient(config)                 (llm/openai.py; stage 2 "gpt", hq question generation)
     clova_rerank  ClovaReranker(config=config, text_of=...)   (llm/clova_rerank.py; stage 2 "clova")
+    systemone     SystemOneClient(config)              (llm/systemone.py; stage 2 "jev", T3-23)
     clova_chat    clova_chat(config) -> ChatClovaX     (the guide LLM: backend/app/respond builds it)
     mock          MockClient()                         (tests and CI only, no key)
 
@@ -20,6 +21,7 @@ from kosis_rag.llm.clova_rerank import ClovaReranker
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.llm.hcx import HCXClient
 from kosis_rag.llm.openai import OpenAIClient
+from kosis_rag.llm.systemone import SystemOneClient
 
 CLOVA_CHAT_TEMPERATURE = 0.0  # Phase 1 configs/model.yaml defaults of the guide model (tests/test_phase1_contract.py)
 CLOVA_CHAT_MAX_TOKENS = 1024
@@ -50,6 +52,7 @@ def clova_chat(config: LLMConfig) -> Any:
 PROVIDERS: dict[str, Callable[..., Any]] = {
     "hcx": HCXClient,
     "openai": OpenAIClient,
+    "systemone": SystemOneClient,
     "clova_rerank": lambda config, **kw: ClovaReranker(config=config, **kw),
     "clova_chat": clova_chat,
     "mock": lambda config, **kw: MockClient(**kw),

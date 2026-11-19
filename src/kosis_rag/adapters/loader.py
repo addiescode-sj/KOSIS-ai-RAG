@@ -3,6 +3,7 @@ SearchOptions instead of the old settings object).
 
     question -> [T2-14 conditions] -> fine-tuned bge-m3 (Chroma) top 50 + BM25 top 50 [+ question index] -> RRF
              -> stage 1: fine-tuned bge-reranker-v2-m3 over the top 50 (when spec.rerank_ckpt is set)
+             -> answerable: answerability classifier over the top answer_top (when spec.answer_ckpt is set, KOS-193)
              -> stage 2: LLM re-ranker over the top 20 (options.stage2 = clova | hcx | gpt | none)
 
 Nothing here reads .env or the environment (§0.6): the caller declares the spec, the options and the stage 2 LLM
@@ -12,7 +13,8 @@ doc_format, which spec.text_format (when set) must match; weights trained on ano
 (adapters.models).
 
 The question index (T2-39) is read by the graph only (graph.search adds retrieve_hq / retrieve_hq_bm25);
-legacy.pipeline.build_search, the nested-retriever path, ignores it.
+legacy.pipeline.build_search, the nested-retriever path, ignores it. It ignores the answerability classifier
+too (KOS-193, answer_score: only graph.search adds the answerable node).
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ import logging
 from typing import Any
 
 from kosis_rag.adapters import files
+from kosis_rag.answerable import cards as answer_cards
+from kosis_rag.answerable.node import card_scorer
 from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever, HqRetriever
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.rerank import selectors
@@ -39,14 +43,15 @@ _SIGUNGU_WARNED: list[bool] = []  # set by the first load_resources that finds n
 def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | None = None,
                    records: list[TableRecord] | None = None, dense: Any | None = None, bm25: Any | None = None,
                    stage1_score: Score | None = None, select: Select | None = None, hq: Any | None = None,
-                   hq_bm25: Any | None = None, sigungu: dict[str, list[str]] | None = None) -> SearchResources:
+                   hq_bm25: Any | None = None, sigungu: dict[str, list[str]] | None = None,
+                   answer_score: Any | None = None) -> SearchResources:
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
     In (keyword only, so spec and options cannot be swapped — search_config_from_shell returns options first):
         spec = paths, Chroma and checkpoints; options = how the search behaves; llm = the stage 2 LLM's config
         (None: selectors.default_config(options.stage2), no key — rerank2 raises LLMKeyMissing on entry);
-        records, dense, bm25, stage1_score, select, hq, hq_bm25, sigungu = parts that replace the loaded ones
-        (tests pass fakes here so nothing real is touched).
+        records, dense, bm25, stage1_score, select, hq, hq_bm25, sigungu, answer_score = parts that replace the loaded
+        ones (tests pass fakes here so nothing real is touched; answer_score = (question, keys) -> one logit per key).
     Out: SearchResources. stage1_score is set when spec.rerank_ckpt is set or a scorer is given; select when
         options.stage2 names a known re-ranker or a selector is given. stage2_name = options.stage2, or "custom" for a
         given selector with stage 2 off. BM25 returns every table when the condition filter is on (it is filtered
@@ -54,14 +59,20 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
         needs options.hq_bm25); otherwise None, even when given. sigungu = the 시군구 -> 시도 dictionary parse reads
         (spec.sigungu or data/sigungu.json, {} when the file is missing). stage2_llm = the config the selector is
         built from (`llm`, else the default config without a key); with a given selector, `llm` (default None:
-        rerank2 checks no key); None when stage 2 is off.
+        rerank2 checks no key); None when stage 2 is off. answer_score (KOS-193) is set when spec.answer_ckpt is set
+        or a scorer is given (graph.search then adds the answerable node), else None.
     Side effects: reads tables.jsonl and sigungu.json (one warning when it is missing), connects to Chroma and loads
         the query embedder, loads the cross-encoder, opens the question collection (reusing the dense retriever's
-        query embedder) and reads its questions.jsonl, unless the matching part is given. Raises ValueError for a
-        spec.text_format that disagrees with the collection or an unknown options.stage2, as before.
+        query embedder) and reads its questions.jsonl, unless the matching part is given; with spec.answer_ckpt and no
+        given answer_score, loads the answerability classifier and reads tables.jsonl again as raw cards. Raises
+        ValueError for a spec.text_format that disagrees with the collection or an unknown options.stage2, as before;
+        and for a classifier trained on another card format, or an answer scorer without options.answer_theta.
     Node: none (called once before build_graph / build_search / SearchModule).
     """
     o = options
+    if (spec.answer_ckpt or answer_score is not None) and o.answer_theta is None:  # before anything heavy is opened
+        raise ValueError("the answerability classifier (ANSWER_CKPT) needs a threshold: set ANSWER_THETA "
+                         "(options.answer_theta)")
     # 1. registry, dense collection and the text format they agree on
     records = records if records is not None else files.read_records(spec.tables or files.TABLES)
     if dense is None:
@@ -110,7 +121,17 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
             hq_bm25 = BM25TableRetriever.from_index(question_index.hq_bm25(
                 rows, by_key, text_of, k=len(records) if o.cond_filter else o.pool))
 
-    # 5. 시군구 -> 시도 names for parse (P2-D9: read here once, not at import)
+    # 5. answerability classifier (KOS-193): between stage 1 and stage 2, over the raw-record cards it was trained on
+    if spec.answer_ckpt and answer_score is None:
+        from kosis_rag.adapters.models import load_answer_scorer
+
+        scorer = load_answer_scorer(spec.answer_ckpt, device=spec.device)
+        if scorer.card_format != answer_cards.CARD_FORMAT:
+            raise ValueError(f"{spec.answer_ckpt} was trained on {scorer.card_format!r} cards, "
+                             f"answerable.cards is {answer_cards.CARD_FORMAT!r}")
+        answer_score = card_scorer(scorer, answer_cards.load_cards(spec.tables or files.TABLES))
+
+    # 6. 시군구 -> 시도 names for parse (P2-D9: read here once, not at import)
     if sigungu is None:
         sigungu = files.load_sigungu(spec.sigungu) if spec.sigungu else files.load_sigungu()
         if not sigungu and not _SIGUNGU_WARNED:
@@ -120,4 +141,4 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
     return SearchResources(options=o, spec=spec, records=by_key, dense=dense, bm25=bm25,
                            text_format=fmt, stage1_score=stage1_score, select=select,
                            stage2_name=o.stage2 if o.stage2 not in OFF else "custom", stage2_llm=stage2_llm,
-                           hq=hq, hq_bm25=hq_bm25, sigungu=sigungu)
+                           hq=hq, hq_bm25=hq_bm25, sigungu=sigungu, answer_score=answer_score)
