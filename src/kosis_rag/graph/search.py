@@ -115,7 +115,7 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
             In: state.question, state.table_filter, state.query_vecs (this list's question vector from embed, if any:
                 the search then uses it instead of calling the embedder).
             Out: {"runs": {name: ranked docs (at most pool)}, "run_removed": {name: key -> why filtered out}, "trace"}.
-            Side effects: the retriever's search (Chroma query or BM25 scoring); ValueError as hybrid_search.
+            Side effects: the retriever's search (vector store query or BM25 scoring); ValueError as hybrid_search.
             Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25 (step: retrieve.node.retrieve_list).
             """
             started = time.perf_counter()
@@ -196,7 +196,7 @@ def graph_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
     # index when loaded (T2-39), with HQ_WEIGHT as its RRF weight (retrieve.node.search_lists)
     lists = retrieve_step.search_lists(resources)
     branches = [retrieve(name) for name, _, _ in lists]
-    # Lists that embed the question themselves (Chroma dense, HqRetriever: an embed_query field). With two or more,
+    # Lists that embed the question themselves (the dense list, HqRetriever: an embed_query field). With two or more,
     # the embed node embeds once and hands each its vector; with one (HQ off) there is no embed node.
     embedders = retrieve_step.embedders(resources)
 

@@ -1,11 +1,11 @@
 """The search module's entry point (T2-41 S4): SearchModule(spec, options, llm).search(SearchInput) -> SearchOutput.
 
-    module = SearchModule(IndexSpec(chroma=ChromaConfig(collection="kosis_a_bgeft_..."), embed_ckpt="data/models/..."),
+    module = SearchModule(IndexSpec(vector_store=VectorStoreConfig(collection="kosis_a_bgeft_..."), embed_ckpt="data/models/..."),
                           SearchOptions(stage2="none"))
     out = module.search(SearchInput(question="2023년 시도별 출생아 수"))
     out.route, out.picked[0].key   # "found", "101_DT_..." (the key Phase 1 summarize_stat looks up, not tbl_id)
 
-The module opens its resources once (adapters.loader.load_resources: records, Chroma, models, question index) and
+The module opens its resources once (adapters.loader.load_resources: records, vector store, models, question index) and
 compiles one graph per k. It reads no .env and no environment: the caller declares the settings (§0.6).
 
 The graph ends at gate (T2-41 S5): no LLM writes a sentence here. to_output reads the final state as SearchOutput
@@ -63,9 +63,9 @@ class SearchModule:
     """Table search over one setup: open once, then search many questions (T2-41 S4)."""
 
     def __init__(self, spec: IndexSpec, options: SearchOptions | None = None, llm: LLMConfig | None = None) -> None:
-        """Open the resources (records, Chroma, models, question index) for spec / options / the stage 2 LLM.
+        """Open the resources (records, vector store, models, question index) for spec / options / the stage 2 LLM.
 
-        Side effects: those of adapters.loader.load_resources (file reads, Chroma connection, model loads).
+        Side effects: those of adapters.loader.load_resources (file reads, vector store connection, model loads).
         """
         self._init(load_resources(spec=spec, options=options or SearchOptions(), llm=llm))
 

@@ -1,4 +1,4 @@
-"""Load a question build into Chroma (T2-39): one Chroma document per hypothetical question (T2-41 S6a: the CLI of the
+"""Load a question build into the vector store (T2-39): one vector store row per hypothetical question (T2-41 S6a: the CLI of the
 old hq/index.py as nodes; the graph is graph/index_build.build_questions_graph).
 
     python -m kosis_rag_build.cli hq-index --build <build_id> --ckpt data/models/unseen-e1.pt
@@ -23,7 +23,7 @@ from kosis_rag.adapters import files
 from kosis_rag.adapters import models as model
 from kosis_rag.shared.hqnames import HQ_DOC_FORMAT, collection_name  # the name the search opens
 from kosis_rag.shared import tabletext as text
-from kosis_rag_build.chroma import load
+from kosis_rag_build.vector_index import load
 from kosis_rag_build.schemas import QuestionsIndexState
 
 
@@ -82,8 +82,8 @@ def make_embed(embedder: Any = None):
 
 
 def make_load(client: Any = None):
-    """The load node: kosis_rag_build.chroma.load through `client` (None: kosis_rag.adapters.chroma.chroma_client(
-    state.chroma), opened when the node runs)."""
+    """The load node: kosis_rag_build.vector_index.load through `client` (None: kosis_rag.adapters.vectorstore.vector_client(
+    state.vector_store), opened when the node runs)."""
 
     def load_node(state: QuestionsIndexState) -> dict:
         """In: state.rows, texts, vectors, name, record. Out: {"count", "trace"}. Side effects: writes the
@@ -91,9 +91,9 @@ def make_load(client: Any = None):
         started = time.perf_counter()
         c = client
         if c is None:
-            from kosis_rag.adapters.chroma import chroma_client
+            from kosis_rag.adapters.vectorstore import vector_client
 
-            c = chroma_client(state.chroma)
+            c = vector_client(state.vector_store)
         rows = state.rows
         count = load(c, [r["id"] for r in rows], state.texts, [{"key": r["key"], "type": r["type"]} for r in rows],
                      state.vectors, state.name, state.record)
@@ -106,7 +106,7 @@ def summary(state: QuestionsIndexState, log: Callable[[str], None] = print) -> N
     """The CLI lines after a run (dry run: what would be loaded)."""
     n_tables = len({r["key"] for r in state.rows})
     if state.dry_run:
-        log(f"dry run (no embedding, no Chroma): collection {state.name}, {len(state.rows)} questions over {n_tables} "
+        log(f"dry run (no embedding, no database): collection {state.name}, {len(state.rows)} questions over {n_tables} "
             f"tables, data_sha256 {state.data_sha256}, embedder {state.ckpt_id}")
         return
     log(f"collection {state.name}: {state.count} questions over {state.record['n_tables']} tables "

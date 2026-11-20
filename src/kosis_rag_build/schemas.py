@@ -2,7 +2,7 @@
 
     TablesBuildState      graph/index_build.build_tables_graph     read_parquet -> build_records -> write_jsonl
     SigunguBuildState     graph/index_build.build_sigungu_graph    read_parquet -> build_sigungu -> write_json
-    IndexBuildState       graph/index_build.build_chroma_graph     read_records -> build_docs -> embed -> load | write_build
+    IndexBuildState       graph/index_build.build_vectors_graph     read_records -> build_docs -> embed -> load | write_build
     QuestionsIndexState   graph/index_build.build_questions_graph  read_questions -> embed -> load
     HqState               graph/hq_build.build_table_graph         one table: load -> prompt -> generate -> ...
     HqBuildState          graph/hq_build.build_build_graph         generate_all -> filter_all -> write (was BuildState)
@@ -20,14 +20,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from kosis_rag.schemas.catalog import TableRecord
-from kosis_rag.schemas.resources import ChromaConfig
+from kosis_rag.schemas.resources import VectorStoreConfig
 from kosis_rag.shared.fields import TableFields
 from kosis_rag_build.hq.constants import FILTER_FRAC, MIN_KEEP
 
 Trace = dict[str, dict[str, Any]]
 
 
-# --- table registry, 시군구 dictionary, Chroma table index, question index ---
+# --- table registry, 시군구 dictionary, vector table index, question index ---
 
 
 def index_version_now() -> str:
@@ -56,26 +56,26 @@ class SigunguBuildState(BaseModel):
 
 
 class IndexBuildState(BaseModel):
-    """One table index build (chroma.py). tables ... export are the input (the CLI fills them from its arguments)."""
+    """One table index build (vector_index.py). tables ... export are the input (the CLI fills them from its arguments)."""
 
     tables: Path
     model: Literal["kure", "bge-m3-ft"] = "kure"
     ckpt: str | None = None  # bge-m3-ft: checkpoint .pt or run folder
     text_format: str | None = None  # bge-m3-ft: kosis_rag.shared.tabletext format (None: its DOC_FORMAT)
-    collection: str | None = None  # None: chroma.collection_name / FT_COLLECTION_PREFIX + index_version
+    collection: str | None = None  # None: vector_index.collection_name / FT_COLLECTION_PREFIX + index_version
     device: str | None = None
-    export: Path | None = None  # write the build to this .npz instead of Chroma
-    chroma: ChromaConfig = Field(default_factory=ChromaConfig)  # server for load
+    export: Path | None = None  # write the build to this .npz instead of the store
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)  # database for load
     index_version: str = Field(default_factory=index_version_now)  # YYYYMMDDHHMM of this load
     data_sha256: str = ""  # read_records
     name: str = ""  # read_records: the collection name
     ids: list[str] = Field(default_factory=list)  # read_records: table keys
-    metas: list[dict[str, Any]] = Field(default_factory=list)  # read_records: chroma.to_metadata
+    metas: list[dict[str, Any]] = Field(default_factory=list)  # read_records: vector_index.to_metadata
     records: list[TableRecord] = Field(default_factory=list)  # read_records
     docs: list[str] = Field(default_factory=list)  # build_docs
     fmt: str | None = None  # build_docs: the text format embedded (bge-m3-ft only)
     vectors: list[list[float]] = Field(default_factory=list)  # embed
-    record: dict[str, Any] = Field(default_factory=dict)  # embed: chroma.build_record (collection metadata)
+    record: dict[str, Any] = Field(default_factory=dict)  # embed: vector_index.build_record (collection metadata)
     count: int = 0  # load: documents in the collection afterwards (write_build: documents written)
     trace: Trace = Field(default_factory=dict)
 
@@ -88,8 +88,8 @@ class QuestionsIndexState(BaseModel):
     device: str | None = None
     collection: str | None = None  # None: kosis_rag.shared.hqnames.collection_name(build, ckpt id)
     hq_root: Path | None = None  # data/hq (None: kosis_rag.adapters.files.HQ_DIR)
-    chroma: ChromaConfig = Field(default_factory=ChromaConfig)
-    dry_run: bool = False  # read_questions only: data_sha256, name and count, no embedding, no Chroma
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
+    dry_run: bool = False  # read_questions only: data_sha256, name and count, no embedding, no database
     index_version: str = Field(default_factory=index_version_now)  # YYYYMMDDHHMM of this load
     rows: list[dict[str, Any]] = Field(default_factory=list)  # read_questions
     texts: list[str] = Field(default_factory=list)  # read_questions: norm_query(text)

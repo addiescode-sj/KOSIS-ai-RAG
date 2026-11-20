@@ -5,12 +5,11 @@ services:
       dockerfile: backend/Dockerfile
     env_file: .env
     environment:
-      # Inside compose the backend reaches Chroma by service name; .env holds the host-side address.
-      # For the shared Chroma, set COMPOSE_CHROMA_HOST / COMPOSE_CHROMA_PORT in .env (compose reads it for ${...}).
-      CHROMA_HOST: ${COMPOSE_CHROMA_HOST:-chroma}
-      CHROMA_PORT: ${COMPOSE_CHROMA_PORT:-8000}
-      # .env value unless the shell sets it: CHROMA_COLLECTION=<build> docker compose up -d backend
-      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-}
+      # Inside compose the backend reaches the vector store (PostgreSQL + pgvector, T2-44) by service name; .env holds
+      # the host-side address. For a shared database, set COMPOSE_DATABASE_URL in .env (compose reads it for ${...}).
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-postgresql://${POSTGRES_USER:-kosis}:${POSTGRES_PASSWORD:-kosis}@postgres:5432/${POSTGRES_DB:-kosis}}
+      # .env value unless the shell sets it: VECTOR_COLLECTION=<build> docker compose up -d backend
+      VECTOR_COLLECTION: ${VECTOR_COLLECTION:-}
       # Phase 1 reads data/ and .env under this root (docs/ISSUES.md P2-07)
       KOSIS_WORKSPACE: /app
     volumes:
@@ -21,7 +20,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      chroma:
+      postgres:
         condition: service_healthy
     healthcheck:
       # slim image has no curl. /health does not load the search resources: healthy != searchable (503 until loaded)
@@ -30,19 +29,22 @@ services:
       timeout: 3s
       retries: 20
 
-  chroma:
-    # Pinned release (1.x Rust server: data in /data, API under /api/v2); client is chromadb-client of the same version
-    image: chromadb/chroma:1.5.9
+  postgres:
+    # Vector store (T2-44, was chromadb/chroma:1.5.9): PostgreSQL 17 with pgvector. The tables are created on first
+    # use by kosis_rag.adapters.vectorstore (the comprehensive repo's alembic migration makes the same ones).
+    image: pgvector/pgvector:0.8.1-pg17
     environment:
-      ANONYMIZED_TELEMETRY: "False"
+      POSTGRES_USER: ${POSTGRES_USER:-kosis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kosis}
+      POSTGRES_DB: ${POSTGRES_DB:-kosis}
     volumes:
       # Named volume: embeddings are a rebuildable copy of data/tables.jsonl and never enter git
-      - chroma-data:/data
+      - pg-data:/var/lib/postgresql/data
     ports:
-      - "${CHROMA_PORT:-8001}:8000"
+      # Loopback only: the default password is for local development
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      # The image has bash but no curl/python, so ask the heartbeat endpoint over /dev/tcp
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kosis} -d ${POSTGRES_DB:-kosis}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -68,5 +70,5 @@ services:
         condition: service_healthy
 
 volumes:
-  chroma-data:
+  pg-data:
   hf-cache:

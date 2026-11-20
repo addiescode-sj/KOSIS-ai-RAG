@@ -49,9 +49,9 @@
 
 ```
 backend/app/       FastAPI (main.py). 검색·챗 API 데모. config.py(셸 환경 → 설정 객체), respond/(안내 문장·검증·출처·토큰 스트림)
-src/kosis_rag/     검색 모듈(라이브러리): api.py(SearchModule) · schemas/ · shared/ · adapters/(파일·Chroma·모델)
+src/kosis_rag/     검색 모듈(라이브러리): api.py(SearchModule) · schemas/ · shared/ · adapters/(파일·벡터 저장소 pgvector·모델)
                    · parse/ → retrieve/ → rerank/ → gate/(단계 폴더) · llm/(LLM 전송) · graph/(LangGraph) · legacy/(옛 클래스)
-src/kosis_rag_build/  오프라인 DB 준비: 표 등록부·시군구·Chroma 색인·hq 가상 질문·질문 색인 (cli.py, graph/, hq/)
+src/kosis_rag_build/  오프라인 DB 준비: 표 등록부·시군구·벡터 색인(pgvector)·hq 가상 질문·질문 색인 (cli.py, graph/, hq/)
 scripts/           kosis_build.py(빌드 CLI, 셸 환경), parity_l1.py·parity_hq.py(패리티), export_openapi.py 등
 frontend/          Next.js (App Router) + TypeScript + Tailwind. 채팅 UI (T2-11)
 vendor/phase1/     실전 1 레포 submodule — kosis_ai(src/), kosis_chat/, eval/ 를 import. 직접 수정 금지

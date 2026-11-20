@@ -4,7 +4,7 @@ The module (src/kosis_rag) reads no .env and no environment: the caller declares
 LLM configs. This is where the backend demo (and scripts/parity_l1.py) declare them: from os.environ only — no .env
 is read (set the variables in the shell, docker-compose `environment:`, or a script you `call` / `source`).
 
-    CHROMA_HOST CHROMA_PORT CHROMA_COLLECTION      Chroma server and the dense collection (default localhost:8001)
+    DATABASE_URL VECTOR_COLLECTION                 vector store (PostgreSQL + pgvector, T2-44) and the dense collection
     TEXT_FORMAT EMBED_CKPT RERANK_CKPT RERANK_MODE  table text check, query embedder, stage 1 cross-encoder
     STAGE2 COND_FILTER ANSWER_K                     stage 2 LLM (clova | hcx | gpt | none), conditions, k default
     HQ_BUILD HQ_WEIGHT HQ_BM25                      T2-39 question index (empty HQ_BUILD = off)
@@ -23,7 +23,7 @@ from typing import Any, NamedTuple
 
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.rerank import selectors
-from kosis_rag.schemas.resources import OFF, ChromaConfig, IndexSpec, SearchOptions
+from kosis_rag.schemas.resources import OFF, VectorStoreConfig, IndexSpec, SearchOptions
 
 # The guide model: Phase 1 configs/model.yaml @e248a45 (model.name, temperature, max_tokens, timeout_seconds)
 GUIDE_MODEL = "HCX-DASH-002"
@@ -33,7 +33,7 @@ GUIDE_TIMEOUT = 60.0
 GUIDE_KEY_ENV = ("HCX_API_KEY", "CLOVASTUDIO_API_KEY")  # first set one wins (ChatClovaX's own fallback, now explicit)
 # The environment variable holding each stage 2 LLM's key
 STAGE2_KEY_ENV = {"clova": "HCX_API_KEY", "hcx": "HCX_API_KEY", "gpt": "OPENAI_API_KEY"}
-CHROMA_FIELDS = {"collection": "collection"}  # override name -> ChromaConfig field (the old settings had `collection`)
+STORE_FIELDS = {"collection": "collection"}  # override name -> VectorStoreConfig field (the old settings had `collection`)
 
 
 class SearchConfig(NamedTuple):
@@ -74,8 +74,8 @@ def guide_llm_from_shell() -> LLMConfig:
 def search_config_from_shell(**overrides: Any) -> SearchConfig:
     """The search settings from the shell environment, with overrides (as the old pipeline settings read it, with overrides).
 
-    In: overrides = any SearchOptions or IndexSpec field (a whole `chroma` replaces CHROMA_HOST / CHROMA_PORT /
-        CHROMA_COLLECTION), or `collection` (the Chroma collection), given by name;
+    In: overrides = any SearchOptions or IndexSpec field (a whole `vector_store` replaces DATABASE_URL /
+        VECTOR_COLLECTION), or `collection` (the dense collection), given by name;
         they win over the environment (e.g. the L1 presets: cond_filter=True, rerank_ckpt=None, stage2="none").
     Out: SearchConfig(options, spec, stage2_llm, guide_llm) — pass them by name:
         load_resources(spec=cfg.spec, options=cfg.options, llm=cfg.stage2_llm).
@@ -83,7 +83,7 @@ def search_config_from_shell(**overrides: Any) -> SearchConfig:
     """
     env = _env
     values: dict[str, Any] = {
-        "collection": env("CHROMA_COLLECTION"),
+        "collection": env("VECTOR_COLLECTION"),
         "text_format": env("TEXT_FORMAT"),
         "embed_ckpt": env("EMBED_CKPT"),
         "cond_filter": (env("COND_FILTER") or "on").strip().lower() not in OFF,
@@ -96,13 +96,13 @@ def search_config_from_shell(**overrides: Any) -> SearchConfig:
         "hq_bm25": (env("HQ_BM25") or "off").strip().lower() not in OFF,
     }
     values.update(overrides)
-    unknown = set(values) - set(SearchOptions.model_fields) - set(IndexSpec.model_fields) - set(CHROMA_FIELDS)
+    unknown = set(values) - set(SearchOptions.model_fields) - set(IndexSpec.model_fields) - set(STORE_FIELDS)
     if unknown:
         raise TypeError(f"unknown search setting(s): {sorted(unknown)}")
-    chroma = values.pop("chroma", None) or ChromaConfig(
-        host=env("CHROMA_HOST") or "localhost", port=int(env("CHROMA_PORT") or 8001),
-        **{CHROMA_FIELDS[k]: v for k, v in values.items() if k in CHROMA_FIELDS})
+    url = env("DATABASE_URL")
+    store = values.pop("vector_store", None) or VectorStoreConfig(
+        **({"url": url} if url else {}), **{STORE_FIELDS[k]: v for k, v in values.items() if k in STORE_FIELDS})
     options = SearchOptions(**{k: v for k, v in values.items() if k in SearchOptions.model_fields})
-    spec = IndexSpec(chroma=chroma, **{k: v for k, v in values.items() if k in IndexSpec.model_fields})
+    spec = IndexSpec(vector_store=store, **{k: v for k, v in values.items() if k in IndexSpec.model_fields})
     return SearchConfig(options=options, spec=spec, stage2_llm=stage2_llm_from_shell(options.stage2),
                         guide_llm=guide_llm_from_shell())

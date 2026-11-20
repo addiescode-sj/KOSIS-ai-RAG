@@ -224,12 +224,12 @@ def table_nodes(records: dict[str, TableRecord], client: Any, *, model: str, cac
 def build_id(prompt_hash: str, tables_sha: str, model: str, frac: float = FILTER_FRAC, min_keep: int = MIN_KEEP,
              limit: int | None = None) -> str:
     """hq-<prompt8>-<tables8>-<model>-f<percent dropped>[-k<min_keep>][-n<limit>]: the same inputs always give the
-    same id, and builds that differ in model, filter share or min_keep get their own folder and Chroma collection.
+    same id, and builds that differ in model, filter share or min_keep get their own folder and vector collection.
 
     In: prompt_hash = prompt.prompt_hash(); tables_sha = sha256 of tables.jsonl; model = generation model (as
         model_slug); frac = score filter share (0 = off: then min_keep does nothing and is left out, "-f0");
         min_keep = questions every table keeps; limit = first N tables only (a sample build), None = all.
-    Out: the build id (also in the Chroma name), e.g. hq-1a2b3c4d-5e6f7a8b-gpt-4o-mini-f30-k2.
+    Out: the build id (also in the collection name), e.g. hq-1a2b3c4d-5e6f7a8b-gpt-4o-mini-f30-k2.
     Side effects: none. Node: write.
     """
     pct = round(frac * 100)

@@ -1,8 +1,8 @@
-"""Dense search over a T2-24 Chroma table collection (T2-41 S2: the body of retriever.ChromaTableRetriever).
+"""Dense search over a T2-24 pgvector table collection (T2-41 S2: the body of retriever.DenseTableRetriever).
 
 Score = 1 - cosine distance (higher is closer). The collection holds vectors we computed ourselves
 (embedding_function=None), so the query must be embedded with the same model; opening the collection and loading that
-embedder is the caller's job (legacy ChromaTableRetriever.connect until S4, then adapters/loader).
+embedder is the caller's job (legacy DenseTableRetriever.connect until S4, then adapters/loader).
 """
 
 from __future__ import annotations
@@ -39,10 +39,10 @@ class DenseIndex:
             condition; when no table meets it the conditions are relaxed one at a time (filters.filter_with_relaxation,
             T2-29) and the dropped ones are `relaxed`. Only a year no table holds gives no result (no query is made).
             removed = table key -> why the filter dropped it; missing is always 0 (every hit is a registry table).
-        Side effects: one Chroma query (and the embedder when no vector is given); ValueError for a non-empty filter
+        Side effects: one vector store query (and the embedder when no vector is given); ValueError for a non-empty filter
             without records. Node: retrieve_dense (through retrieve.lists.search_list).
         """
-        # TODO(T2-09): Chroma always returns k hits, so the chain's "no candidates" refusal never fires here;
+        # TODO(T2-09): The store always returns k hits, so the chain's "no candidates" refusal never fires here;
         # refusal relies on the LLM's NO_MATCH until a cosine threshold is calibrated on the L1 dev split.
         f = table_filter if table_filter is not None else TableFilter()
         records = records or {}

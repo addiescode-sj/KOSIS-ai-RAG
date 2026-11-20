@@ -2,7 +2,7 @@
 (T2-41 S1: from text.py, plus region_summary / sido_names / SIDO_SHORT from index.py.)
 
 A model only works as measured when it sees the text it was trained on, so every format is named, the name is stored
-with the Chroma collection (doc_format) and next to the weights, and a rule change means a new name and new training.
+with the vector collection (doc_format) and next to the weights, and a rule change means a new name and new training.
 Every rule is a text pattern applied the same way to all tables (no table-specific fixes).
 
 - "n2-L60": surface rules from the lab (min `lab/normalize_text.py`, KOS-88): the table name without its region tail

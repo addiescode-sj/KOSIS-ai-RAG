@@ -1,7 +1,7 @@
 """Open every heavy part of the staged search once (T2-41 S4: pipeline.load_resources, now over IndexSpec and
 SearchOptions instead of the old settings object).
 
-    question -> [T2-14 conditions] -> fine-tuned bge-m3 (Chroma) top 50 + BM25 top 50 [+ question index] -> RRF
+    question -> [T2-14 conditions] -> fine-tuned bge-m3 (pgvector) top 50 + BM25 top 50 [+ question index] -> RRF
              -> stage 1: fine-tuned bge-reranker-v2-m3 over the top 50 (when spec.rerank_ckpt is set)
              -> stage 2: LLM re-ranker over the top 20 (options.stage2 = clova | hcx | gpt | none)
 
@@ -21,7 +21,7 @@ import logging
 from typing import Any
 
 from kosis_rag.adapters import files
-from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever, HqRetriever
+from kosis_rag.legacy.retrievers import BM25TableRetriever, DenseTableRetriever, HqRetriever
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.rerank import selectors
 from kosis_rag.rerank.stage1 import passage_scorer
@@ -43,7 +43,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
     """Load (or take the given fakes for) every heavy part of the staged search once.
 
     In (keyword only, so spec and options cannot be swapped — search_config_from_shell returns options first):
-        spec = paths, Chroma and checkpoints; options = how the search behaves; llm = the stage 2 LLM's config
+        spec = paths, vector store and checkpoints; options = how the search behaves; llm = the stage 2 LLM's config
         (None: selectors.default_config(options.stage2), no key — rerank2 raises LLMKeyMissing on entry);
         records, dense, bm25, stage1_score, select, hq, hq_bm25, sigungu = parts that replace the loaded ones
         (tests pass fakes here so nothing real is touched).
@@ -55,7 +55,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
         (spec.sigungu or data/sigungu.json, {} when the file is missing). stage2_llm = the config the selector is
         built from (`llm`, else the default config without a key); with a given selector, `llm` (default None:
         rerank2 checks no key); None when stage 2 is off.
-    Side effects: reads tables.jsonl and sigungu.json (one warning when it is missing), connects to Chroma and loads
+    Side effects: reads tables.jsonl and sigungu.json (one warning when it is missing), connects to the vector store and loads
         the query embedder, loads the cross-encoder, opens the question collection (reusing the dense retriever's
         query embedder) and reads its questions.jsonl, unless the matching part is given. Raises ValueError for a
         spec.text_format that disagrees with the collection or an unknown options.stage2, as before.
@@ -65,8 +65,8 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
     # 1. registry, dense collection and the text format they agree on
     records = records if records is not None else files.read_records(spec.tables or files.TABLES)
     if dense is None:
-        dense = ChromaTableRetriever.connect(spec.chroma.collection, k=o.pool, device=spec.device,
-                                             embed_ckpt=spec.embed_ckpt, chroma=spec.chroma)
+        dense = DenseTableRetriever.connect(spec.vector_store.collection, k=o.pool, device=spec.device,
+                                             embed_ckpt=spec.embed_ckpt, vector_store=spec.vector_store)
     fmt = text.text_format(spec, dense)
     if bm25 is None:
         bm25 = BM25TableRetriever.from_index(  # filtered after: score all
@@ -101,7 +101,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
             text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
         if hq is None:
             hq = HqRetriever.connect(spec.hq_build, dense, records=by_key, text_of=text_of, k=o.pool,
-                                     chroma=spec.chroma)
+                                     vector_store=spec.vector_store)
         if not o.hq_bm25:
             hq_bm25 = None
         elif hq_bm25 is None:

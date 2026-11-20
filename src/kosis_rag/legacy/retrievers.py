@@ -1,4 +1,4 @@
-"""BM25, ChromaDB, hybrid (RRF), condition and question-index retrievers (T2-41 S2: from retriever.py, query.py and
+"""BM25, pgvector, hybrid (RRF), condition and question-index retrievers (T2-41 S2: from retriever.py, query.py and
 hq/index.py). LangChain BaseRetriever wrappers whose bodies call the stage functions (retrieve/, parse/), P2-D18.
 
 Each reports a score in Document.metadata["score"] (the no-answer check needs it); the hybrid keeps the dense cosine
@@ -28,7 +28,7 @@ from kosis_rag.retrieve.hq import HqIndex
 from kosis_rag.shared.hqnames import HQ_DOC_FORMAT, collection_name
 from kosis_rag.retrieve.lists import condition_filter, search_list
 from kosis_rag.schemas.catalog import TableRecord
-from kosis_rag.schemas.resources import ChromaConfig
+from kosis_rag.schemas.resources import VectorStoreConfig
 from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax, soft_rank, why_excluded
 
 
@@ -59,7 +59,7 @@ class BM25TableRetriever(BaseRetriever):
         return bm25_search(self.index, query)
 
 
-class ChromaTableRetriever(BaseRetriever):
+class DenseTableRetriever(BaseRetriever):
     """Top-k tables by cosine similarity over a T2-24 collection (retrieve.dense.DenseIndex.search). Score = 1 - cosine
     distance (higher is closer).
 
@@ -82,23 +82,23 @@ class ChromaTableRetriever(BaseRetriever):
 
     @classmethod
     def connect(cls, name: str | None = None, k: int = 20, device: str | None = None,
-                embed_ckpt: str | None = None, *, chroma: ChromaConfig | None = None) -> ChromaTableRetriever:
-        """Open `name` (else chroma.collection) on the shared server and load the query embedder it was built with.
+                embed_ckpt: str | None = None, *, vector_store: VectorStoreConfig | None = None) -> DenseTableRetriever:
+        """Open `name` (else vector_store.collection) in the vector store and load the query embedder it was built with.
 
         KURE-v1 collections (T2-24 text) need nothing more. Fine-tuned bge-m3 collections (T2-06, kosis_rag.shared.tabletext
         formats) need the same checkpoint (`embed_ckpt`); a different file is refused, and questions get the same
-        surface rules as the documents. T2-41 S4: reads no .env and no environment — the server is `chroma`
-        (default ChromaConfig(): localhost:8001) and the caller names the collection and the checkpoint.
+        surface rules as the documents. T2-41 S4: reads no .env and no environment — the store is
+        `vector_store` (default VectorStoreConfig(): the compose postgres on localhost) and the caller names the collection and the checkpoint.
         """
-        from kosis_rag.adapters.chroma import chroma_client
+        from kosis_rag.adapters.vectorstore import vector_client
         from kosis_rag.adapters.models import EMBED_MODEL, kure_embedder
 
-        chroma = chroma or ChromaConfig()
-        name = name or chroma.collection
+        store = vector_store or VectorStoreConfig()
+        name = name or store.collection
         if not name:
-            raise ValueError("no collection: pass ChromaConfig(collection=...) (backend: CHROMA_COLLECTION in the shell "
-                             "environment) naming a table collection built by the offline build CLI (`chroma` command)")
-        client = chroma_client(chroma)
+            raise ValueError("no collection: pass VectorStoreConfig(collection=...) (backend: VECTOR_COLLECTION in the shell "
+                             "environment) naming a table collection built by the offline build CLI (`vectors` command)")
+        client = vector_client(store)
         collection = client.get_collection(name, embedding_function=None)
         meta = collection.metadata or {}
         built_with = meta.get("embed_model")
@@ -126,7 +126,7 @@ class ChromaTableRetriever(BaseRetriever):
         """The stateless dense index over this retriever's collection and embedder."""
         return DenseIndex(collection=self.collection, embed_query=self.embed_query, k=self.k, doc_format=self.doc_format)
 
-    def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> ChromaTableRetriever:
+    def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> DenseTableRetriever:
         """A copy that applies `f`; the tools keep their search_tables(question, k) signature."""
         return self.model_copy(update={"table_filter": f, "records": records or self.records, "last_removed": {},
                                        "last_relaxed": []})
@@ -140,7 +140,7 @@ class ChromaTableRetriever(BaseRetriever):
 
 class HqRetriever(BaseRetriever):
     """Top-k tables by their closest hypothetical questions (retrieve.hq.HqIndex.search: max-pool over the top
-    n_questions; score = 1 - cosine distance of the best question). Filters like ChromaTableRetriever: `with_filter`
+    n_questions; score = 1 - cosine distance of the best question). Filters like DenseTableRetriever: `with_filter`
     decides the TableFilter on `records`, relaxes it when no table meets it (last_relaxed) and sends `key $in`.
 
     Documents carry the table's catalog metadata, key, score, hq_best_question, hq_best_id and hq_n, and the
@@ -163,22 +163,22 @@ class HqRetriever(BaseRetriever):
 
     @classmethod
     def connect(cls, build_id: str, dense: Any, *, records: dict[str, TableRecord], text_of: dict[str, str],
-                k: int = 50, name: str | None = None, chroma: ChromaConfig | None = None) -> HqRetriever:
+                k: int = 50, name: str | None = None, vector_store: VectorStoreConfig | None = None) -> HqRetriever:
         """Open the question collection of `build_id` for the dense side's embedder.
 
-        In: build_id = HQ_BUILD; dense = the table retriever (ChromaTableRetriever: its embed_query and its
+        In: build_id = HQ_BUILD; dense = the table retriever (DenseTableRetriever: its embed_query and its
             collection's embed_model / embed_ckpt are reused); records, text_of = the registry and n2 passages;
-            k = tables returned; name = collection override; chroma = the server (default ChromaConfig(); T2-41 S4:
+            k = tables returned; name = collection override; vector_store = the database (default VectorStoreConfig(); T2-41 S4:
             no environment read). Out: HqRetriever.
-        Side effects: connects to Chroma; ValueError when the collection was embedded with other weights.
+        Side effects: connects to the vector store; ValueError when the collection was embedded with other weights.
         Node: none (load_resources calls it; retrieve_hq searches it).
         """
-        from kosis_rag.adapters.chroma import chroma_client
+        from kosis_rag.adapters.vectorstore import vector_client
 
         meta = (getattr(getattr(dense, "collection", None), "metadata", None) or {})
         ckpt = meta.get("embed_ckpt") or meta.get("embed_model")
         name = name or collection_name(build_id, ckpt)
-        collection = chroma_client(chroma or ChromaConfig()).get_collection(name, embedding_function=None)
+        collection = vector_client(vector_store or VectorStoreConfig()).get_collection(name, embedding_function=None)
         hq_meta = collection.metadata or {}
         if (hq_meta.get("embed_ckpt") or hq_meta.get("embed_model")) != ckpt or hq_meta.get("doc_format") != HQ_DOC_FORMAT:
             raise ValueError(f"question collection {name} was embedded with {hq_meta.get('embed_ckpt')!r} "
@@ -193,7 +193,7 @@ class HqRetriever(BaseRetriever):
                        records=self.records, k=self.k, n_questions=self.n_questions, n_docs=self.n_docs)
 
     def with_filter(self, f: TableFilter, records: dict[str, TableRecord] | None = None) -> HqRetriever:
-        """A copy that applies `f` (as ChromaTableRetriever.with_filter).
+        """A copy that applies `f` (as DenseTableRetriever.with_filter).
 
         Side effects: none. Node: retrieve_hq (through retrieve.lists.search_list).
         """
@@ -212,7 +212,7 @@ class HqRetriever(BaseRetriever):
 class ConditionRetriever(BaseRetriever):
     """Parses each question (parse.node.parse_query with `sigungu`) and applies the conditions to `base`.
 
-    A base with `with_filter` (the Chroma retriever) filters before the vector search; any other base (BM25) is asked
+    A base with `with_filter` (the dense retriever) filters before the vector search; any other base (BM25) is asked
     for its candidates first and filtered after, so give it a large k. At most MAX_RESULTS (10) tables come back.
     When no table meets the conditions they are relaxed one at a time (filters.filter_with_relaxation); the dropped
     ones are in `last_relaxed`. T2-41 S2: the 시군구 dictionary is the `sigungu` field (default {}: 시군구 names are not
@@ -266,14 +266,14 @@ def hybrid_search(query: str, retrievers: list[BaseRetriever], *, names: list[st
          metadata score (the score_from list's score, or that list's lowest score for a table only other lists
          found), score_from (its name or "other"), rrf_score and rank_<name> per list it appeared in.
          removed = table key -> why the filter dropped it.
-    Side effects: calls each retriever (Chroma query / BM25 scoring); raises ValueError when a non-empty filter has
+    Side effects: calls each retriever (vector store query / BM25 scoring); raises ValueError when a non-empty filter has
         no records to decide on. A filter no table meets is relaxed once here for both lists
         (filters.filter_with_relaxation, T2-29); a caller that wants the dropped conditions computes them first and
         passes the relaxed filter (HybridRetriever).
     Node: not a node itself since T2-39: the graph runs its three parts as nodes (decide_condition in condition,
         search_list in retrieve_*, rrf_fuse in fuse); the old path (HybridRetriever) calls it.
     """
-    # 1. one list per retriever: a retriever with with_filter (Chroma) filters before its search, the others after
+    # 1. one list per retriever: a retriever with with_filter (dense) filters before its search, the others after
     filtered = table_filter is not None and not table_filter.is_empty()
     table_filter = condition_filter(table_filter, records)
     lists: list[list[Document]] = []
@@ -292,7 +292,7 @@ class HybridRetriever(BaseRetriever):
     """Reciprocal rank fusion of several retrievers by table key (T2-06): RRF = sum over lists of 1 / (c + rank).
 
     Each list is cut to its top `k_each` before fusing. With `condition` (question -> TableFilter, e.g.
-    `parse_query(q, sigungu=...).to_filter()`), a retriever that has `with_filter` (Chroma) filters before its search
+    `parse_query(q, sigungu=...).to_filter()`), a retriever that has `with_filter` (dense) filters before its search
     and the others are filtered after, so every list holds only tables that meet the question's conditions (give BM25
     a large k).
 

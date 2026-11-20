@@ -1,6 +1,6 @@
 """T2-05: compare embedding models for the A build (one vector per table) on the T2-02 golden dev split.
 
-Every model embeds the same documents (`kosis_rag_build.chroma.to_document`) in memory and is scored with the T2-03 evaluator, as
+Every model embeds the same documents (`kosis_rag_build.vector_index.to_document`) in memory and is scored with the T2-03 evaluator, as
 `evals.run_eval --layer l1` does (no-answer threshold chosen on dev). Document vectors are cached under
 data/embed_compare/ (gitignored), so a rerun only embeds the questions. The test split is not used.
 
@@ -20,7 +20,7 @@ from evals.evaluators import retrieval
 from evals.run_eval import POOL, judged_keys
 from evals.schemas import GOLDEN, load_items
 from kosis_rag.adapters.files import read_records
-from kosis_rag_build.chroma import to_document
+from kosis_rag_build.vector_index import to_document
 
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "data" / "embed_compare"
