@@ -7,6 +7,8 @@ uvicorn[standard]>=0.30
 langchain-core>=1.7.0
 langgraph>=1.0,<2
 rank-bm25>=0.2.2
+psycopg[binary]>=3.2
+pgvector>=0.4
 
 # Phase 1 runtime (vendor/phase1/requirements.txt)
 pyyaml>=6.0

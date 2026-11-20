@@ -86,7 +86,7 @@ OLD_NAMES: dict[str, tuple[str, ...]] = {
     # in OLD_PATHS now)
     # (S3/S4: the names chain.py gave to gate/, llm/providers.py and backend/app/config.py; S5 deleted chain.py, so it
     # is in OLD_PATHS now)
-    # S4: the environment is the caller's (backend/app/config.py): connect takes ChromaConfig
+    # S4: the environment is the caller's (backend/app/config.py): connect takes VectorStoreConfig
     "kosis_rag.legacy.retrievers": ("env_chroma_config",),
     # S6a: the builders and CLIs moved to kosis_rag_build (sigungu.py, cli.py sigungu / text)
     "kosis_rag.shared.vocab": ("build_sigungu", "main", "SIGUNGU_SOURCE"),
@@ -105,12 +105,15 @@ SHARED_ALLOWED = ("kosis_rag.schemas", "kosis_rag.shared")
 # import anywhere in src).
 PHASE1 = ("kosis_ai", "kosis_chat")
 PHASE1_ALLOWED: tuple[str, ...] = ()
-# S1: client libraries in one adapter each. chromadb: adapters/chroma.py (kosis_rag_build/chroma.py and
+# S1: client libraries in one adapter each. psycopg / pgvector: adapters/vectorstore.py (kosis_rag_build/vector_index.py and
 # hq/questions_index.py take a client as an argument and open it through the adapter, so they need no exception); sentence_transformers / torch: adapters/models.py (kure_embedder moved there).
 # S3: the LLM transports in llm/ (an entry ending in "/" is a folder). chain.py builds its ChatClovaX through
 # llm.providers.clova_chat, so it needs no exception.
 LIBRARY_ALLOWED = {
-    "chromadb": ("src/kosis_rag/adapters/chroma.py",),
+    # T2-44: the vector store is PostgreSQL + pgvector; chromadb is only the one-off migration script's (outside src)
+    "chromadb": (),
+    "psycopg": ("src/kosis_rag/adapters/vectorstore.py",),
+    "pgvector": ("src/kosis_rag/adapters/vectorstore.py",),
     "sentence_transformers": ("src/kosis_rag/adapters/models.py",),
     "torch": ("src/kosis_rag/adapters/models.py",),
     "urllib.request": ("src/kosis_rag/llm/",),
@@ -496,7 +499,7 @@ def test_importing_the_module_loads_no_build_code():
 
 def test_the_build_package_is_complete():
     """S6a: the files of plans/T2-41.md S6a (folder tree) are there, the graphs in graph/ and the node bodies outside."""
-    for rel in ("cli.py", "schemas.py", "tables.py", "sigungu.py", "chroma.py", "graph/index_build.py",
+    for rel in ("cli.py", "schemas.py", "tables.py", "sigungu.py", "vector_index.py", "graph/index_build.py",
                 "graph/hq_build.py", "hq/prompt.py", "hq/rules.py", "hq/patterns.py", "hq/constants.py", "hq/nodes.py",
                 "hq/report.py", "hq/reply.py", "hq/questions_index.py", "hq/prompts/hq-v1.md"):
         assert (BUILD / rel).is_file(), rel

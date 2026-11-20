@@ -1,4 +1,4 @@
-"""Settings objects the search module is built from (T2-41 S1: ChromaConfig; S4: SearchOptions, IndexSpec and
+"""Settings objects the search module is built from (T2-41 S1: the store config, now VectorStoreConfig (T2-44); S4: SearchOptions, IndexSpec and
 SearchResources from pipeline.py — plans/T2-41.md 입출력 계약).
 
 The caller declares them (§0.6): nothing here reads .env or the environment. SearchOptions is how the search behaves,
@@ -20,12 +20,15 @@ if TYPE_CHECKING:  # annotation only: schemas does not import llm/ at run time
 OFF = ("", "0", "off", "false", "no", "none")  # values that switch a stage off (STAGE2, COND_FILTER, HQ_BM25)
 
 
-class ChromaConfig(BaseModel):
-    """Where the shared ChromaDB server is. Defaults match `docker compose up -d chroma` on the host (port 8001);
-    inside compose the backend uses host "chroma", port 8000. The caller builds it (no .env read here)."""
+DEFAULT_DATABASE_URL = "postgresql://kosis:kosis@localhost:5432/kosis"  # docker compose `postgres` on the host
 
-    host: str = "localhost"
-    port: int = 8001
+
+class VectorStoreConfig(BaseModel):
+    """Where the vector store is: PostgreSQL + pgvector (T2-44; was VectorStoreConfig(host, port)). The default matches
+    `docker compose up -d postgres` on the host; inside compose the backend uses host "postgres". A SQLAlchemy URL
+    (postgresql+psycopg://...) is accepted too. The caller builds it (no .env read here)."""
+
+    url: str = DEFAULT_DATABASE_URL
     collection: str | None = None  # None: the caller names the collection
 
 
@@ -38,7 +41,7 @@ class IndexSpec(BaseModel):
 
     tables: Path | None = None  # data/tables.jsonl (None: adapters.files.TABLES)
     sigungu: Path | None = None  # data/sigungu.json (None: adapters.files default; P2-D9: parse reads resources.sigungu)
-    chroma: ChromaConfig = Field(default_factory=ChromaConfig)  # server and dense collection (CHROMA_COLLECTION)
+    vector_store: VectorStoreConfig = Field(default_factory=VectorStoreConfig)  # database and dense collection (VECTOR_COLLECTION)
     text_format: str | None = None  # None = the collection's doc_format (TEXT_FORMAT must agree when set)
     embed_ckpt: str | None = None  # fine-tuned bge-m3 query embedder (EMBED_CKPT)
     rerank_ckpt: str | None = None  # None = no stage 1 (RERANK_CKPT)
@@ -86,7 +89,7 @@ class SearchResources:
     options: SearchOptions
     spec: IndexSpec
     records: dict[str, Any]  # key -> TableRecord
-    dense: Any  # ChromaTableRetriever or a stand-in (with_filter, embed_query)
+    dense: Any  # DenseTableRetriever or a stand-in (with_filter, embed_query)
     bm25: Any  # BM25TableRetriever
     text_format: str
     stage1_score: Any | None  # rerank.stage2.Score; None = stage 1 off

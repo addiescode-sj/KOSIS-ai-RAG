@@ -396,7 +396,7 @@ def test_tracing_blames_fuse_where_the_pool_is_formed():
 # --- 3. one question embedding for dense and hq (review S4), registry guard (review S5) ---
 
 class EmbeddingRetriever(CatalogRetriever):
-    """Dense stand-in that embeds the question itself, like ChromaTableRetriever (an embed_query field)."""
+    """Dense stand-in that embeds the question itself, like DenseTableRetriever (an embed_query field)."""
 
     embed_query: Any = None
     seen: Any = None  # a list: the vector of every search (shared by model copies)

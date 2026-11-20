@@ -2,7 +2,7 @@
 
     python -m kosis_rag_build.cli tables   --data-dir <provided data> [--out data/tables.jsonl]
     python -m kosis_rag_build.cli sigungu  --data-dir <provided data> [--out data/sigungu.json]
-    python -m kosis_rag_build.cli chroma   [--model kure|bge-m3-ft] [--ckpt ...] [--export x.npz | --import x.npz | --list]
+    python -m kosis_rag_build.cli vectors  [--model kure|bge-m3-ft] [--ckpt ...] [--export x.npz | --import x.npz | --list]
     python -m kosis_rag_build.cli text     [--tables ...] [--tokens]          # table text formats: lengths and samples
     python -m kosis_rag_build.cli hq-build --model gpt-4o-mini [--limit 20] [--no-score | --rerank-ckpt ...]
     python -m kosis_rag_build.cli hq-index --build <build_id> [--ckpt ...] [--desc] [--dry-run]
@@ -13,9 +13,9 @@
 Settings come from the arguments, then from the `env` mapping the caller passes (§0.6: no .env is read). This
 module reads no environment itself: `python scripts/kosis_build.py <command> ...` passes the shell environment
 (`set X=...` first), `python -m kosis_rag_build.cli` uses arguments only. Names:
-CHROMA_HOST CHROMA_PORT CHROMA_COLLECTION (chroma --list: the active build) EMBED_CKPT (chroma bge-m3-ft, hq-index)
-TEXT_FORMAT (chroma bge-m3-ft) RERANK_CKPT (hq-build score filter) OPENAI_API_KEY (hq-build; never printed). They
-become settings objects (ChromaConfig, IndexSpec, LLMConfig(provider="openai")) and the step's graph runs on them.
+DATABASE_URL VECTOR_COLLECTION (vectors --list: the active build) EMBED_CKPT (vectors bge-m3-ft, hq-index)
+TEXT_FORMAT (vectors bge-m3-ft) RERANK_CKPT (hq-build score filter) OPENAI_API_KEY (hq-build; never printed). They
+become settings objects (VectorStoreConfig, IndexSpec, LLMConfig(provider="openai")) and the step's graph runs on them.
 No file of src reads the environment (tests/test_layout.py; plans/T2-41.md 미결 3, 11/05 user decision).
 
 Replaces the old module CLIs of the search package (metadata, shared.vocab, index, shared.tabletext, hq.build,
@@ -32,11 +32,11 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from kosis_rag.llm.config import LLMConfig
-from kosis_rag.schemas.resources import ChromaConfig, IndexSpec
+from kosis_rag.schemas.resources import VectorStoreConfig, IndexSpec
 from kosis_rag.shared import constants
 from kosis_rag.shared import tabletext as text
 from kosis_rag.shared.vocab import SIGUNGU
-from kosis_rag_build import chroma  # stdlib + pydantic only; tables (pyarrow) is imported by its command
+from kosis_rag_build import vector_index  # stdlib + pydantic only; tables (pyarrow) is imported by its command
 from kosis_rag_build.hq import constants as hq_constants
 
 REPO = Path(__file__).resolve().parents[2]
@@ -50,26 +50,20 @@ def _env(env: Mapping[str, str], name: str) -> str | None:
     return env.get(name) or None
 
 
-def chroma_config(args: argparse.Namespace, env: Mapping[str, str]) -> ChromaConfig:
-    """--chroma-host / --chroma-port, else CHROMA_HOST / CHROMA_PORT, else localhost:8001 (as the old CLIs read them
-    from the environment or .env); collection = CHROMA_COLLECTION, the table build the search uses (chroma --list
-    marks it). The collection a command writes is its own --collection argument, not this.
-    SystemExit naming CHROMA_PORT when it is set but not a whole number (T2-41 S6b)."""
-    port = args.chroma_port or _env(env, "CHROMA_PORT") or 8001
-    try:
-        port = int(port)
-    except ValueError:
-        raise SystemExit(f"CHROMA_PORT must be a port number, got {port!r}") from None
-    return ChromaConfig(host=args.chroma_host or _env(env, "CHROMA_HOST") or "localhost", port=port,
-                        collection=_env(env, "CHROMA_COLLECTION"))
+def store_config(args: argparse.Namespace, env: Mapping[str, str]) -> VectorStoreConfig:
+    """--database-url, else DATABASE_URL, else the compose postgres on localhost (T2-44, was --chroma-host/--chroma-port);
+    collection = VECTOR_COLLECTION, the table build the search uses (vectors --list marks it). The collection a command
+    writes is its own --collection argument, not this."""
+    url = getattr(args, "database_url", None) or _env(env, "DATABASE_URL")
+    return VectorStoreConfig(**({"url": url} if url else {}), collection=_env(env, "VECTOR_COLLECTION"))
 
 
 def index_spec(args: argparse.Namespace, env: Mapping[str, str]) -> IndexSpec:
-    """The index settings of chroma / hq-index / hq-build: tables, Chroma, embedder and re-ranker checkpoints, text
+    """The index settings of vectors / hq-index / hq-build: tables, vector store, embedder and re-ranker checkpoints, text
     format and device (arguments first, then EMBED_CKPT / RERANK_CKPT / TEXT_FORMAT)."""
     return IndexSpec(
         tables=getattr(args, "tables", None),
-        chroma=chroma_config(args, env) if hasattr(args, "chroma_host") else ChromaConfig(),
+        vector_store=store_config(args, env) if hasattr(args, "database_url") else VectorStoreConfig(),
         text_format=getattr(args, "text_format", None) or _env(env, "TEXT_FORMAT"),
         embed_ckpt=getattr(args, "ckpt", None) or _env(env, "EMBED_CKPT"),
         rerank_ckpt=getattr(args, "rerank_ckpt", None) or _env(env, "RERANK_CKPT"),
@@ -84,9 +78,9 @@ def hq_llm_config(args: argparse.Namespace, env: Mapping[str, str]) -> LLMConfig
                      temperature=hq_constants.TEMPERATURE, max_tokens=hq_constants.MAX_TOKENS, seed=hq_constants.SEED)
 
 
-def _chroma_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--chroma-host", default=None, help="Chroma server (default: CHROMA_HOST, else localhost)")
-    p.add_argument("--chroma-port", type=int, default=None, help="default: CHROMA_PORT, else 8001")
+def _store_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--database-url", default=None,
+                   help="PostgreSQL + pgvector (default: DATABASE_URL, else postgresql://kosis:***@localhost:5432/kosis)")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -102,7 +96,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--data-dir", type=Path, required=True)
     p.add_argument("--out", type=Path, default=SIGUNGU)
 
-    p = sub.add_parser("chroma", help="load the table metadata into ChromaDB (T2-24)")
+    p = sub.add_parser("vectors", help="load the table metadata into the vector store (T2-24; T2-44: was `chroma`)")
     p.add_argument("--tables", type=Path, default=DATA / "tables.jsonl")
     p.add_argument("--model", choices=("kure", "bge-m3-ft"), default="kure",
                    help="kure: KURE-v1 over the T2-27 text (default); bge-m3-ft: fine-tuned bge-m3 (T2-06)")
@@ -110,17 +104,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--text-format", default=None,
                    help="bge-m3-ft: kosis_rag.shared.tabletext format (default: TEXT_FORMAT, else n2-L60)")
     p.add_argument("--collection", default=None,
-                   help=f"default: kure {chroma.COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
-                        f"bge-m3-ft {chroma.FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
+                   help=f"default: kure {vector_index.COLLECTION_PREFIX}<doc_format>__<hash of tables.jsonl and formats>; "
+                        f"bge-m3-ft {vector_index.FT_COLLECTION_PREFIX}<YYYYMMDDHHMM>")
     p.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
-    p.add_argument("--list", action="store_true", help="list the builds on the server and which one is active")
+    p.add_argument("--list", action="store_true", help="list the builds in the store and which one is active")
     p.add_argument("--export", type=Path, default=None,
-                   help="write the build to this .npz instead of Chroma (e.g. embed on a Colab GPU, T2-11)")
+                   help="write the build to this .npz instead of the store (e.g. embed on a Colab GPU, T2-11)")
     p.add_argument("--import", dest="import_", type=Path, default=None,
-                   help="load a build written by --export into Chroma (no embedding)")
-    _chroma_args(p)
+                   help="load a build written by --export into the store (no embedding)")
+    _store_args(p)
 
-    p = sub.add_parser("chunks", help="region chunks of the very large tables: registry + Chroma collection (T2-43)")
+    p = sub.add_parser("chunks", help="region chunks of the very large tables: registry + their own collection (T2-43)")
     p.add_argument("--data-dir", type=Path, required=True, help="the provided data folder holding values/<key>.parquet")
     p.add_argument("--tables", type=Path, default=DATA / "tables.jsonl")
     p.add_argument("--table", action="append", default=None, help="table key; repeat it (default: the two largest tables)")
@@ -128,7 +122,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--registry-only", action="store_true", help="write the registry, do not embed or load")
     p.add_argument("--collection", default=None, help="default: kosis_chunks__<format>__<hash of the Parquet files>")
     p.add_argument("--device", default=None, help="cpu, mps or cuda (default: auto)")
-    _chroma_args(p)
+    _store_args(p)
 
     p = sub.add_parser("text", help="table text formats: lengths and samples (kosis_rag.shared.tabletext)")
     p.add_argument("--tables", type=Path, default=DATA / "tables.jsonl")
@@ -148,7 +142,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--text-format", default=text.DOC_FORMAT, help="table text format (n2-L60)")
     p.add_argument("--device", default=None, help="cpu or cuda for the cross-encoder (default: auto)")
 
-    p = sub.add_parser("hq-index", help="load a hypothetical question build into Chroma (T2-39)")
+    p = sub.add_parser("hq-index", help="load a hypothetical question build into the store (T2-39)")
     p.add_argument("--build", required=True, help="build id printed by hq-build")
     p.add_argument("--ckpt", default=None, help="fine-tuned bge-m3 .pt (default: EMBED_CKPT)")
     p.add_argument("--desc", action="store_true", help="index the descriptions instead (build id <id>-desc)")
@@ -156,8 +150,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--collection", default=None, help="override the collection name")
     p.add_argument("--hq-root", type=Path, default=None, help="folder of the hq builds (default: data/hq)")
     p.add_argument("--dry-run", action="store_true",
-                   help="print data_sha256, the collection name and the document count; no embedding, no Chroma")
-    _chroma_args(p)
+                   help="print data_sha256, the collection name and the document count; no embedding, no database")
+    _store_args(p)
     return ap
 
 
@@ -185,33 +179,33 @@ def run_sigungu(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_chroma(args: argparse.Namespace, env: Mapping[str, str]) -> int:
+def run_vectors(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     spec = index_spec(args, env)
     if args.list:
-        from kosis_rag.adapters.chroma import chroma_client
+        from kosis_rag.adapters.vectorstore import vector_client
 
-        return chroma.list_builds(chroma_client(spec.chroma), spec.chroma.collection)
+        return vector_index.list_builds(vector_client(spec.vector_store), spec.vector_store.collection)
     if args.import_:
-        from kosis_rag.adapters.chroma import chroma_client
+        from kosis_rag.adapters.vectorstore import vector_client
 
-        build = chroma.read_build(args.import_)
-        count = chroma.load(chroma_client(spec.chroma), build["ids"], build["docs"], build["metas"], build["vectors"],
+        build = vector_index.read_build(args.import_)
+        count = vector_index.load(vector_client(spec.vector_store), build["ids"], build["docs"], build["metas"], build["vectors"],
                             build["name"], build["record"])
         print(f"collection {build['name']}: {count} documents")
-        print(f"to search it, set CHROMA_COLLECTION={build['name']}")
+        print(f"to search it, set VECTOR_COLLECTION={build['name']}")
         return 0 if count == len(build["ids"]) else 1
 
-    from kosis_rag_build.graph.index_build import build_chroma_graph
+    from kosis_rag_build.graph.index_build import build_vectors_graph
     from kosis_rag_build.schemas import IndexBuildState
 
     state = IndexBuildState(tables=spec.tables, model=args.model, ckpt=spec.embed_ckpt, text_format=spec.text_format,
-                            collection=args.collection, device=spec.device, export=args.export, chroma=spec.chroma)
-    state = IndexBuildState.model_validate(build_chroma_graph().invoke(state))
+                            collection=args.collection, device=spec.device, export=args.export, vector_store=spec.vector_store)
+    state = IndexBuildState.model_validate(build_vectors_graph().invoke(state))
     if args.export:
-        print(f"wrote {args.export}; load it with: python -m kosis_rag_build.cli chroma --import {args.export.name}")
+        print(f"wrote {args.export}; load it with: python -m kosis_rag_build.cli vectors --import {args.export.name}")
         return 0
     print(f"collection {state.name}: {state.count} documents")
-    print(f"to search it, set CHROMA_COLLECTION={state.name} (the previous builds stay; switch back the same way)")
+    print(f"to search it, set VECTOR_COLLECTION={state.name} (the previous builds stay; switch back the same way)")
     return 0 if state.count == len(state.ids) else 1
 
 
@@ -240,7 +234,7 @@ def run_chunks(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     if args.registry_only:
         return 0
 
-    from kosis_rag.adapters.chroma import chroma_client
+    from kosis_rag.adapters.vectorstore import vector_client
     from kosis_rag.adapters.models import kure_embedder
 
     docs = [ch.to_document(c, infos[c.table_key]) for c in registry]
@@ -256,7 +250,7 @@ def run_chunks(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     name = args.collection or ch.collection_name(data_sha256)
     record = ch.chunk_record(index_version_now(), hashlib.sha256(data_sha256.encode()).hexdigest(), registry,
                              len(vectors[0]), longest)
-    count = chroma.load(chroma_client(chroma_config(args, env)), [c.id for c in registry], docs, metas, vectors,
+    count = vector_index.load(vector_client(store_config(args, env)), [c.id for c in registry], docs, metas, vectors,
                         name, record)
     print(f"collection {name}: {count} chunks (the table collection is unchanged)")
     return 0 if count == len(registry) else 1
@@ -350,7 +344,7 @@ def run_hq_index(args: argparse.Namespace, env: Mapping[str, str]) -> int:
     spec = index_spec(args, env)
     build = args.build + (constants.DESC_SUFFIX if args.desc and not args.build.endswith(constants.DESC_SUFFIX) else "")
     state = QuestionsIndexState(build=build, ckpt=spec.embed_ckpt, device=spec.device, collection=args.collection,
-                                hq_root=args.hq_root, chroma=spec.chroma, dry_run=args.dry_run)
+                                hq_root=args.hq_root, vector_store=spec.vector_store, dry_run=args.dry_run)
     state = QuestionsIndexState.model_validate(build_questions_graph().invoke(state))
     questions_index.summary(state)
     return 0 if state.dry_run or state.count == len(state.rows) else 1
@@ -365,8 +359,8 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         return run_tables(args)
     if args.command == "sigungu":
         return run_sigungu(args)
-    if args.command == "chroma":
-        return run_chroma(args, env)
+    if args.command == "vectors":
+        return run_vectors(args, env)
     if args.command == "chunks":
         return run_chunks(args, env)
     if args.command == "text":

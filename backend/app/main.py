@@ -105,10 +105,10 @@ _lock = threading.Lock()
 
 
 def get_runtime() -> Runtime:
-    """Load the resources on first use (not at startup, so /health works without Chroma or data/).
+    """Load the resources on first use (not at startup, so /health works without the database or data/).
 
     Out: the shared Runtime. Side effects: the first call reads the shell environment (backend/app/config.py, no
-    .env), reads tables.jsonl, connects to Chroma, loads the models; a failure is a 503 and the next request tries
+    .env), reads tables.jsonl, connects to the vector store, loads the models; a failure is a 503 and the next request tries
     again. The guide LLM is not made here (Runtime.guide, on the first guide run).
     """
     global _runtime

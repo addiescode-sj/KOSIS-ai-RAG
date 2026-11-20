@@ -1,10 +1,10 @@
 """Structured filters for table search (T2-05, D; T2-14; T2-27; T2-29): year, cycle, organization, 시도, breakdowns and
 what a table counts, decided on the registry.
 
-Filters are decided in Python on the registry (tables.jsonl, 2,364 records), not by Chroma range queries:
+Filters are decided in Python on the registry (tables.jsonl, 2,364 records), not by vector store range queries:
 a table passes only if its real periods contain the requested years, so a table whose listed range covers a year
 it does not actually hold (5-year censuses, collection gaps) is left out, and the reason is kept per table.
-`retrieve.dense.DenseIndex` then gives Chroma one condition, `key $in <passing keys>`.
+`retrieve.dense.DenseIndex` then gives the store one condition, `key $in <passing keys>`.
 When no table passes, `filter_with_relaxation` drops the conditions one at a time (T2-29, D1: measures, breakdowns,
 시도 hard -> soft, cycle) and keeps the years, so a wrong reading of the question lowers ranks instead of refusing.
 """
@@ -189,11 +189,11 @@ def lacks_measure(record: TableRecord, f: TableFilter) -> str | None:
 def filter_tables(records: dict[str, TableRecord], f: TableFilter) -> tuple[set[str], dict[str, str]]:
     """(keys that pass, {removed key: reason}).
 
-    Does: decides the filter on the whole registry before a vector search (Chroma gets the passing keys).
+    Does: decides the filter on the whole registry before a vector search (the store gets the passing keys).
     In: records = key -> TableRecord; f = the question's conditions.
     Out: (passing keys, removed key -> why_excluded reason).
     Side effects: none.
-    Node: retrieve (through ChromaTableRetriever.with_filter inside hybrid_search).
+    Node: retrieve (through DenseTableRetriever.with_filter inside hybrid_search).
     """
     passed, removed = set(), {}
     for key, record in records.items():
@@ -243,7 +243,7 @@ def filter_with_relaxation(records: dict[str, TableRecord], f: TableFilter
         keys were decided on, i.e. `relax(f, dropped)`). An empty filter gives every key. When nothing passes even
         with every droppable condition gone, the years alone refuse: (set(), [], removed under `f` itself).
     Side effects: none.
-    Node: retrieve (ChromaTableRetriever, HybridRetriever, ConditionRetriever and the graph's retrieve node).
+    Node: retrieve (DenseTableRetriever, HybridRetriever, ConditionRetriever and the graph's retrieve node).
     """
     if f.is_empty():
         return set(records), [], {}

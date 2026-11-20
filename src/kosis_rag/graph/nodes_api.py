@@ -56,7 +56,7 @@ def make_nodes(resources: SearchResources, *, k: int = 5) -> dict[str, Node]:
 
         In: state.question, state.query. Out: {"docs", "removed", "relaxed", "table_filter", "runs", "run_removed",
             "query_vecs" (empty), "trace" (each step's entry and "retrieve")}.
-        Side effects: as the steps (Chroma query, BM25 scoring, query embedding). Node: none (the API's retrieve).
+        Side effects: as the steps (vector store query, BM25 scoring, query embedding). Node: none (the API's retrieve).
         """
         started = time.perf_counter()
         cur = state.model_copy(update={"table_filter": None, "query_vecs": {}, "relaxed": [], "runs": {},

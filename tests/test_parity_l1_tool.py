@@ -80,7 +80,7 @@ class NamedDense(CatalogRetriever):
 def _old_shaped(resources) -> SimpleNamespace:
     """The same resources as the S0 code saw them: one `settings` object with the old settings fields."""
     o, spec = resources.options, resources.spec
-    settings = SimpleNamespace(**o.model_dump(), tables=spec.tables or TOOL_TABLES, collection=spec.chroma.collection,
+    settings = SimpleNamespace(**o.model_dump(), tables=spec.tables or TOOL_TABLES, collection=spec.vector_store.collection,
                                text_format=spec.text_format, embed_ckpt=spec.embed_ckpt, rerank_ckpt=spec.rerank_ckpt,
                                device=spec.device, hq_build=spec.hq_build)
     return SimpleNamespace(settings=settings, **{k: getattr(resources, k) for k in (
@@ -138,3 +138,15 @@ def test_preset_graph_is_built_from_the_new_settings_objects(monkeypatch):
     assert plain.spec.rerank_ckpt is None and plain.stage1_score is None and plain.options.cond_filter
     assert staged.spec.rerank_ckpt == "data/models/r.pt" and staged.stage1_score is not None
     assert "rerank1" in graph.get_graph().nodes and "rerank2" not in graph.get_graph().nodes
+
+
+def test_score_tolerance_only_loosens_floats():
+    """T2-44: Chroma (float32) and pgvector (double) give the same vectors' scores with different last digits; the
+    ranking (keys, order) must still match exactly."""
+    a = {"q1": {"keys": ["A", "B"], "docs": [{"key": "A", "score": 0.912345678}, {"key": "B", "score": 0.5}]}}
+    near = {"q1": {"keys": ["A", "B"], "docs": [{"key": "A", "score": 0.912345012}, {"key": "B", "score": 0.5}]}}
+    swapped = {"q1": {"keys": ["B", "A"], "docs": [{"key": "B", "score": 0.5}, {"key": "A", "score": 0.912345678}]}}
+    assert TOOL.diff_rows(a, near) == ["q1 docs[0].score: 0.912345678 vs 0.912345012"]  # default: exact
+    assert TOOL.diff_rows(a, near, 1e-5) == []
+    assert TOOL.diff_rows(a, swapped, 1e-5)  # order and keys are never loosened
+    assert TOOL.diff_rows({"q1": {"n": 1}}, {"q1": {"n": 1.0}}, 1e-5)  # int vs float stays a difference

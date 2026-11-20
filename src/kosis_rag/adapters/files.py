@@ -1,7 +1,7 @@
 """Files the search module reads (T2-41 S1): the table registry (from pipeline.py), 시군구 -> 시도 (from vocab.py) and,
 from S2, the rows of a question index build (from hq/index.py).
 
-Only what the online search reads; build outputs (tables.jsonl, sigungu.json, Chroma builds, hq caches) are written
+Only what the online search reads; build outputs (tables.jsonl, sigungu.json, vector builds, hq caches) are written
 by the offline build package (T2-41 S6a).
 """
 

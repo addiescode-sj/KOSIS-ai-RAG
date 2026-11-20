@@ -6,7 +6,7 @@ from kosis_chat.llm.model import STATUS_API_ERROR, LLMResult, MockClient
 from backend.app.respond import legacy as respond_legacy  # T2-41 S5: chain.answer -> respond.legacy.answer
 from backend.app.respond.legacy import answer_tool
 from backend.app.respond.texts import NO_MATCH
-from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever
+from kosis_rag.legacy.retrievers import BM25TableRetriever, DenseTableRetriever
 from kosis_rag.shared.catalog import load_catalog, to_document
 from kosis_rag.legacy.tools import build_tools
 
@@ -71,7 +71,7 @@ class _FakeCollection:
 def test_chroma_retriever_feeds_the_same_chain_and_tools():
     docs = [to_document(t) for t in load_catalog(FIXTURE)]
     distances = [0.6, 0.1] + [0.9] * (len(docs) - 2)
-    retriever = ChromaTableRetriever(collection=_FakeCollection(docs, distances), embed_query=lambda q: [0.0], k=3)
+    retriever = DenseTableRetriever(collection=_FakeCollection(docs, distances), embed_query=lambda q: [0.0], k=3)
     [search] = build_tools(retriever)
     answer = answer_tool(retriever, MockClient())
     hits = search.invoke({"question": "아무 질문", "k": 2})

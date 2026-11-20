@@ -63,7 +63,7 @@ def retrieve_list(name: str, inp: ListInput, resources: Any) -> ListOutput:
     In: name = the list name (dense, bm25, hq, hq_bm25); inp.question, inp.table_filter (from condition),
         inp.vector (this list's question vector from embed, if any: the search uses it instead of the embedder).
     Out: ListOutput(docs = ranked docs (at most options.pool), removed = key -> why filtered out, relaxed, missing).
-    Side effects: the list's search (Chroma query or BM25 scoring); ValueError as search_list; KeyError for a name
+    Side effects: the list's search (vector store query or BM25 scoring); ValueError as search_list; KeyError for a name
         that is not one of search_lists(resources). Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25.
     """
     retriever = {n: r for n, r, _ in search_lists(resources)}[name]

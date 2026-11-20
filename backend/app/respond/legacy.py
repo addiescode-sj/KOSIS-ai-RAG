@@ -26,7 +26,7 @@ def answer(retriever: BaseRetriever, client: LLMClient | BaseChatModel, question
     In: retriever = the staged search (kosis_rag.legacy.pipeline.build_search); client = the guide LLM;
         question = the user question; k = tables shown to the answer.
     Out: SearchResult from refuse or guide on the top k.
-    Side effects: runs the retriever (Chroma, models, stage 2 LLM in production) and at most one guide LLM call.
+    Side effects: runs the retriever (vector store, models, stage 2 LLM in production) and at most one guide LLM call.
     Node: not used by the graph (the graph runs gate.node.decide_route / refuse / guide as gate / refuse / guide).
     """
     docs = retriever.invoke(question)[:k]
