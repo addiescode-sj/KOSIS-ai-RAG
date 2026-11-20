@@ -13,12 +13,12 @@ from backend.app import config
 from backend.app.config import SearchConfig, search_config_from_shell
 from kosis_rag.adapters import files
 from kosis_rag.llm.config import require_key
-from kosis_rag.schemas.resources import IndexSpec, SearchOptions
+from kosis_rag.schemas.resources import DEFAULT_DATABASE_URL, IndexSpec, SearchOptions
 
 pytestmark = pytest.mark.offline
 
 REPO = Path(__file__).resolve().parents[1]
-ENV_KEYS = ("CHROMA_HOST", "CHROMA_PORT", "CHROMA_COLLECTION", "TEXT_FORMAT", "EMBED_CKPT", "RERANK_CKPT", "RERANK_MODE",
+ENV_KEYS = ("DATABASE_URL", "VECTOR_COLLECTION", "TEXT_FORMAT", "EMBED_CKPT", "RERANK_CKPT", "RERANK_MODE",
             "STAGE2", "COND_FILTER", "ANSWER_K", "HQ_BUILD", "HQ_WEIGHT", "HQ_BM25", "HCX_API_KEY", "HCX_THINKING",
             "OPENAI_API_KEY", "CLOVASTUDIO_API_KEY", "GUIDE_MODEL", "GUIDE_TEMPERATURE", "GUIDE_MAX_TOKENS",
             "GUIDE_TIMEOUT")
@@ -29,7 +29,7 @@ OLD_DEFAULTS = {
     "stage2_k": 20, "answer_k": 5, "device": None, "hq_build": None, "hq_weight": 1.0, "hq_bm25": False,
 }
 # where each old field lives now
-NEW_PLACE = {"collection": lambda c: c.spec.chroma.collection, "tables": lambda c: c.spec.tables or files.TABLES}
+NEW_PLACE = {"collection": lambda c: c.spec.vector_store.collection, "tables": lambda c: c.spec.tables or files.TABLES}
 
 
 @pytest.fixture
@@ -48,20 +48,21 @@ def _read(cfg: SearchConfig, name: str):
 def test_empty_environment_gives_the_old_defaults(env):
     cfg = search_config_from_shell()
     assert {name: _read(cfg, name) for name in OLD_DEFAULTS} == OLD_DEFAULTS
-    assert (cfg.spec.chroma.host, cfg.spec.chroma.port) == ("localhost", 8001)  # env_chroma_config's defaults
+    assert cfg.spec.vector_store.url == DEFAULT_DATABASE_URL  # the compose postgres on the host (T2-44)
     assert cfg.stage2_llm is None
     assert cfg.options == SearchOptions() and cfg.spec == IndexSpec()  # the objects' own defaults agree too
     assert cfg.options.label(cfg.spec) == "hybrid+cond"
 
 
 def test_variables_are_converted_as_the_old_settings_did(env):
-    for key, value in {"CHROMA_HOST": "chroma", "CHROMA_PORT": "8000", "CHROMA_COLLECTION": "kosis_a_x",
+    for key, value in {"DATABASE_URL": "postgresql://kosis:pw@postgres:5432/kosis", "VECTOR_COLLECTION": "kosis_a_x",
                        "TEXT_FORMAT": "n2-L60", "EMBED_CKPT": "e.pt", "RERANK_CKPT": "r.pt", "RERANK_MODE": "score",
                        "STAGE2": " HCX ", "COND_FILTER": "off", "ANSWER_K": "7", "HQ_BUILD": " hq-x ",
                        "HQ_WEIGHT": "0.5", "HQ_BM25": "on", "HCX_API_KEY": "k-hcx", "HCX_THINKING": "LOW"}.items():
         env.setenv(key, value)
     cfg = search_config_from_shell()
-    assert (cfg.spec.chroma.host, cfg.spec.chroma.port, cfg.spec.chroma.collection) == ("chroma", 8000, "kosis_a_x")
+    assert (cfg.spec.vector_store.url, cfg.spec.vector_store.collection) == (
+        "postgresql://kosis:pw@postgres:5432/kosis", "kosis_a_x")
     assert (cfg.spec.text_format, cfg.spec.embed_ckpt, cfg.spec.rerank_ckpt, cfg.spec.hq_build) == (
         "n2-L60", "e.pt", "r.pt", "hq-x")
     o = cfg.options
@@ -90,7 +91,7 @@ def test_empty_variables_are_unset_and_overrides_win(env):
             cfg.options.answer_k) == (None, None, "none", True, 5)
     env.setenv("RERANK_CKPT", "r.pt")
     cfg = search_config_from_shell(cond_filter=False, rerank_ckpt=None, stage2="none", collection="c", pool=30)
-    assert (cfg.options.cond_filter, cfg.spec.rerank_ckpt, cfg.spec.chroma.collection, cfg.options.pool) == (
+    assert (cfg.options.cond_filter, cfg.spec.rerank_ckpt, cfg.spec.vector_store.collection, cfg.options.pool) == (
         False, None, "c", 30)
     with pytest.raises(TypeError, match="unknown search setting"):
         search_config_from_shell(nope=1)

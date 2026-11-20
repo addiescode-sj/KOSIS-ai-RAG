@@ -31,11 +31,11 @@ def ckpt8(ckpt_id: str | None) -> str:
 
 
 def collection_name(build_id: str, ckpt_id: str | None) -> str:
-    """kosis_hq__<build_id>__<ckpt8>, lower-cased with characters Chroma refuses replaced by '-' (3-512 chars,
+    """kosis_hq__<build_id>__<ckpt8>, lower-cased with characters the naming rule refuses replaced by '-' (3-512 chars,
     alphanumeric at both ends, no '..').
-    Side effects: ValueError for a name Chroma refuses. Node: none (index CLI, load_resources).
+    Side effects: ValueError for a name the naming rule refuses. Node: none (index CLI, load_resources).
     """
     name = _INVALID.sub("-", f"{HQ_COLLECTION_PREFIX}{build_id}__{ckpt8(ckpt_id)}".lower())[:512].strip("-_")
     if not COLLECTION_NAME.match(name) or ".." in name:
-        raise ValueError(f"{name!r} is not a valid Chroma collection name")
+        raise ValueError(f"{name!r} is not a valid collection name")
     return name

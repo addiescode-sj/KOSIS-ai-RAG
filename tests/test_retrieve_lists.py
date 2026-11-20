@@ -8,7 +8,7 @@ import pytest
 from langchain_core.documents import Document
 from pydantic import ValidationError
 
-from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever, HqRetriever
+from kosis_rag.legacy.retrievers import BM25TableRetriever, DenseTableRetriever, HqRetriever
 from kosis_rag.retrieve import node as retrieve_step
 from kosis_rag.retrieve.bm25 import bm25_index
 from kosis_rag.retrieve.dense import DenseIndex
@@ -48,9 +48,9 @@ def _embed(calls):
 
 @pytest.mark.parametrize("f", FILTERS)
 def test_dense_index_equals_the_chroma_retriever(f):
-    """DenseIndex.search == ChromaTableRetriever.with_filter(f).invoke(), its last_* coming back as values."""
+    """DenseIndex.search == DenseTableRetriever.with_filter(f).invoke(), its last_* coming back as values."""
     index = DenseIndex(collection=FakeTables(), embed_query=_embed([]), k=3)
-    legacy = ChromaTableRetriever(collection=FakeTables(), embed_query=_embed([]), k=3)
+    legacy = DenseTableRetriever(collection=FakeTables(), embed_query=_embed([]), k=3)
     scoped = legacy.with_filter(f, BY_KEY) if f is not None else legacy
     docs = scoped.invoke("q")
     assert index.search("q", table_filter=f, records=BY_KEY) == (docs, scoped.last_removed, scoped.last_relaxed, 0)
@@ -98,7 +98,7 @@ def test_search_list_returns_its_state_for_every_kind_of_list(f):
     g = condition_filter(f, BY_KEY)
     filtered = f is not None and not f.is_empty()
     dense = DenseIndex(collection=FakeTables(), embed_query=_embed([]))
-    legacy = ChromaTableRetriever(collection=FakeTables(), embed_query=_embed([]))
+    legacy = DenseTableRetriever(collection=FakeTables(), embed_query=_embed([]))
     new = search_list("q", dense, table_filter=g, records=BY_KEY, filtered=filtered)
     assert len(new) == 4 and new == search_list("q", legacy, table_filter=g, records=BY_KEY, filtered=filtered)
     texts = [Document(page_content=f"인구 {k}", metadata={**to_document(BY_KEY[k].info).metadata}, id=k) for k in KEYS]
@@ -110,7 +110,7 @@ def test_search_list_returns_its_state_for_every_kind_of_list(f):
 def test_search_list_hands_the_vector_to_every_kind_of_list():
     calls = []
     for lst in (DenseIndex(collection=FakeTables(), embed_query=_embed(calls)),
-                ChromaTableRetriever(collection=FakeTables(), embed_query=_embed(calls))):
+                DenseTableRetriever(collection=FakeTables(), embed_query=_embed(calls))):
         search_list("q", lst, vector=[0.25, 0.75])
         search_list("q", lst, table_filter=TableFilter(years=[2023]), records=BY_KEY, vector=[0.25, 0.75])
         assert lst.collection.calls[-1]["vector"] == [0.25, 0.75]

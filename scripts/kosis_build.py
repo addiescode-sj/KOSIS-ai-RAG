@@ -1,9 +1,9 @@
 """Run the offline build CLI with the shell environment as the settings fallback (T2-41 S6a, 미결 3).
 
-    python scripts/kosis_build.py {tables|sigungu|chroma|text|hq-build|hq-index} ...
+    python scripts/kosis_build.py {tables|sigungu|vectors|chunks|text|hq-build|hq-index} ...
 
 Same commands and arguments as `python -m kosis_rag_build.cli` (see its docstring). This script is the one place
-that reads the environment for the build: CHROMA_HOST CHROMA_PORT CHROMA_COLLECTION EMBED_CKPT RERANK_CKPT
+that reads the environment for the build: DATABASE_URL VECTOR_COLLECTION EMBED_CKPT RERANK_CKPT
 TEXT_FORMAT OPENAI_API_KEY from the shell (`set X=...` first). No .env is read.
 (Windows cmd: `set PYTHONPATH=.;src;vendor/phase1;vendor/phase1/src`.)
 """

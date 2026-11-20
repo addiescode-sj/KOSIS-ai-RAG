@@ -2,7 +2,7 @@
 
     offline   python -m kosis_rag_build.cli hq-build   tables -> generation graph (graph/hq_build.py over hq/nodes.py)
                                                        -> data/hq/<build_id>/questions.jsonl
-              python -m kosis_rag_build.cli hq-index   questions -> Chroma collection kosis_hq__<build_id>__<ckpt8>
+              python -m kosis_rag_build.cli hq-index   questions -> vector collection kosis_hq__<build_id>__<ckpt8>
     query     IndexSpec(hq_build=<build_id>)           the search graph adds retrieve_hq (and retrieve_hq_bm25 with
                                                        SearchOptions(hq_bm25=True)); kosis_rag.retrieve.hq reads it
 

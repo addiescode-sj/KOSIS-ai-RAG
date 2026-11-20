@@ -1,22 +1,22 @@
-"""The table index (T2-24, versioned A builds in T2-05): one Chroma document per table, built from the table metadata
-only (tables.jsonl). T2-41 S6a: was index.py of the search package (its CLI is `python -m kosis_rag_build.cli chroma`, the graph
-graph/index_build.build_chroma_graph over the nodes at the end of this file).
+"""The table index (T2-24, versioned A builds in T2-05): one vector store row per table, built from the table metadata
+only (tables.jsonl). T2-41 S6a: was index.py of the search package (its CLI is `python -m kosis_rag_build.cli vectors`, the graph
+graph/index_build.build_vectors_graph over the nodes at the end of this file).
 
 Values are not loaded. Embedding every row (617M) was measured at ~72 days and ~47 GB of vectors on an M3,
 and the values are fetched from Parquet with pandas as in stage 1, so the search document only carries what
 helps find a table: name, survey, organization, real period range, cycle, menu paths, items and labels.
 
-Embeddings are computed here and passed to Chroma (`upsert(embeddings=...)`), so the collection never relies on
-Chroma's default (English) embedding function; queries must be embedded with the same model.
+Embeddings are computed here and passed to the store (`upsert(embeddings=...)`), so the collection never relies on
+a store-side (English) embedding function; queries must be embedded with the same model.
 `TableRecord.search_text` (all labels, up to 22,929 chars) stays the BM25 document; the embedding document below
 summarizes region classes by level and caps the other labels per class so every table fits the model's input.
 
-    python -m kosis_rag_build.cli chroma
-    python -m kosis_rag_build.cli chroma --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
+    python -m kosis_rag_build.cli vectors
+    python -m kosis_rag_build.cli vectors --model bge-m3-ft --ckpt data/models/bge-m3-seen-e2.pt   # T2-06 collection
 
 `--model bge-m3-ft` loads the fine-tuned bge-m3 (kosis_rag.adapters.models) and embeds the text format it was trained on
 (kosis_rag.shared.tabletext, `--text-format`) into its own collection (FT_COLLECTION_PREFIX); the checkpoint id goes into the collection metadata
-so `ChromaTableRetriever.connect` embeds questions with the same weights. Metadata (filters) is the same either way.
+so `DenseTableRetriever.connect` embeds questions with the same weights. Metadata (filters) is the same either way.
 EMBED_MODEL / kure_embedder live in kosis_rag.adapters.models, region_summary in kosis_rag.shared.tabletext and the
 COLLECTION_NAME pattern in kosis_rag.shared.constants (the search reads them too).
 """
@@ -95,9 +95,9 @@ def to_document(record: TableRecord) -> str:
 
 
 def to_metadata(record: TableRecord) -> dict:
-    """Chroma metadata: the listing scalars, plus the per-table fields (T2-30) as `f_*` lists for `$contains` filters.
+    """Row metadata: the listing scalars, plus the per-table fields (T2-30) as `f_*` lists for `$contains` filters.
 
-    Keys of shared.catalog._META_FIELDS stay as they are, so shared.catalog.to_candidate works unchanged. Chroma rejects None and
+    Keys of shared.catalog._META_FIELDS stay as they are, so shared.catalog.to_candidate works unchanged. Chroma rejected None and
     empty lists, so a field the table does not have is left out; a table with no administrative class gets
     f_national instead of f_regions. No load time per document, so reloading a build gives the same metadata.
     """
@@ -121,7 +121,7 @@ def collection_name(data_sha256: str) -> str:
     digest = hashlib.sha256(f"{data_sha256}|{DOC_FORMAT}|{META_FORMAT}".encode()).hexdigest()[:8]
     name = f"{COLLECTION_PREFIX}{DOC_FORMAT}__{digest}"
     if not constants.COLLECTION_NAME.match(name) or ".." in name:
-        raise ValueError(f"{name!r} is not a valid Chroma collection name; DOC_FORMAT must use a-z, 0-9, - and _ only")
+        raise ValueError(f"{name!r} is not a valid collection name; DOC_FORMAT must use a-z, 0-9, - and _ only")
     return name
 
 
@@ -181,9 +181,9 @@ def read_build(path: Path) -> dict:
 
 
 def list_builds(client, active: str | None = None, out: Callable[[str], None] = print) -> int:
-    """Every table collection on the server with what it was built from; * marks `active` (CHROMA_COLLECTION, the
-    one the search uses). In: client = a Chroma client (kosis_rag.adapters.chroma.chroma_client). Side effects:
-    reads the server, prints one line per build. Node: none (cli chroma --list)."""
+    """Every table collection in the store with what it was built from; * marks `active` (VECTOR_COLLECTION, the
+    one the search uses). In: client = a vector store client (kosis_rag.adapters.vectorstore.vector_client). Side effects:
+    reads the store, prints one line per build. Node: none (cli vectors --list)."""
     for c in sorted(client.list_collections(), key=lambda c: (c.metadata or {}).get("index_version") or ""):
         m = c.metadata or {}
         if "doc_format" not in m:
@@ -192,7 +192,7 @@ def list_builds(client, active: str | None = None, out: Callable[[str], None] = 
         out(f"{mark} {c.name}  {m.get('doc_format')}  meta {m.get('meta_format', '-')}  docs {c.count()}  "
             f"loaded {m.get('index_version', '-')}  data {str(m.get('data_sha256', '-'))[:16]}")
     if active and active not in {c.name for c in client.list_collections()}:
-        out(f"CHROMA_COLLECTION={active} is not on this server")
+        out(f"VECTOR_COLLECTION={active} is not in this store")
     return 0
 
 
@@ -226,7 +226,7 @@ def load_doc_embedder(state: IndexBuildState, log: Callable[[str], None] = print
     return DocEmbedder(embed, count_tokens, max_tokens, {})
 
 
-# --- nodes (graph/index_build.build_chroma_graph) ---
+# --- nodes (graph/index_build.build_vectors_graph) ---
 
 def _timed(name: str, trace: dict, started: float, **extra: Any) -> dict[str, dict[str, Any]]:
     return {**trace, name: {"seconds": time.perf_counter() - started, **extra}}
@@ -296,7 +296,7 @@ def make_embed(embedder: DocEmbedder | Callable[[IndexBuildState], DocEmbedder] 
 
 
 def make_load(client: Any = None):
-    """The load node: upsert into Chroma through `client` (None: kosis_rag.adapters.chroma.chroma_client(state.chroma),
+    """The load node: upsert into the vector store through `client` (None: kosis_rag.adapters.vectorstore.vector_client(state.vector_store),
     opened when the node runs)."""
 
     def load_node(state: IndexBuildState) -> dict:
@@ -305,9 +305,9 @@ def make_load(client: Any = None):
         started = time.perf_counter()
         c = client
         if c is None:
-            from kosis_rag.adapters.chroma import chroma_client
+            from kosis_rag.adapters.vectorstore import vector_client
 
-            c = chroma_client(state.chroma)
+            c = vector_client(state.vector_store)
         count = load(c, state.ids, state.docs, state.metas, state.vectors, state.name, state.record)
         return {"count": count, "trace": _timed("load", state.trace, started)}
 
@@ -315,7 +315,7 @@ def make_load(client: Any = None):
 
 
 def write_build_node(state: IndexBuildState) -> dict:
-    """write_build to state.export instead of Chroma. Out: {"count", "trace"}. Side effects: writes the .npz.
+    """write_build to state.export instead of the store. Out: {"count", "trace"}. Side effects: writes the .npz.
     Node: write_build."""
     started = time.perf_counter()
     write_build(state.export, name=state.name, ids=state.ids, docs=state.docs, metas=state.metas,

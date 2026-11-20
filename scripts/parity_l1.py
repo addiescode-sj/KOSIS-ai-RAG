@@ -4,7 +4,7 @@
     python scripts/parity_l1.py dump --preset staged [--questions <jsonl|txt>] --out data/parity/l1_s0_staged.jsonl
     python scripts/parity_l1.py compare data/parity/l1_s0_hybrid+cond.jsonl data/parity/l1_sN_hybrid+cond.jsonl
 
-dump needs the real resources (tables.jsonl, the Chroma server, the models of the preset): it runs on the PC only.
+dump needs the real resources (tables.jsonl, the vector store, the models of the preset): it runs on the PC only.
 The default questions are the L1 golden v2 questions, read by code (evals.schemas.load_items); --questions takes a
 jsonl file (lines with "question", optional "qid") or a text file (one question per line, qid q0001, q0002, ...).
 One line per question: {qid, question, keys, docs: [{key, score, rrf_score, rank_*, stage1_*}], removed, relaxed,
@@ -12,7 +12,7 @@ route, refusal_reason}; timings (*_seconds) and the trace are left out.
 
 dump also writes `<out>.manifest.json`: preset, question source (path, sha256), expected (question count), qids_sha256,
 written, completed (true only after the last line is flushed; a stopped run leaves false), and `config`, the effective
-search configuration read off the built resources (Chroma collection, embedder, text format, tables.jsonl sha256,
+search configuration read off the built resources (dense collection, embedder, text format, tables.jsonl sha256,
 active lists and stages, fusion weights incl. the hq weight, re-ranker checkpoints, cond_filter, pool).
 
 compare refuses (exit 2) before looking at any row when a dump is empty or its manifest is missing, a run did not
@@ -89,7 +89,7 @@ def file_sha256(path: Path) -> str:
 
 
 def _collection(retriever: Any) -> tuple[str | None, dict[str, Any]]:
-    """(name, metadata) of a Chroma-backed retriever's collection; (None, {}) when it has none."""
+    """(name, metadata) of a vector-store-backed retriever's collection; (None, {}) when it has none."""
     collection = getattr(retriever, "collection", None)
     if collection is None:
         return None, {}
@@ -236,21 +236,30 @@ def read_dump(path: Path) -> dict[str, dict[str, Any]]:
     return {qid: json.loads(line) for qid, line in read_lines(path).items()}
 
 
-def diff_rows(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]]) -> list[str]:
-    """Human-readable differences between two dumps (qid sets, then field by field per qid)."""
+def _same(va: Any, vb: Any, tol: float = 0.0) -> bool:
+    """Equal values of the same type; two floats also when they are within tol (T2-44: pgvector returns the cosine
+    distance as double, Chroma as float32, so the same vectors can differ in the last digits)."""
+    if tol and isinstance(va, float) and isinstance(vb, float):
+        return abs(va - vb) <= tol
+    return va == vb and type(va) is type(vb)
+
+
+def diff_rows(a: dict[str, dict[str, Any]], b: dict[str, dict[str, Any]], tol: float = 0.0) -> list[str]:
+    """Human-readable differences between two dumps (qid sets, then field by field per qid); floats within tol are
+    equal (default 0: exact)."""
     lines = [f"only in a: {qid}" for qid in a if qid not in b] + [f"only in b: {qid}" for qid in b if qid not in a]
     for qid in (q for q in a if q in b):
         ra, rb = a[qid], b[qid]
         for name in sorted(set(ra) | set(rb)):
             va, vb = ra.get(name), rb.get(name)
-            if va == vb and type(va) is type(vb):
+            if _same(va, vb, tol):
                 continue
             if name == "docs" and isinstance(va, list) and isinstance(vb, list):
                 if len(va) != len(vb):
                     lines.append(f"{qid} docs: {len(va)} vs {len(vb)} documents")
                 for i, (da, db) in enumerate(zip(va, vb)):
                     for field in sorted(set(da) | set(db)):
-                        if da.get(field) != db.get(field) or type(da.get(field)) is not type(db.get(field)):
+                        if not _same(da.get(field), db.get(field), tol):
                             lines.append(f"{qid} docs[{i}].{field}: {da.get(field)!r} vs {db.get(field)!r}")
             else:
                 lines.append(f"{qid} {name}: {va!r} vs {vb!r}")
@@ -300,7 +309,7 @@ def check_dumps(a: Path, b: Path, la: dict[str, str], lb: dict[str, str]) -> lis
     return problems
 
 
-def compare(a: Path, b: Path) -> int:
+def compare(a: Path, b: Path, score_tol: float = 0.0) -> int:
     for path in (a, b):
         if not path.is_file():
             print(f"refused: {path}: no such dump", file=sys.stderr)
@@ -315,7 +324,10 @@ def compare(a: Path, b: Path) -> int:
     if la == lb:  # raw text per qid: catches 3 vs 3.0, True vs 1 and None vs missing, which == on values misses
         print("identical")
         return 0
-    lines = diff_rows(read_dump(a), read_dump(b))
+    lines = diff_rows(read_dump(a), read_dump(b), score_tol)
+    if score_tol and not lines:
+        print(f"identical within score tolerance {score_tol:g}")
+        return 0
     lines += [f"{qid}: text differs (type or key presence; values compare equal)"
               for qid in la if qid in lb and la[qid] != lb[qid] and not any(x.startswith(f"{qid} ") for x in lines)]
     print("\n".join(lines))
@@ -337,10 +349,12 @@ def main(argv: list[str] | None = None) -> int:
     p_cmp = sub.add_parser("compare", help="print identical, or the differing questions and fields (2: refused)")
     p_cmp.add_argument("a", type=Path)
     p_cmp.add_argument("b", type=Path)
+    p_cmp.add_argument("--score-tol", type=float, default=0.0,
+                       help="floats (scores) within this are equal, e.g. 1e-5 for Chroma vs pgvector (T2-44); default exact")
     args = parser.parse_args(argv)
     if args.command == "dump":
         return dump(args.preset, args.questions, args.out)
-    return compare(args.a, args.b)
+    return compare(args.a, args.b, args.score_tol)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,16 @@
 """Region chunks of the very large tables (T2-43, KOS-179): one region of a table = one chunk, values stay in Parquet.
 
-The table index (chroma.py) holds one document per table and only counts the regions ("읍면동(4,484)"), so a
+The table index (vector_index.py) holds one document per table and only counts the regions ("읍면동(4,484)"), so a
 question that names a place cannot reach 101_DT_1B04005N (47.2M rows) or 101_DT_1B04006 (21.1M rows). Both tables
 are region x age x item x period, and the only thing that differs between regions is which periods they really
 have (dongs are created, merged and abolished). So the chunk unit is the region code:
 
     region_registry(parquet, info)  one group-by over the table -> list[RegionChunk]  (data/chunks/regions.jsonl)
-    to_document / to_metadata       the Chroma document (no values) and its metadata (the Parquet filter)
+    to_document / to_metadata       the vector store row (no values) and its metadata (the Parquet filter)
     read_chunk_rows(parquet, meta)  chunk -> its rows, by the region code in the metadata
 
 The chunks go to their own collection (CHUNK_PREFIX), never the table collection the search reads; its record
-uses `chunk_format`, not `doc_format`, so `chroma --list` does not show it as a table build.
+uses `chunk_format`, not `doc_format`, so `vectors --list` does not show it as a table build.
 
     python -m kosis_rag_build.cli chunks --data-dir <provided data> [--registry-only]
 """
@@ -29,7 +29,7 @@ from kosis_rag.adapters.models import EMBED_MODEL
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared import constants
 from kosis_rag.shared.catalog import _META_FIELDS
-from kosis_rag_build.chroma import clean_item
+from kosis_rag_build.vector_index import clean_item
 
 CHUNK_TABLES = ("101_DT_1B04005N", "101_DT_1B04006")  # the two largest tables (KOS-179)
 CHUNK_FORMAT = "region1"  # bump when to_document or to_metadata changes: it is part of the collection name
@@ -171,9 +171,9 @@ def to_document(chunk: RegionChunk, info: TableInfo) -> str:
 
 
 def to_metadata(chunk: RegionChunk, info: TableInfo) -> dict:
-    """Chroma metadata: the table's listing fields (shared.catalog._META_FIELDS, so to_candidate works on a chunk),
+    """Row metadata: the table's listing fields (shared.catalog._META_FIELDS, so to_candidate works on a chunk),
     then the region and, per cycle, first / last period and count as integers for range filters. Missing periods
-    are listed only when there are any (Chroma rejects empty lists)."""
+    are listed only when there are any (Chroma rejected empty lists)."""
     meta: dict[str, Any] = {name: getattr(info, name) for name in _META_FIELDS}
     meta |= {"part": "region", "region_code": chunk.code, "region_label": chunk.label, "region_level": chunk.level,
              "region_path": " > ".join(chunk.path), "parent_code": chunk.parent, "rows": chunk.rows,
@@ -205,7 +205,7 @@ def collection_name(data_sha256: str) -> str:
     """Same Parquet files and format -> same name; new monthly data -> a new collection (the old one stays)."""
     name = f"{CHUNK_PREFIX}{CHUNK_FORMAT}__{hashlib.sha256(f'{data_sha256}|{CHUNK_FORMAT}'.encode()).hexdigest()[:8]}"
     if not constants.COLLECTION_NAME.match(name):
-        raise ValueError(f"{name!r} is not a valid Chroma collection name")
+        raise ValueError(f"{name!r} is not a valid collection name")
     return name
 
 

@@ -3,7 +3,7 @@
 import pytest
 
 from kosis_rag.legacy.search import search
-from kosis_rag.legacy.retrievers import ChromaTableRetriever
+from kosis_rag.legacy.retrievers import DenseTableRetriever
 from kosis_rag.schemas.catalog import TableClass, TableRecord
 from kosis_rag.schemas.common import TableInfo
 from kosis_rag.shared.catalog import to_document
@@ -49,7 +49,7 @@ class FakeCollection:
 
 
 def _retriever(distances, **kw):
-    return ChromaTableRetriever(collection=FakeCollection(distances), embed_query=lambda q: [0.0], records=RECORDS, **kw)
+    return DenseTableRetriever(collection=FakeCollection(distances), embed_query=lambda q: [0.0], records=RECORDS, **kw)
 
 
 @offline
@@ -103,7 +103,7 @@ def test_no_table_left_after_filtering_returns_nothing_without_querying():
 
 @offline
 def test_filter_without_records_is_an_error_and_no_filter_sends_no_condition():
-    r = ChromaTableRetriever(collection=FakeCollection({"101_DT_A": 0.1}), embed_query=lambda q: [0.0])
+    r = DenseTableRetriever(collection=FakeCollection({"101_DT_A": 0.1}), embed_query=lambda q: [0.0])
     r.invoke("인구")
     assert r.collection.calls == [None]
     with pytest.raises(ValueError):

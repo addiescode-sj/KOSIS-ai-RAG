@@ -8,7 +8,7 @@
     python -m evals.run_eval --layer e2e --retriever bm25-record --stage p2-e2e --interval 5   # search top 1 -> L3
     python -m evals.run_eval --layer l0 --stage T2-28-l0                               # metadata fill rates, no search
     python -m evals.run_eval --layer l2 --stage T2-28-l2 --split dev                   # parse_query vs query_golden
-    python -m evals.run_eval --layer ablation --stage T2-28-slots --split dev --slot-source pred [--retriever chroma]
+    python -m evals.run_eval --layer ablation --stage T2-28-slots --split dev --slot-source pred [--retriever dense]
     python -m evals.run_eval --layer l012 --stage T2-28-l012                           # L0 + L1 filter (gold, pred) + L2, dev
 
 L1 runs every item (BM25 is fast) so the no-answer threshold tau is chosen on dev and applied to the split shown.
@@ -88,7 +88,7 @@ def run_l1(args) -> tuple[list[dict], dict, str]:
 
 
 def run_l0(args) -> tuple[list[dict], dict, str]:
-    """L0 metadata quality over the registry; the load check runs only with --retriever chroma (needs the server)."""
+    """L0 metadata quality over the registry; the load check runs only with --retriever dense (needs the vector store)."""
     from evals.evaluators import metadata
     from evals.runners import retrieval as runner
 
@@ -97,9 +97,9 @@ def run_l0(args) -> tuple[list[dict], dict, str]:
     sample = ({json.loads(line)["key"]: json.loads(line) for line in METADATA_SAMPLE.read_text(encoding="utf-8").splitlines()
                if line.strip()} if METADATA_SAMPLE.exists() else None)
     loaded = None
-    if args.retriever == "chroma":
-        from kosis_rag.legacy.retrievers import ChromaTableRetriever
-        loaded = set(ChromaTableRetriever.connect().collection.get(include=[])["ids"])
+    if args.retriever in ("dense", "chroma"):
+        from kosis_rag.legacy.retrievers import DenseTableRetriever
+        loaded = set(DenseTableRetriever.connect().collection.get(include=[])["ids"])
     s = metadata.score(records, gold, sample, loaded)
     rows = [{"key": k, **metadata.fields(r), "latency_ms": 0.0} for k, r in records.items()]
     lines = ["| 필드 | 채움률 (전체) | 채움률 (골든 정답 표) |", "| --- | --- | --- |"]
@@ -116,7 +116,7 @@ def run_l0(args) -> tuple[list[dict], dict, str]:
         "- 정규화 정확도: " + (", ".join(f"{k} {fmt(v)}" for k, v in s["accuracy"].items()) + f" (표본 {s['n_sample']})"
                          if s["accuracy"] else f"표본 대기 ({METADATA_SAMPLE.relative_to(ROOT)} 없음)"),
         "- 적재 일치: " + (("일치" if s["load"]["match"] else f"불일치 — 빠짐 {s['load']['missing']}, 남음 {s['load']['extra']}")
-                        + f" ({s['load']['loaded']}개)" if "load" in s else "확인 안 함 (--retriever chroma 로 확인)"),
+                        + f" ({s['load']['loaded']}개)" if "load" in s else "확인 안 함 (--retriever dense 로 확인)"),
     ]) + "\n"
     return rows, s, report
 
@@ -154,7 +154,7 @@ def run_l2(args) -> tuple[list[dict], dict, str]:
 
 
 def run_ablation(args) -> tuple[list[dict], dict, str]:
-    """Slot ablation (§4.4): filter recall per combination; with --retriever chroma also Hit/MRR, flips, verdicts."""
+    """Slot ablation (§4.4): filter recall per combination; with --retriever dense also Hit/MRR, flips, verdicts."""
     from kosis_rag.parse.node import parse_query
 
     from evals.runners import ablation
@@ -168,9 +168,9 @@ def run_ablation(args) -> tuple[list[dict], dict, str]:
         slots = {i.qid: parse_query(i.question) for i in items}
     on = ablation.combos(args.slots.split(","))
     retriever = None
-    if args.retriever == "chroma":
-        from kosis_rag.legacy.retrievers import ChromaTableRetriever
-        retriever = ChromaTableRetriever.connect(k=args.k)
+    if args.retriever in ("dense", "chroma"):
+        from kosis_rag.legacy.retrievers import DenseTableRetriever
+        retriever = DenseTableRetriever.connect(k=args.k)
     rows = ablation.run(items, slots, records, on, retriever, args.k)
     tau = args.tau
     if tau is None and retriever is not None:  # chosen once on `none`, kept for every combination
@@ -453,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--layer", choices=("l0", "l1", "l2", "ablation", "l012", "l3", "e2e"), required=True)  # e2e: first part of L4
     parser.add_argument("--stage", required=True, help="what this run measures, e.g. T2-04-bm25")
     parser.add_argument("--split", choices=("dev", "test", "all"), help="default: dev for l012 (the slot baselines), test otherwise")
-    parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | chroma")
+    parser.add_argument("--retriever", default="bm25-catalog", help="l1, e2e: oracle (l1 only) | bm25-catalog | bm25-record | dense (old name: chroma)")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--tau", type=float, help="l1: fixed no-answer threshold (default: best F1 on dev)")
     parser.add_argument("--from-run", type=Path, help="l3: grade a past run folder instead of calling the model")

@@ -2,7 +2,7 @@
 
 condition_filter is the hybrid's relaxation step; search_list searches one list. A list is a DenseIndex / HqIndex
 (filter before the search, stateless), a Bm25Index (filter after), or a retriever-shaped object: one with
-`with_filter` (legacy ChromaTableRetriever / HqRetriever, test stand-ins) filters before its search, one without
+`with_filter` (legacy DenseTableRetriever / HqRetriever, test stand-ins) filters before its search, one without
 (BM25TableRetriever) is filtered after. Nothing here keeps state: what was removed or relaxed is returned.
 """
 
@@ -64,7 +64,7 @@ def search_list(query: str, retriever: Any, *, table_filter: TableFilter | None 
         after and soft-ranked; then the top k_each. removed = table key -> why the filter dropped it; relaxed =
         conditions the list itself dropped (none for a filter condition_filter relaxed already); missing = hits
         skipped because their table is not in the registry (question index only).
-    Side effects: calls the list (Chroma query / BM25 scoring); ValueError for a non-empty filter without records.
+    Side effects: calls the list (vector store query / BM25 scoring); ValueError for a non-empty filter without records.
     Node: retrieve_dense, retrieve_bm25, retrieve_hq, retrieve_hq_bm25 (through retrieve.node.retrieve_list; and
         hybrid_search).
     """

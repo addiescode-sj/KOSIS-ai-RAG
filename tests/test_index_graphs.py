@@ -28,8 +28,9 @@ from kosis_rag.schemas.common import TableInfo  # noqa: E402
 from kosis_rag.shared import tabletext as text  # noqa: E402
 from kosis_rag.shared.units import meta_unit  # noqa: E402
 from kosis_rag.shared.vocab import SIDO_LABELS  # noqa: E402
-from kosis_rag_build import chroma, cli, sigungu, tables  # noqa: E402
-from kosis_rag_build.graph.index_build import (build_chroma_graph, build_questions_graph,  # noqa: E402
+from kosis_rag.schemas.resources import DEFAULT_DATABASE_URL  # noqa: E402
+from kosis_rag_build import vector_index, cli, sigungu, tables  # noqa: E402
+from kosis_rag_build.graph.index_build import (build_vectors_graph, build_questions_graph,  # noqa: E402
                                                build_sigungu_graph, build_tables_graph)
 from kosis_rag_build.schemas import (IndexBuildState, QuestionsIndexState, SigunguBuildState,  # noqa: E402
                                      TablesBuildState)
@@ -155,18 +156,18 @@ def old_index_export(tables_path: Path, export: Path, *, ft: bool, embedder, ind
     """kosis_rag.index.main (S5), the --export path; embedder = (embed, count_tokens, max_tokens, info) as the old
     main got them from kure_embedder / model.load_embedder."""
     data_sha256 = hashlib.sha256(tables_path.read_bytes()).hexdigest()
-    name = collection or (chroma.FT_COLLECTION_PREFIX + index_version if ft else chroma.collection_name(data_sha256))
+    name = collection or (vector_index.FT_COLLECTION_PREFIX + index_version if ft else vector_index.collection_name(data_sha256))
     with tables_path.open(encoding="utf-8") as f:
         records = [TableRecord.model_validate_json(line) for line in f]
     ids = [r.info.key for r in records]
-    metas = [chroma.to_metadata(r) for r in records]
+    metas = [vector_index.to_metadata(r) for r in records]
     if ft:
         fmt = text_format or text.DOC_FORMAT
         docs = [text.build_doc(r, fmt)["embed_text"] for r in records]
         embed, count_tokens, max_tokens = embedder.embed, embedder.count_tokens, embedder.max_tokens
         info = {"embed_model": embedder.info["embed_model"], "doc_format": fmt, "embed_ckpt": embedder.info["embed_ckpt"]}
     else:
-        docs = [chroma.to_document(r) for r in records]
+        docs = [vector_index.to_document(r) for r in records]
         embed, count_tokens, max_tokens = embedder.embed, embedder.count_tokens, embedder.max_tokens
         info = {}
     tokens = [count_tokens(d) for d in docs]
@@ -175,9 +176,9 @@ def old_index_export(tables_path: Path, export: Path, *, ft: bool, embedder, ind
     for chunk in [order[i:i + 64] for i in range(0, len(order), 64)]:
         for i, v in zip(chunk, embed([docs[i] for i in chunk])):
             vectors[i] = v
-    record = chroma.build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
+    record = vector_index.build_record(index_version, data_sha256, len(docs), len(vectors[0]), max(tokens),
                                  sum(t > max_tokens for t in tokens), **info)
-    chroma.write_build(export, name=name, ids=ids, docs=docs, metas=metas, vectors=vectors, record=record)
+    vector_index.write_build(export, name=name, ids=ids, docs=docs, metas=metas, vectors=vectors, record=record)
     return 0
 
 
@@ -192,7 +193,7 @@ def old_hq_index_main(build: str, root: Path, embedder, client, index_version: s
               "embed_model": embedder.name, "embed_ckpt": embedder.ckpt, "data_sha256": digest,
               "dim": len(vectors[0]), "normalized": True, "hnsw:space": "cosine", "n_docs": len(rows),
               "n_tables": len({r["key"] for r in rows})}
-    count = chroma.load(client, [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
+    count = vector_index.load(client, [r["id"] for r in rows], texts, [{"key": r["key"], "type": r["type"]} for r in rows],
                         vectors, name, record)
     return 0 if count == len(rows) else 1
 
@@ -208,8 +209,8 @@ def _embed(texts: list[str]) -> list[list[float]]:
     return [_vector(t) for t in texts]
 
 
-KURE = chroma.DocEmbedder(_embed, len, 1024, {})
-FT = chroma.DocEmbedder(_embed, len, 1024, {"embed_model": "BAAI/bge-m3", "doc_format": "n2-L60",
+KURE = vector_index.DocEmbedder(_embed, len, 1024, {})
+FT = vector_index.DocEmbedder(_embed, len, 1024, {"embed_model": "BAAI/bge-m3", "doc_format": "n2-L60",
                                             "embed_ckpt": "fake.pt@0123456789ab"})
 
 
@@ -284,29 +285,29 @@ def test_sigungu_graph_writes_the_old_sigungu_json(tmp_path):
 
 
 @pytest.mark.parametrize("model", ["kure", "bge-m3-ft"])
-def test_chroma_graph_exports_the_old_build(tmp_path, model):
+def test_vectors_graph_exports_the_old_build(tmp_path, model):
     _, tables_path = _tables(tmp_path)
     ft = model == "bge-m3-ft"
     new, old = tmp_path / "new.npz", tmp_path / "old.npz"
     state = IndexBuildState(tables=tables_path, model=model, export=new, index_version=INDEX_VERSION)
-    done = IndexBuildState.model_validate(build_chroma_graph(embedder=FT if ft else KURE, log=lambda s: None)
+    done = IndexBuildState.model_validate(build_vectors_graph(embedder=FT if ft else KURE, log=lambda s: None)
                                           .invoke(state))
     old_index_export(tables_path, old, ft=ft, embedder=FT if ft else KURE, index_version=INDEX_VERSION)
-    a, b = chroma.read_build(new), chroma.read_build(old)
+    a, b = vector_index.read_build(new), vector_index.read_build(old)
     assert a == b  # name, ids, docs, metas, record (data_sha256 included) and vectors
     assert list(done.trace) == ["read_records", "build_docs", "embed", "write_build"] and done.count == len(ROWS)
     assert a["record"]["data_sha256"] == hashlib.sha256(tables_path.read_bytes()).hexdigest()
 
 
-def test_chroma_graph_loads_through_the_given_client(tmp_path):
+def test_vectors_graph_loads_through_the_given_client(tmp_path):
     _, tables_path = _tables(tmp_path)
     client = FakeClient()
-    state = IndexBuildState.model_validate(build_chroma_graph(embedder=KURE, client=client, log=lambda s: None)
+    state = IndexBuildState.model_validate(build_vectors_graph(embedder=KURE, client=client, log=lambda s: None)
                                            .invoke(IndexBuildState(tables=tables_path, index_version=INDEX_VERSION)))
     collection = client.collections[state.name]
     assert state.count == len(ROWS) and sorted(collection.rows) == sorted(r["key"] for r in ROWS)
     assert list(state.trace) == ["read_records", "build_docs", "embed", "load"]
-    assert collection.metadata == state.record and state.name.startswith(chroma.COLLECTION_PREFIX)
+    assert collection.metadata == state.record and state.name.startswith(vector_index.COLLECTION_PREFIX)
 
 
 def _hq_build(root: Path, build: str) -> None:
@@ -358,28 +359,29 @@ def test_questions_dry_run_reads_only(tmp_path):
 
 # --- the CLI: arguments and the shell environment -> settings objects ---
 
-ENV = {"CHROMA_HOST": "chroma.local", "CHROMA_PORT": "9000", "CHROMA_COLLECTION": "kosis_kure__x__1",
+ENV = {"DATABASE_URL": "postgresql://u:p@db.local:5433/kosis", "VECTOR_COLLECTION": "kosis_kure__x__1",
        "EMBED_CKPT": "data/models/e.pt", "RERANK_CKPT": "data/models/r.pt", "TEXT_FORMAT": "n2-L60",
        "OPENAI_API_KEY": "sk-test"}
 
 
 def test_cli_settings_come_from_arguments_then_the_environment():
-    args = cli.parser().parse_args(["chroma", "--model", "bge-m3-ft"])
+    args = cli.parser().parse_args(["vectors", "--model", "bge-m3-ft"])
     spec = cli.index_spec(args, ENV)
-    assert (spec.chroma.host, spec.chroma.port, spec.chroma.collection) == ("chroma.local", 9000, "kosis_kure__x__1")
+    assert (spec.vector_store.url, spec.vector_store.collection) == ("postgresql://u:p@db.local:5433/kosis",
+                                                                     "kosis_kure__x__1")
     assert (spec.embed_ckpt, spec.text_format) == ("data/models/e.pt", "n2-L60")
-    args = cli.parser().parse_args(["chroma", "--ckpt", "a.pt", "--text-format", "n3-L60", "--chroma-host", "h",
-                                    "--chroma-port", "1"])
+    args = cli.parser().parse_args(["vectors", "--ckpt", "a.pt", "--text-format", "n3-L60",
+                                    "--database-url", "postgresql://h/x"])
     spec = cli.index_spec(args, ENV)
-    assert (spec.embed_ckpt, spec.text_format, spec.chroma.host, spec.chroma.port) == ("a.pt", "n3-L60", "h", 1)
-    spec = cli.index_spec(cli.parser().parse_args(["chroma"]), {})
-    assert (spec.chroma.host, spec.chroma.port, spec.chroma.collection, spec.embed_ckpt) == ("localhost", 8001, None, None)
+    assert (spec.embed_ckpt, spec.text_format, spec.vector_store.url) == ("a.pt", "n3-L60", "postgresql://h/x")
+    spec = cli.index_spec(cli.parser().parse_args(["vectors"]), {})
+    assert (spec.vector_store.url, spec.vector_store.collection, spec.embed_ckpt) == (DEFAULT_DATABASE_URL, None, None)
 
 
-def test_cli_names_a_bad_chroma_port():
-    """T2-41 S6b: a non-numeric CHROMA_PORT stops the CLI with the variable's name, not a bare int() error."""
-    with pytest.raises(SystemExit, match="CHROMA_PORT"):
-        cli.index_spec(cli.parser().parse_args(["chroma"]), {**ENV, "CHROMA_PORT": "80o1"})
+def test_cli_no_longer_has_the_chroma_command():
+    """T2-44: the vector store is PostgreSQL + pgvector; the old command name fails loudly instead of half working."""
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["chroma"])
 
 
 def test_index_version_defaults_to_the_load_time():
@@ -443,11 +445,11 @@ def test_cli_commands_run_the_graphs(tmp_path, monkeypatch, capsys):
         seen["state"] = state
         return FT
 
-    monkeypatch.setattr(chroma, "load_doc_embedder", fake_embedder)
+    monkeypatch.setattr(vector_index, "load_doc_embedder", fake_embedder)
     npz = tmp_path / "b.npz"
-    assert cli.main(["chroma", "--tables", str(out), "--model", "bge-m3-ft", "--export", str(npz)], env=ENV) == 0
+    assert cli.main(["vectors", "--tables", str(out), "--model", "bge-m3-ft", "--export", str(npz)], env=ENV) == 0
     assert seen["state"].ckpt == "data/models/e.pt" and seen["state"].fmt == "n2-L60"
-    assert chroma.read_build(npz)["name"].startswith(chroma.FT_COLLECTION_PREFIX)
+    assert vector_index.read_build(npz)["name"].startswith(vector_index.FT_COLLECTION_PREFIX)
     root, build = tmp_path / "hq", "hq-cb0b3c5b-a3c88540-fake-f30-k2"
     _hq_build(root, build)
     ckpt = tmp_path / "unseen-e1.pt"
