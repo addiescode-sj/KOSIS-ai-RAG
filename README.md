@@ -168,18 +168,18 @@ KOSIS에서는 통계표 이름을 정확히 모르는 사용자가 질문의 �
 ```bat
 set PYTHONPATH=.;src;vendor\phase1;vendor\phase1\src
 set KOSIS_WORKSPACE=%CD%
-set CHROMA_HOST=localhost
-set CHROMA_PORT=8001
-set CHROMA_COLLECTION=<빌드가 출력한 컬렉션 이름>
+set DATABASE_URL=postgresql://kosis:kosis@localhost:5432/kosis
+set VECTOR_COLLECTION=<빌드가 출력한 컬렉션 이름>
 set EMBED_CKPT=data\models\<임베더>.pt
 set RERANK_CKPT=data\models\<리랭커>.pt
 set HCX_API_KEY=<안내 LLM·2차 리랭커를 쓸 때>
 
-REM 오프라인 DB 준비 (한 번): 표 등록부 -> 시군구 사전 -> Chroma 색인 [-> hq 질문 생성 -> 질문 색인]
-docker compose up -d chroma
+REM 오프라인 DB 준비 (한 번): 표 등록부 -> 시군구 사전 -> 벡터 색인(pgvector) [-> hq 질문 생성 -> 질문 색인]
+REM 예전 Chroma 볼륨이 있으면 다시 임베딩하지 말고 옮기기: docs/migration.md "T2-44"
+docker compose up -d postgres
 python scripts\kosis_build.py tables --data-dir <제공 데이터 폴더>
 python scripts\kosis_build.py sigungu --data-dir <제공 데이터 폴더>
-python scripts\kosis_build.py chroma --model bge-m3-ft
+python scripts\kosis_build.py vectors --model bge-m3-ft
 python scripts\kosis_build.py hq-build --model gpt-4o-mini        & REM 선택, OPENAI_API_KEY 필요
 python scripts\kosis_build.py hq-index --build <build_id>          & REM 선택, 뒤에 set HQ_BUILD=<build_id>
 

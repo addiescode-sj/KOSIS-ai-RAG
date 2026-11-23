@@ -105,7 +105,7 @@ def test_collection_name_follows_the_data_and_is_not_listed_as_a_table_build(tmp
     assert ch.collection_name("a") == ch.collection_name("a") != ch.collection_name("b")
     assert ch.collection_name("a").startswith("kosis_chunks__region1__")
     record = ch.chunk_record("202611101200", "a", chunks, 1024, 90)
-    assert "doc_format" not in record and record["n_docs"] == len(REGIONS)  # chroma.list_builds skips it
+    assert "doc_format" not in record and record["n_docs"] == len(REGIONS)  # vector_index.list_builds skips it
     assert record["n_rows"] == sum(c.rows for c in chunks)
 
     out = tmp_path / "chunks" / "regions.jsonl"

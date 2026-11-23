@@ -2,12 +2,12 @@
 
     tables.py      data/tables.jsonl (the table registry) from the provided data
     sigungu.py     data/sigungu.json (시군구 -> 시도) from one 읍면동 table
-    chroma.py      the table documents and metadata, embedded and loaded into Chroma (or written to a .npz)
+    vector_index.py      the table documents and metadata, embedded and loaded into the vector store (or written to a .npz)
     hq/            T2-39 hypothetical questions per table (generation, rules, Doc2Query−− filter, report) and the
                    question index load (hq/questions_index.py)
-    graph/         the LangGraph graphs over those nodes (index_build.py: tables / sigungu / chroma / questions;
+    graph/         the LangGraph graphs over those nodes (index_build.py: tables / sigungu / vectors / questions;
                    hq_build.py: the question generation)
-    cli.py         python -m kosis_rag_build.cli {tables|sigungu|chroma|text|hq-build|hq-index} (arguments, then
+    cli.py         python -m kosis_rag_build.cli {tables|sigungu|vectors|chunks|text|hq-build|hq-index} (arguments, then
                    the shell environment; no .env)
 
 This package may import kosis_rag.{schemas,shared,adapters,llm,rerank.stage1}; kosis_rag never imports it

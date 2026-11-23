@@ -15,10 +15,11 @@ dependencies = [
     "langchain-core>=1.7.0",
     "langgraph>=1.0,<2",
     "rank-bm25>=0.2.2",
-    "chromadb-client==1.5.9",
     "langchain-naver>=0.1.1",
     "opentelemetry-sdk>=1.45",
     "opentelemetry-exporter-otlp-proto-grpc>=1.45",
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.4",
 ]
 
 [dependency-groups]
@@ -29,6 +30,9 @@ dev = [
 ]
 embed = [
     "sentence-transformers",
+]
+migrate = [
+    "chromadb-client==1.5.9",
 ]
 
 [build-system]

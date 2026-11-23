@@ -15,7 +15,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from kosis_rag.shared.catalog import to_document
-from kosis_rag.legacy.retrievers import BM25TableRetriever, ChromaTableRetriever
+from kosis_rag.legacy.retrievers import BM25TableRetriever, DenseTableRetriever
 from kosis_rag.schemas.catalog import TableRecord
 
 from evals.ops import UsageCallback
@@ -47,7 +47,7 @@ def bm25_retrievers(records: list[TableRecord], k: int) -> dict[str, BM25TableRe
     }
 
 
-# Staged search (T2-06, T2-07): name -> settings over .env (CHROMA_COLLECTION, EMBED_CKPT, RERANK_CKPT, HCX_API_KEY).
+# Staged search (T2-06, T2-07): name -> settings over .env (VECTOR_COLLECTION, EMBED_CKPT, RERANK_CKPT, HCX_API_KEY).
 STAGED = {
     "hybrid": {"cond_filter": False, "rerank_ckpt": "", "stage2": "none"},
     "hybrid+cond": {"cond_filter": True, "rerank_ckpt": "", "stage2": "none"},
@@ -78,20 +78,23 @@ def _staged_settings(name: str):
     return SearchSettings.from_env(**overrides)
 
 
+DENSE = ("dense", "chroma")  # the dense-only retriever; "chroma" is its name before T2-44 (old run commands)
+
+
 def build(name: str, items: list[RetrievalItem], k: int) -> Runnable:
     """The search the L1 runner calls for a retriever name.
 
-    In: name = oracle | chroma | bm25-catalog | bm25-record | a STAGED preset | graph:<STAGED preset>;
+    In: name = oracle | dense (old name: chroma) | bm25-catalog | bm25-record | a STAGED preset | graph:<STAGED preset>;
         items = the golden items (oracle only); k = hits for the simple retrievers.
     Out: something with .invoke(question, config) -> ranked Documents (metadata["key"] set). graph:<preset> returns
         the LangGraph search's whole ranked pool, the same documents the preset's nested retrievers return.
-    Side effects: loads tables.jsonl, connects to Chroma and loads models as the preset needs; ValueError for an
+    Side effects: loads tables.jsonl, connects to the vector store and loads models as the preset needs; ValueError for an
         unknown name. Node: not used by the graph.
     """
     if name == "oracle":
         return OracleRetriever(gold={i.question: [s[0] for s in i.required] for i in items})
-    if name == "chroma":  # needs the shared server and CHROMA_COLLECTION (T2-26)
-        return ChromaTableRetriever.connect(k=k)
+    if name in DENSE:  # needs the vector store and VECTOR_COLLECTION (T2-26; T2-44: was the Chroma server)
+        return DenseTableRetriever.connect(k=k)
     if name in STAGED:  # the pipeline keeps its own pool of 50; the runner cuts to k
         from kosis_rag.legacy.pipeline import build_search
 
@@ -108,7 +111,7 @@ def build(name: str, items: list[RetrievalItem], k: int) -> Runnable:
     retrievers = bm25_retrievers(load_records(), k)
     if name not in retrievers:
         known = [*retrievers, *STAGED, *(GRAPH + n for n in STAGED)]
-        raise ValueError(f"unknown retriever {name!r}; known: oracle, chroma, {', '.join(known)}")
+        raise ValueError(f"unknown retriever {name!r}; known: oracle, dense, {', '.join(known)}")
     return retrievers[name]
 
 

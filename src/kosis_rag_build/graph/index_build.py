@@ -2,12 +2,12 @@
 
     build_tables_graph()       TablesBuildState     START -> read_parquet -> build_records -> write_jsonl -> END
     build_sigungu_graph()      SigunguBuildState    START -> read_parquet -> build_sigungu -> write_json -> END
-    build_chroma_graph(...)    IndexBuildState      START -> read_records -> build_docs -> embed -> load | write_build -> END
-                                                    (write_build when state.export is set: a .npz instead of Chroma)
+    build_vectors_graph(...)    IndexBuildState      START -> read_records -> build_docs -> embed -> load | write_build -> END
+                                                    (write_build when state.export is set: a .npz instead of the store)
     build_questions_graph(...) QuestionsIndexState  START -> read_questions -> [embed -> load] -> END
                                                     (state.dry_run ends after read_questions)
 
-The node bodies are in tables.py, sigungu.py, chroma.py and hq/questions_index.py; the model and Chroma client are
+The node bodies are in tables.py, sigungu.py, vector_index.py and hq/questions_index.py; the model and vector store client are
 arguments (None: opened from the state when the node runs), so tests pass fakes. Run: graph.invoke(State(...)).
 """
 
@@ -18,7 +18,7 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from kosis_rag_build import chroma, sigungu, tables
+from kosis_rag_build import vector_index, sigungu, tables
 from kosis_rag_build.hq import questions_index
 from kosis_rag_build.schemas import IndexBuildState, QuestionsIndexState, SigunguBuildState, TablesBuildState
 
@@ -49,19 +49,19 @@ def build_sigungu_graph():
                                      ("build_sigungu", sigungu.build_sigungu_node), ("write_json", sigungu.write_json)])
 
 
-def build_chroma_graph(*, embedder: Any = None, client: Any = None, log: Callable[[str], None] = print):
+def build_vectors_graph(*, embedder: Any = None, client: Any = None, log: Callable[[str], None] = print):
     """The table index: invoke(IndexBuildState(tables=, model=, ..., index_version=)).
 
-    In: embedder = chroma.DocEmbedder, a function of the state giving one, or None (chroma.load_doc_embedder);
-        client = a Chroma client for load (None: adapters.chroma.chroma_client(state.chroma)); log = progress lines.
+    In: embedder = vector_index.DocEmbedder, a function of the state giving one, or None (vector_index.load_doc_embedder);
+        client = a vector store client for load (None: adapters.vectorstore.vector_client(state.vector_store)); log = progress lines.
     Side effects when run: loads the model, embeds every table, writes the collection (or the .npz of state.export).
     """
     g = StateGraph(IndexBuildState)
-    g.add_node("read_records", chroma.read_records)
-    g.add_node("build_docs", chroma.make_build_docs(log))
-    g.add_node("embed", chroma.make_embed(embedder, log))
-    g.add_node("load", chroma.make_load(client))
-    g.add_node("write_build", chroma.write_build_node)
+    g.add_node("read_records", vector_index.read_records)
+    g.add_node("build_docs", vector_index.make_build_docs(log))
+    g.add_node("embed", vector_index.make_embed(embedder, log))
+    g.add_node("load", vector_index.make_load(client))
+    g.add_node("write_build", vector_index.write_build_node)
     g.add_edge(START, "read_records")
     g.add_edge("read_records", "build_docs")
     g.add_edge("build_docs", "embed")
@@ -76,7 +76,7 @@ def build_questions_graph(*, embedder: Any = None, client: Any = None):
     """The question index of an hq build: invoke(QuestionsIndexState(build=, ckpt=, ..., index_version=)).
 
     In: embedder = models.Embedder or a fake with embed_documents / name / ckpt (None: models.load_embedder);
-        client = a Chroma client (None: adapters.chroma.chroma_client(state.chroma)).
+        client = a vector store client (None: adapters.vectorstore.vector_client(state.vector_store)).
     Side effects when run: reads the build, embeds its questions, writes the collection (a dry run: reads only).
     """
     g = StateGraph(QuestionsIndexState)

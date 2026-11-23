@@ -269,10 +269,10 @@ KOSIS-ai-multi-agent는 `vendor/phase2`를 이 리팩터의 커밋으로 올리�
    from kosis_rag.api import SearchModule
    from kosis_rag.llm.config import LLMConfig
    from kosis_rag.schemas.io import SearchInput
-   from kosis_rag.schemas.resources import ChromaConfig, IndexSpec, SearchOptions
+   from kosis_rag.schemas.resources import IndexSpec, SearchOptions, VectorStoreConfig
 
    module = SearchModule(
-       IndexSpec(chroma=ChromaConfig(host="localhost", port=8001, collection="kosis_a_bgeft_..."),
+       IndexSpec(vector_store=VectorStoreConfig(url="postgresql://kosis:kosis@localhost:5432/kosis", collection="kosis_a_bgeft_..."),
                  embed_ckpt="data/models/...pt", rerank_ckpt="data/models/...pt", hq_build=None),
        SearchOptions(stage2="hcx"),                     # cond_filter·answer_k·hq_weight·hq_bm25 ...
        LLMConfig(provider="hcx", model="HCX-007", api_key="nv-..."),   # stage 2만; stage2="none"이면 None
@@ -283,5 +283,52 @@ KOSIS-ai-multi-agent는 `vendor/phase2`를 이 리팩터의 커밋으로 올리�
 3. **실전 1에 넘기는 값은 `out.picked[0].key`**(복합 키 `"<org_id>_<tbl_id>"`, `tables.csv`의 `key`)예요. `tbl_id`를 넘기면 실전 1이 `LookupError`.
 4. **거절**: `out.route == "refuse"`면 `out.refusal_text`(코드 문구, LLM 아님)를 보여 주면 돼요. `refusal_reason`은 `out_of_scope | no_item | None`. `picked`는 비고 `candidates`는 남아요.
 5. **`route == "found"`는 "후보를 찾았다"이지 "계산할 수 있다"가 아니에요.** 그 뒤의 거절은 종합 레포가 받아요: 실전 1 `StatAnswer`의 `refused`·`clarify`, 표를 못 찾으면 `LookupError`, 그리고 자기 에이전트의 판단(이 레포 앱의 `NO_MATCH`·`SearchResult.no_answer`는 앱 계층이라 모듈 출력에 없음 — S5 절).
-6. **오프라인 준비(DB 적재 전)**: 표 등록부·시군구 사전·표 Chroma 색인·hq 가상 질문 생성·질문 색인은 `kosis_rag_build`예요. 명령 `python -m kosis_rag_build.cli {tables|sigungu|chroma|text|hq-build|hq-index} …`(인자만) 또는 셸 환경을 쓰는 `python scripts/kosis_build.py <명령> …`, 코드로는 `kosis_rag_build.graph.index_build.build_*_graph()`·`kosis_rag_build.graph.hq_build.run_build(...)`(S6a 절). 검색 모듈은 그 산출물(컬렉션·`tables.jsonl`·`sigungu.json`·`data/hq/<build>/questions.jsonl`)만 읽어요.
+6. **오프라인 준비(DB 적재 전)**: 표 등록부·시군구 사전·표 벡터 색인(pgvector)·hq 가상 질문 생성·질문 색인은 `kosis_rag_build`예요. 명령 `python -m kosis_rag_build.cli {tables|sigungu|vectors|chunks|text|hq-build|hq-index} …`(인자만) 또는 셸 환경을 쓰는 `python scripts/kosis_build.py <명령> …`, 코드로는 `kosis_rag_build.graph.index_build.build_*_graph()`·`kosis_rag_build.graph.hq_build.run_build(...)`(S6a 절). 검색 모듈은 그 산출물(컬렉션·`tables.jsonl`·`sigungu.json`·`data/hq/<build>/questions.jsonl`)만 읽어요.
 7. **안내 문장·답변 검증·출처·토큰 스트림**은 이 레포 앱(`backend/app/respond/`)의 것이라 가져가지 않아요(종합 레포 에이전트가 문장을 써요).
+
+## T2-44. 벡터 저장소 Chroma → PostgreSQL + pgvector (KOS-138)
+
+검색·적재 코드가 Chroma에서 쓰던 기능만 같은 이름으로 가진 pgvector 클라이언트(`kosis_rag.adapters.vectorstore`)로 바꿨어요. 검색 로직(`retrieve/dense.py`·`retrieve/hq.py`·`shared/filters.py`)과 적재 로직(`vector_index.load`)은 그대로예요. 컬렉션 이름도 그대로예요.
+
+| 옛 이름 | 새 이름 |
+|---|---|
+| `kosis_rag.schemas.resources.ChromaConfig(host, port, collection)` | `VectorStoreConfig(url, collection)` (기본 `postgresql://kosis:kosis@localhost:5432/kosis`) |
+| `IndexSpec.chroma` · 빌드 상태의 `chroma` | `IndexSpec.vector_store` · `vector_store` |
+| `kosis_rag.adapters.chroma.chroma_client` | `kosis_rag.adapters.vectorstore.vector_client` |
+| `kosis_rag.legacy.retrievers.ChromaTableRetriever` (`connect(..., chroma=)`) | `DenseTableRetriever` (`connect(..., vector_store=)`) |
+| `kosis_rag_build.chroma` · `build_chroma_graph` | `kosis_rag_build.vector_index` · `build_vectors_graph` |
+| 빌드 명령 `chroma` · `--chroma-host` `--chroma-port` | `vectors` · `--database-url` |
+| 환경변수 `CHROMA_HOST` `CHROMA_PORT` · `CHROMA_COLLECTION` | `DATABASE_URL` · `VECTOR_COLLECTION` |
+| compose `chroma`(chromadb/chroma:1.5.9, 볼륨 `chroma-data`) | `postgres`(pgvector/pgvector:0.8.1-pg17, 볼륨 `pg-data`, 127.0.0.1:5432) |
+| `scripts/chroma_smoke.py` | `scripts/vectorstore_smoke.py` |
+| evals `--retriever chroma` | `--retriever dense` (옛 이름도 받아요) |
+| 의존성 `chromadb-client` | `psycopg[binary]`·`pgvector` (`chromadb-client`는 이전용 `migrate` 그룹에만) |
+
+- 저장소가 받는 조건은 `{"key": {"$in": [...]}}` 하나예요(검색이 보내는 유일한 조건). `scripts/check_build.py`의 `$and`·`$or`·`$contains` 진단은 스크립트 안에서 메타데이터로 계산해요.
+- 근사 인덱스(HNSW)를 두지 않아 **정확한** 코사인 검색이에요. Chroma는 근사 검색이라, 같은 벡터라도 상위 순위가 조금 다를 수 있어요(인공 3,000건·1024차원 질문 100개: 정확 계산과 같은 상위 10개 Chroma 53 · pgvector 100, 지연 중앙값 17.1 → 14.7 ms). 조건(표 키)을 건 검색도 맞는 행이 있으면 k개를 다 채워요.
+- 테이블은 연결할 때 없으면 만들어요(`ensure_schema`: `vector_collection`·`vector_item`). 종합 레포는 alembic 마이그레이션이 같은 정의로 먼저 만들어요.
+
+### 내 PC의 Chroma 데이터를 옮기기 (다시 임베딩하지 않음)
+
+옛 Chroma 볼륨이 있는 PC에서 한 번만 하면 돼요.
+
+```bash
+uv sync --group migrate
+```
+
+```bash
+docker run -d --name old-chroma -p 8001:8000 -v kosis-ai-rag_chroma-data:/data chromadb/chroma:1.5.9
+```
+
+```bash
+docker compose up -d postgres
+```
+
+```bash
+PYTHONPATH=.:src:vendor/phase1:vendor/phase1/src python scripts/chroma_to_pgvector.py
+```
+
+- 컬렉션마다 개수·id·벡터(표본 100건)를 대조하고 `ok`/`FAILED`를 찍어요. 검색 상위 10개 순서 차이는 `note`로만 보여요(위 근사 검색 차이).
+- 끝나면 셸의 `CHROMA_COLLECTION`을 `VECTOR_COLLECTION`으로 이름만 바꾸세요(값은 그대로).
+- 옮긴 뒤 옛 컨테이너는 `docker rm -f old-chroma`. 볼륨 `kosis-ai-rag_chroma-data`는 확인이 끝날 때까지 지우지 마세요.
+- 볼륨이 없으면 지금처럼 `python scripts/kosis_build.py vectors …`로 새로 적재해도 돼요(임베딩 시간이 들어요).

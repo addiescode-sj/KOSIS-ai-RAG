@@ -83,7 +83,7 @@ class HqIndex:
             a question whose table is not in the registry (an index built from another tables.jsonl) is skipped
             before the top k is taken and counted in missing, so guide / refuse never see a table without catalog
             fields.
-        Side effects: one Chroma query (none when no table holds the requested years); a warning when a hit's table
+        Side effects: one vector store query (none when no table holds the requested years); a warning when a hit's table
             is not in the registry; ValueError for a non-empty filter without records. Node: retrieve_hq.
         """
         records = records or self.records
