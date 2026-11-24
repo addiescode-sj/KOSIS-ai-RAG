@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,9 @@ class SearchOptions(BaseModel):
     """How the search behaves (T2-41 S4). Defaults = the old settings object's defaults."""
 
     cond_filter: bool = True  # T2-14 conditions before the lists (COND_FILTER)
+    # KOS-192: which conditions filter when cond_filter is on. all = every condition (as before); years = only the
+    # years and the period range (cycle, 시도, breakdowns and measures neither drop nor re-rank a table)
+    cond_scope: Literal["all", "years"] = "all"
     pool: int = 50  # tables each list keeps before RRF, and the fusion hands on
     rerank_mode: str = "blend"  # stage 1: blend | score (RERANK_MODE)
     rerank_n: int = 50
@@ -65,7 +68,8 @@ class SearchOptions(BaseModel):
         hq = ""
         if spec.hq_build:
             hq = "+hq" + ("+hqbm25" if self.hq_bm25 else "") + (f"(w{self.hq_weight:g})" if self.hq_weight != 1.0 else "")
-        parts = ["hybrid" + ("+cond" if self.cond_filter else "") + hq]
+        cond = ("+cond" + ("(years)" if self.cond_scope == "years" else "")) if self.cond_filter else ""
+        parts = ["hybrid" + cond + hq]
         if spec.rerank_ckpt:
             parts.append(f"stage1-{self.rerank_mode}")
         if self.stage2 not in OFF:
