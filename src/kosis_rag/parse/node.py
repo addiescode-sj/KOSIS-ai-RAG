@@ -20,7 +20,7 @@ from kosis_rag.parse.patterns import (BACK, BEFORE_GWANGJU, BETWEEN, BIRTH, CYCL
                                       OPEN_FROM_DECADE, OPEN_TO, QUARTER, RANGE, RECENT, REGION, SGG_FRONT, YEAR,
                                       YEAR_MONTH)
 from kosis_rag.parse.schemas import ConditionInput, ConditionOutput, ParsedQuery, ParseInput
-from kosis_rag.shared.filters import filter_with_relaxation, relax
+from kosis_rag.shared.filters import TableFilter, filter_with_relaxation, relax
 from kosis_rag.shared.vocab import DIMENSION_WORDS, REGION_WORDS, SIDO_ORDER
 
 
@@ -159,6 +159,20 @@ def parse_question(inp: ParseInput, resources: Any) -> ParsedQuery:
     return parse_query(inp.question, sigungu=resources.sigungu)
 
 
+def scoped(f: TableFilter, scope: str) -> TableFilter:
+    """The part of the question's filter that SearchOptions.cond_scope keeps (KOS-192).
+
+    In: f = ParsedQuery.to_filter(); scope = "all" (f as it is) or "years" (only years, their strict/partial mode and
+        the period range; cycle, 시도, breakdowns, measures and soft signals are dropped).
+    Out: a TableFilter; f is left as it is. Side effects: none; ValueError for an unknown scope. Node: condition.
+    """
+    if scope == "all":
+        return f
+    if scope == "years":
+        return TableFilter(years=f.years, mode=f.mode, period_from=f.period_from, period_to=f.period_to)
+    raise ValueError(f"unknown cond_scope {scope!r}; known: all, years")
+
+
 def decide_condition(inp: ConditionInput, resources: Any) -> ConditionOutput:
     """Decide once the filter every list is searched under (the condition node's step).
 
@@ -171,6 +185,8 @@ def decide_condition(inp: ConditionInput, resources: Any) -> ConditionOutput:
     """
     records = resources.records
     table_filter = inp.query.to_filter() if resources.options.cond_filter and inp.query is not None else None
+    if table_filter is not None:
+        table_filter = scoped(table_filter, resources.options.cond_scope)
     relaxed: list[str] = []
     if table_filter is not None and not table_filter.is_empty():
         _, relaxed, _ = filter_with_relaxation(records, table_filter)
