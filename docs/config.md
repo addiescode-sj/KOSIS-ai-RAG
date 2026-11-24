@@ -37,6 +37,7 @@
 | `RERANK_MODE` | 1차 점수 쓰는 법 `blend` \| `score` (`blend`) | `SearchOptions.rerank_mode` | backend, parity_l1 |
 | `STAGE2` | 2차 LLM 리랭커 `clova` \| `hcx` \| `gpt` \| `none` (`none`) | `SearchOptions.stage2` (+ `LLMConfig`) | backend, parity_l1 |
 | `COND_FILTER` | 질문 조건(연도·지역·성별…) 필터 `on` \| `off` (`on`) | `SearchOptions.cond_filter` | backend, parity_l1 |
+| `COND_SCOPE` | `COND_FILTER`가 켜졌을 때 거르는 조건 범위 `all` \| `years` (`all`). `years`는 연도·기간만 쓰고 주기·시도·분류·항목은 쓰지 않아요 | `SearchOptions.cond_scope` | backend |
 | `ANSWER_K` | 요청에 k가 없을 때 후보 표 수 (`5`) | `SearchOptions.answer_k` | backend, parity_l1 |
 | `HQ_BUILD` | 질문 색인(역 HyDE) 빌드 id, 비면 꺼짐 (`hq-<prompt8>-<tables8>-<model>-f30-k2`) | `IndexSpec.hq_build` | backend, parity_l1, lab |
 | `HQ_WEIGHT` | 질문 목록의 RRF 가중치 (`1.0`) | `SearchOptions.hq_weight` | backend, parity_l1, lab |
