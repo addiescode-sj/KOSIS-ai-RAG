@@ -88,7 +88,7 @@ def load_resources(*, spec: IndexSpec, options: SearchOptions, llm: LLMConfig | 
             raise ValueError(f"unknown STAGE2 {o.stage2!r}; known: none, {', '.join(selectors.LLM_RERANKERS)}")
         text_of = text_of or {r.info.key: text.build_doc(r, fmt)["embed_text"] for r in records}
         stage2_llm = llm or selectors.default_config(o.stage2)
-        select = selectors.LLM_RERANKERS[o.stage2](text_of, stage2_llm)
+        select = selectors.LLM_RERANKERS[o.stage2](text_of, stage2_llm, prompt_version=o.stage2_prompt)
     elif select is None:
         stage2_llm = None  # stage 2 off
 
