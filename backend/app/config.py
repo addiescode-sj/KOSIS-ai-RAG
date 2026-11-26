@@ -93,6 +93,7 @@ def search_config_from_shell(**overrides: Any) -> SearchConfig:
         "answer_k": int(env("ANSWER_K") or 5),
         "hq_build": (env("HQ_BUILD") or "").strip() or None,
         "hq_weight": float(env("HQ_WEIGHT") or 1.0),
+        "bm25_weight": float(env("BM25_WEIGHT") or 1.0),
         "hq_bm25": (env("HQ_BM25") or "off").strip().lower() not in OFF,
     }
     values.update(overrides)

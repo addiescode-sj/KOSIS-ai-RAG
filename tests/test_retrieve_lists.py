@@ -134,3 +134,21 @@ def test_retrieve_steps_are_search_list_and_rrf_fuse():
     assert fused.removed == {**removed["dense"], **removed["bm25"]}
     with pytest.raises(ValidationError):
         ListInput(question="q", k_each=3)
+
+
+def test_bm25_weight_is_the_bm25_list_rrf_weight():
+    """SearchOptions.bm25_weight (BM25_WEIGHT) weights the BM25 list in the fuse; default 1.0 = as before, 0 = dense order."""
+    from kosis_rag.schemas.resources import IndexSpec
+    from tests.test_graph import CatalogRetriever
+
+    assert _settings().bm25_weight == 1.0
+    for w in (1.0, 0.0, 2.5):
+        resources = _load_lists(_settings(bm25_weight=w), CatalogRetriever)
+        assert [(n, wt) for n, _, wt in retrieve_step.search_lists(resources)] == [("dense", 1.0), ("bm25", w)]
+    assert "bm25 w0" in _settings(bm25_weight=0.0).label(IndexSpec()) and "bm25" not in _settings().label(IndexSpec())
+
+
+def _load_lists(options, CatalogRetriever):
+    from tests.test_graph import _load
+
+    return _load(options, records=RECORDS, dense=CatalogRetriever(keys=[C, A, B, D]), sigungu={})

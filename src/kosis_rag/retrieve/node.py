@@ -17,12 +17,12 @@ from kosis_rag.retrieve.schemas import EmbedInput, EmbedOutput, FuseInput, FuseO
 def search_lists(resources: Any) -> list[tuple[str, Any, float]]:
     """The lists in fuse order with their RRF weights (T2-39).
 
-    In: resources. Out: [(name, list, weight)]: dense and bm25 (1.0) always (dense first: its score stays in
+    In: resources. Out: [(name, list, weight)]: dense (1.0) and bm25 (options.bm25_weight) always (dense first: its score stays in
         metadata["score"]), hq when resources.hq is set and hq_bm25 when resources.hq_bm25 is set (weight
         options.hq_weight). Side effects: none. Node: none (graph_nodes builds one retrieve_<name> node per list).
     """
     s = resources.options
-    lists = [("dense", resources.dense, 1.0), ("bm25", resources.bm25, 1.0)]
+    lists = [("dense", resources.dense, 1.0), ("bm25", resources.bm25, s.bm25_weight)]
     if resources.hq is not None:
         lists.append(("hq", resources.hq, s.hq_weight))
     if resources.hq_bm25 is not None:

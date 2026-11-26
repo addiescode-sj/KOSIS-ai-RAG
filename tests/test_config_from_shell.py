@@ -19,7 +19,7 @@ pytestmark = pytest.mark.offline
 
 REPO = Path(__file__).resolve().parents[1]
 ENV_KEYS = ("DATABASE_URL", "VECTOR_COLLECTION", "TEXT_FORMAT", "EMBED_CKPT", "RERANK_CKPT", "RERANK_MODE",
-            "STAGE2", "COND_FILTER", "ANSWER_K", "HQ_BUILD", "HQ_WEIGHT", "HQ_BM25", "HCX_API_KEY", "HCX_THINKING",
+            "STAGE2", "COND_FILTER", "ANSWER_K", "HQ_BUILD", "HQ_WEIGHT", "HQ_BM25", "BM25_WEIGHT", "HCX_API_KEY", "HCX_THINKING",
             "OPENAI_API_KEY", "CLOVASTUDIO_API_KEY", "GUIDE_MODEL", "GUIDE_TEMPERATURE", "GUIDE_MAX_TOKENS",
             "GUIDE_TIMEOUT")
 # The old settings, defaults and read from an empty environment, field by field (T2-41 S3 pipeline.py)
