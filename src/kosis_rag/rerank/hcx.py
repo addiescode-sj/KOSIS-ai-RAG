@@ -22,7 +22,8 @@ from typing import Any
 from kosis_rag.llm.base import STATUS_OK, LLMClient
 from kosis_rag.llm.config import LLMConfig, LLMKeyMissing
 from kosis_rag.llm.providers import build_client
-from kosis_rag.rerank.constants import MAX_PICK, MAX_TOKENS, MODEL, PROMPT_FILE
+from kosis_rag.rerank.constants import (MAX_PICK, MAX_TOGETHER, MAX_TOKENS, MODEL, PROMPT_FILE, PROMPT_VERSION,
+                                        PROMPT_VERSIONS, TOGETHER_PROMPTS)
 
 REASONS = ("out_of_scope", "no_item")
 
@@ -53,12 +54,36 @@ def parse(text: str, n: int) -> tuple[list[int], str | None]:
     return picked, (reason if not picked and reason in REASONS else None)
 
 
+def parse_together(text: str, picked: list[int]) -> list[int]:
+    """The reply's "together" numbers (T2-47, prompt v4m), or [] (= one table).
+
+    Kept only when every check passes: a list of 2..MAX_TOGETHER integers, no repeats, all of them in `picked` (the
+    numbers parse already kept). One wrong number drops the whole list: part of it would be a set the model did
+    not mean. Never raises: a reply parse accepted has a JSON object; anything else is [].
+    """
+    start = text.find("{")
+    try:
+        data, _ = json.JSONDecoder().raw_decode(text, start) if start >= 0 else ({}, 0)
+    except ValueError:
+        return []
+    raw = data.get("together") if isinstance(data, dict) else None
+    if not isinstance(raw, list) or not 2 <= len(raw) <= MAX_TOGETHER:
+        return []
+    if not all((isinstance(x, int) and not isinstance(x, bool)) or (isinstance(x, str) and x.isdigit()) for x in raw):
+        return []
+    numbers = [int(x) for x in raw]
+    if len(set(numbers)) != len(numbers) or not set(numbers) <= set(picked):
+        return []
+    return numbers
+
+
 @dataclass
 class HcxResult:
     keys: list[str]  # picked tables, most direct first
     calls: int = 1
     usage: dict[str, Any] = field(default_factory=dict)
     reason: str | None = None  # why nothing was picked
+    together: list[str] = field(default_factory=list)  # T2-47: picked tables to read together (v4m), else []
 
 
 @dataclass
@@ -68,14 +93,18 @@ class HcxSelector:
     thinking: HCX-007 thinking.effort (None: config.thinking, or "none" without a config). client: the LLM client
     (tests pass a fake); None = built from `config` at the first call (provider hcx: HCXClient with model
     config.model, max_tokens MAX_TOKENS[thinking] unless config.max_tokens is set, temperature 0 unless set).
+    prompt_version (T2-47): rerank/prompts/stage2-hcx-<version>.md; v4m also asks for "together".
     """
 
     text_of: dict[str, str]
     thinking: str | None = None
     client: LLMClient | None = None  # replaced by a fake in tests
     config: LLMConfig | None = None
+    prompt_version: str = PROMPT_VERSION
 
     def __post_init__(self) -> None:
+        if self.prompt_version not in PROMPT_VERSIONS:
+            raise ValueError(f"unknown STAGE2_PROMPT {self.prompt_version!r}; known: {', '.join(PROMPT_VERSIONS)}")
         if self.thinking is None:
             self.thinking = self.config.thinking if self.config is not None else "none"
         if self.thinking not in MAX_TOKENS:
@@ -93,10 +122,13 @@ class HcxSelector:
         if not keys:
             return HcxResult(keys=[], calls=0)
         self.client = self.client or self._client()
-        result = self.client.generate(system_prompt(), user_message(question, [self.text_of[k] for k in keys]))
+        prompt = system_prompt(PROMPT_FILE if self.prompt_version == PROMPT_VERSION
+                               else f"stage2-hcx-{self.prompt_version}.md")
+        result = self.client.generate(prompt, user_message(question, [self.text_of[k] for k in keys]))
         if result.status != STATUS_OK:
             model = getattr(self.client, "model", self.config.model if self.config is not None else MODEL)
             raise RuntimeError(f"{model} call failed ({result.status}): {result.error}")
         picked, reason = parse(result.text, len(keys))
+        together = parse_together(result.text, picked) if self.prompt_version in TOGETHER_PROMPTS else []
         return HcxResult(keys=[keys[i - 1] for i in picked], calls=result.attempts, usage=dict(result.usage or {}),
-                         reason=reason)
+                         reason=reason, together=[keys[i - 1] for i in together])

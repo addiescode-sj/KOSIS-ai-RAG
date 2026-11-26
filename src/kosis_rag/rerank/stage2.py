@@ -7,7 +7,8 @@ metadata["score"] is left as the hybrid gave it (the dense cosine the no-answer 
 Stage 2 adds stage2, stage2_picked, stage2_picked_n (0 = the LLM picked nothing, a no-answer signal for T2-09),
 stage2_reason (why nothing was picked, when the re-ranker says), stage2_input_top_score (metadata["score"] of the
 stage 1 top table, so a score threshold judges the same table with or without stage 2), stage2_error, stage2_calls,
-stage2_input_tokens, stage2_output_tokens, stage2_seconds.
+stage2_input_tokens, stage2_output_tokens, stage2_seconds; and stage2_together (T2-47, prompt v4m) when the selector
+names 2-3 picked tables one question needs read together.
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.documents import Document
+
+from kosis_rag.rerank.constants import MAX_TOGETHER
 
 Score = Callable[[str, list[str]], list[float]]  # (question, table keys) -> one score per key
 Select = Callable[[str, list[str]], Any]  # (question, table keys) -> picked keys, or an object with .keys
@@ -41,12 +44,14 @@ def rerank_stage2(query: str, docs: list[Document], select: Select, *, k_in: int
     started = time.perf_counter()
     calls, usage, reason, error = 0, {}, None, None
     picked_keys: list[str] = []
+    together: list[str] = []
     try:
         out = select(query, keys) if keys else []
         picked_keys = list(getattr(out, "keys", out))
         calls, usage = getattr(out, "calls", 1 if keys else 0), dict(getattr(out, "usage", {}) or {})
         reason = getattr(out, "reason", None)
         picked = set(picked_keys) & set(keys)  # an invented key never reaches the answer
+        together = list(getattr(out, "together", None) or [])
     except Exception as exc:  # the answer still gets the stage-1 order
         picked, error = set(), f"{type(exc).__name__}: {exc}"
     # 2. record what stage 2 did on every doc
@@ -56,6 +61,11 @@ def rerank_stage2(query: str, docs: list[Document], select: Select, *, k_in: int
             "stage2_input_tokens": usage.get("promptTokens", usage.get("input_tokens")),
             "stage2_output_tokens": usage.get("completionTokens", usage.get("output_tokens")),
             "stage2_seconds": time.perf_counter() - started}
+    # T2-47 (prompt v4m): the picked tables one question needs read together, checked again here (2..MAX_TOGETHER,
+    # distinct, all picked). Only set when the verdict holds, so a v4 run's metadata keeps its old keys
+    together = list(dict.fromkeys(k for k in together if k in picked))
+    if 2 <= len(together) <= MAX_TOGETHER:
+        meta["stage2_together"] = together
     # 3. picked first in the LLM's order (its rank-1 choice stays first), then the rest in input order
     by_key = {d.metadata["key"]: d for d in docs}
     first = [by_key[k] for k in dict.fromkeys(picked_keys) if k in picked]

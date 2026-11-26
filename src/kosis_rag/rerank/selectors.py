@@ -17,7 +17,7 @@ from pydantic import SecretStr
 from kosis_rag.llm.clova_rerank import ClovaReranker
 from kosis_rag.llm.config import LLMConfig
 from kosis_rag.llm.openai import OpenAIClient
-from kosis_rag.rerank.constants import CLOVA_RERANK_MODEL, GPT_MODEL, MODEL
+from kosis_rag.rerank.constants import CLOVA_RERANK_MODEL, GPT_MODEL, MODEL, PROMPT_VERSION
 from kosis_rag.rerank.hcx import HcxSelector
 from kosis_rag.rerank.stage2 import Select
 
@@ -43,19 +43,20 @@ def default_config(name: str, *, api_key: str | SecretStr | None = None, thinkin
                      base_url=base_url or None)
 
 
-def clova(text_of: dict[str, str], config: LLMConfig) -> Select:
+def clova(text_of: dict[str, str], config: LLMConfig, prompt_version: str = PROMPT_VERSION) -> Select:
+    # the CLOVA reranker API only scores passages: it has no prompt, so prompt_version does not apply (T2-47)
     return ClovaReranker(text_of=text_of, config=config)
 
 
-def hcx(text_of: dict[str, str], config: LLMConfig) -> Select:
-    return HcxSelector(text_of=text_of, config=config)
+def hcx(text_of: dict[str, str], config: LLMConfig, prompt_version: str = PROMPT_VERSION) -> Select:
+    return HcxSelector(text_of=text_of, config=config, prompt_version=prompt_version)
 
 
-def gpt(text_of: dict[str, str], config: LLMConfig) -> Select:
-    return HcxSelector(text_of=text_of, config=config, client=OpenAIClient(config))
+def gpt(text_of: dict[str, str], config: LLMConfig, prompt_version: str = PROMPT_VERSION) -> Select:
+    return HcxSelector(text_of=text_of, config=config, client=OpenAIClient(config), prompt_version=prompt_version)
 
 
-LLM_RERANKERS: dict[str, Callable[[dict[str, str], LLMConfig], Select]] = {
+LLM_RERANKERS: dict[str, Callable[..., Select]] = {  # (text_of, config, prompt_version=...) -> Select
     "clova": clova,
     "hcx": hcx,
     "gpt": gpt,

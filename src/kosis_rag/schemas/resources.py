@@ -62,6 +62,8 @@ class SearchOptions(BaseModel):
     rerank_n: int = 50
     stage2: str = "none"  # clova | hcx | gpt | none (STAGE2)
     stage2_k: int = 20
+    # T2-47: the hcx / gpt selector's prompt. v4 (as before) | v4m: v4 + a "together" verdict (stage2_together)
+    stage2_prompt: Literal["v4", "v4m"] = "v4"
     answer_k: int = 5  # candidate tables handed to gate / guide when a request gives no k (ANSWER_K, T2-39)
     hq_weight: float = 1.0  # RRF weight of the question lists (HQ_WEIGHT)
     hq_bm25: bool = False  # also BM25 over each table's questions (HQ_BM25)
@@ -76,7 +78,7 @@ class SearchOptions(BaseModel):
         if spec.rerank_ckpt:
             parts.append(f"stage1-{self.rerank_mode}")
         if self.stage2 not in OFF:
-            parts.append(self.stage2)
+            parts.append(self.stage2 + (f"({self.stage2_prompt})" if self.stage2_prompt != "v4" else ""))
         return " -> ".join(parts)
 
 

@@ -11,5 +11,10 @@ MAX_TOKENS = {"none": 512, "low": 5120, "medium": 5120, "high": 8192}
 # v3 clarifies the selector contract and examples while preserving v2's measure-only decision boundary.
 PROMPT_VERSION = "v4"
 PROMPT_FILE = f"stage2-hcx-{PROMPT_VERSION}.md"  # rerank/prompts/<file>: the HCX selector's system prompt
+# T2-47: prompts a selector may run (SearchOptions.stage2_prompt). v4m = v4 byte for byte + section 5 and a
+# "together" field: the 2-3 picked tables one question needs read together (multi-table answers in phase 1)
+PROMPT_VERSIONS = ("v4", "v4m")
+TOGETHER_PROMPTS = frozenset({"v4m"})  # prompts whose reply carries "together"
+MAX_TOGETHER = 3  # tables phase 1 reads together at most (kosis_chat StatInput.tables, T1-30)
 GPT_MODEL = "gpt-4o-mini"  # stage 2 "gpt": the same prompt and parser over OpenAI (T2-09 lab)
 CLOVA_RERANK_MODEL = "reranker"  # stage 2 "clova": the CLOVA Studio reranker API has no model name; a label only
