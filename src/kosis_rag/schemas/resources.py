@@ -64,6 +64,7 @@ class SearchOptions(BaseModel):
     stage2_k: int = 20
     answer_k: int = 5  # candidate tables handed to gate / guide when a request gives no k (ANSWER_K, T2-39)
     hq_weight: float = 1.0  # RRF weight of the question lists (HQ_WEIGHT)
+    bm25_weight: float = 1.0  # RRF weight of the BM25 list (BM25_WEIGHT); 0 = dense order only (T3-23)
     hq_bm25: bool = False  # also BM25 over each table's questions (HQ_BM25)
 
     def label(self, spec: IndexSpec) -> str:
@@ -72,7 +73,8 @@ class SearchOptions(BaseModel):
         if spec.hq_build:
             hq = "+hq" + ("+hqbm25" if self.hq_bm25 else "") + (f"(w{self.hq_weight:g})" if self.hq_weight != 1.0 else "")
         cond = ("+cond" + ("(years)" if self.cond_scope == "years" else "")) if self.cond_filter else ""
-        parts = ["hybrid" + cond + hq]
+        bm25 = f"(bm25 w{self.bm25_weight:g})" if self.bm25_weight != 1.0 else ""
+        parts = ["hybrid" + bm25 + cond + hq]
         if spec.rerank_ckpt:
             parts.append(f"stage1-{self.rerank_mode}")
         if self.stage2 not in OFF:
